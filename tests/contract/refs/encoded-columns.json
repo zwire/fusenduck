@@ -1,0 +1,12 @@
+{
+  "ref": "fusen://file/%2Fd%2Fc.parquet?v=abc123def456&cols=order%20id,a%2Cb,%E5%90%8D%E5%89%8D",
+  "parsed": {
+    "source": "/d/c.parquet",
+    "columns": [
+      "order id",
+      "a,b",
+      "名前"
+    ],
+    "fingerprint": "abc123def456"
+  }
+}

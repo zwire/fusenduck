@@ -16,3 +16,15 @@ describe("Ref corpus", () => {
     });
   }
 });
+
+// Malformed Refs stay rejected. Each one must keep failing with a readable error.
+describe("malformed Ref corpus", () => {
+  it.each([
+    "fusen://file/%2Fx?v=1&v=2",
+    "fusen://file/%2Fx?v=1&junk",
+    "fusen://file/%2Fx",
+    "https://example.com/%2Fx?v=1",
+  ])("%s is rejected", (text) => {
+    expect(() => parseRef(text)).toThrow();
+  });
+});
