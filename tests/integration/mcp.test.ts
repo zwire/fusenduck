@@ -1,8 +1,10 @@
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { HOSTILE_NOTE, tempDir, writeCustomers } from "../helpers/fixtures.ts";
+import { formatRef, mintRef } from "@fusenduck/core";
+import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 const server = join(import.meta.dirname, "../../packages/mcp/src/index.ts");
 
@@ -29,10 +31,9 @@ describe("MCP adapter over stdio", () => {
     await client.close();
   });
 
-  it("lists the three tools, with descriptions that carry no data", async () => {
+  it("lists the three tools", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(["fusen_card", "fusen_ref", "fusen_resolve"]);
-    for (const t of tools) expect(t.description).not.toContain(HOSTILE_NOTE);
   });
 
   it("card, ref and resolve run end to end and return the selected rows", async () => {
@@ -71,15 +72,72 @@ describe("MCP adapter over stdio", () => {
   });
 
   it("resolve refuses a Ref that points outside the roots", async () => {
-    const { mintRef } = await import("@fusenduck/core");
     const ref = await mintRef(outside, { where: "id <= 3" });
     const r = await call("fusen_resolve", { ref });
     expect(r.isError).toBe(true);
     expect(r.text).toContain("outside the allowed roots");
   });
 
-  it("a write predicate comes back as a tool error, not a write", async () => {
-    const r = await call("fusen_ref", { path: file, where: `1=1; COPY (SELECT 1) TO '${file}.x.csv'` });
+  describe("paths that try to get around the root", () => {
+    const link = join(dir, "link.parquet");
+    const sub = join(dir, "sub");
+    const text = join(dir, "notes.txt");
+
+    beforeAll(() => {
+      symlinkSync(outside, link);
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(text, "not a parquet file");
+    });
+
+    it.each([
+      ["a .. path", () => join(dir, "..", "x", "..", outside.slice(outside.lastIndexOf("/fusenduck-")))],
+      ["a symlink inside the root that points out", () => link],
+      ["a file that does not exist, outside the root", () => join(outside, "..", "nope.parquet")],
+      ["a file that does not exist, inside the root", () => join(dir, "nope.parquet")],
+      ["a sibling directory whose name starts with the root's name", () => `${dir}-evil/x.parquet`],
+    ])("fusen_card refuses %s with the same message as any other denial", async (_name, path) => {
+      const r = await call("fusen_card", { path: path() });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("not readable or is outside the allowed roots");
+    });
+
+    it("resolve refuses a Ref whose source is a symlink that points outside", async () => {
+      const ref = formatRef({ source: link, fingerprint: "000000000000" });
+      const r = await call("fusen_resolve", { ref });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("not readable or is outside the allowed roots");
+    });
+
+    it.each([
+      ["a directory", () => sub],
+      ["a file that is not Parquet", () => text],
+    ])("%s is a tool error that does not echo engine details", async (_name, path) => {
+      const r = await call("fusen_card", { path: path() });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("withheld");
+      expect(r.text).not.toContain("magic bytes");
+    });
+  });
+
+  describe("engine errors cannot carry source values to the agent", () => {
+    it.each([
+      ["error() on a cell", "id > 0 AND (CASE WHEN id = 7 THEN error(note) ELSE true END)"],
+      ["a failing cast of a cell", "CAST(note AS INTEGER) = 1"],
+    ])("%s", async (_name, where) => {
+      const ref = (await call("fusen_ref", { path: file, where })).text;
+      const r = ref.startsWith("fusen://") ? await call("fusen_resolve", { ref }) : { isError: true, text: ref };
+      expect(r.isError).toBe(true);
+      expect(r.text).not.toContain("PWNED-7731");
+      expect(r.text).not.toMatch(/'note \d+'/);
+      expect(r.text).toContain("withheld");
+    });
+  });
+
+  it("a write predicate comes back as a tool error and writes nothing", async () => {
+    const target = `${file}.x.csv`;
+    const r = await call("fusen_ref", { path: file, where: `1=1; COPY (SELECT 1) TO '${target}'` });
     expect(r.isError).toBe(true);
+    expect(r.text).toContain("predicate rejected");
+    expect(existsSync(target)).toBe(false);
   });
 });

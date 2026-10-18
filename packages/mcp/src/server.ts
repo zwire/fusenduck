@@ -1,15 +1,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { assertInRoots, buildCard, mintRef, openSource, renderCard, resolveRef } from "@fusenduck/core";
+import { buildCard, describeError, mintRef, openSource, renderCard, resolveRef } from "@fusenduck/core";
 
 // Tool descriptions are fixed text. Data read from a source appears only in tool results, inside
-// the delimited data block that core renders, never in a description or an error message we build.
+// the delimited data block that core renders. Engine errors can quote cell values, so they are
+// withheld (describeError); the detail goes to stderr for whoever runs the server.
 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
-const failure = (error: unknown) => ({
-  isError: true,
-  ...text(`fusen error: ${error instanceof Error ? error.message : String(error)}`),
-});
+const failure = (error: unknown) => {
+  console.error(error);
+  return { isError: true, ...text(`fusen error: ${describeError(error)}`) };
+};
 
 /** An MCP server over core. Files are readable only under `roots`. */
 export function createServer(roots: string[]): McpServer {
@@ -25,8 +26,7 @@ export function createServer(roots: string[]): McpServer {
     },
     async ({ path }) => {
       try {
-        assertInRoots(path, roots);
-        const engine = await openSource(path);
+        const engine = await openSource(path, { roots });
         return text(renderCard(await buildCard(engine), engine.source));
       } catch (error) {
         return failure(error);
@@ -48,8 +48,7 @@ export function createServer(roots: string[]): McpServer {
     },
     async ({ path, where, columns }) => {
       try {
-        assertInRoots(path, roots);
-        return text(await mintRef(path, { where, columns }));
+        return text(await mintRef(path, { where, columns, roots }));
       } catch (error) {
         return failure(error);
       }

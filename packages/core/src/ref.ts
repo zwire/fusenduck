@@ -1,4 +1,5 @@
 import { ident, lit, type Engine } from "./engine.ts";
+import { FusenError } from "./errors.ts";
 
 export interface Ref {
   /** Absolute path of the source file. */
@@ -20,7 +21,7 @@ export function formatRef(ref: Ref): string {
 }
 
 export function parseRef(text: string): Ref {
-  if (!text.startsWith(PREFIX)) throw new Error(`not a fusen:// Ref: ${text.slice(0, 40)}`);
+  if (!text.startsWith(PREFIX)) throw new FusenError(`not a fusen:// Ref: ${text.slice(0, 40)}`);
   const rest = text.slice(PREFIX.length);
   const cut = rest.indexOf("?");
   const path = cut < 0 ? rest : rest.slice(0, cut);
@@ -31,17 +32,17 @@ export function parseRef(text: string): Ref {
     source = decodeURIComponent(path);
     for (const part of query.split("&").filter(Boolean)) {
       const i = part.indexOf("=");
-      if (i <= 0) throw new Error(`malformed parameter "${part}"`);
+      if (i <= 0) throw new FusenError(`malformed parameter "${part}"`);
       const key = part.slice(0, i);
-      if (params.has(key)) throw new Error(`duplicate parameter "${key}"`);
+      if (params.has(key)) throw new FusenError(`duplicate parameter "${key}"`);
       params.set(key, part.slice(i + 1));
     }
   } catch (error) {
-    throw new Error(`malformed Ref: ${error instanceof Error ? error.message : String(error)}`);
+    throw new FusenError(`malformed Ref: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!source) throw new Error("Ref has no source");
+  if (!source) throw new FusenError("Ref has no source");
   const fingerprint = params.get("v");
-  if (!fingerprint) throw new Error("Ref has no fingerprint (v=)");
+  if (!fingerprint) throw new FusenError("Ref has no fingerprint (v=)");
   const ref: Ref = { source, fingerprint };
   const cols = params.get("cols");
   if (cols) ref.columns = cols.split(",").map(decodeURIComponent);
@@ -80,10 +81,10 @@ export async function checkPredicate(engine: Engine, source: string, predicate: 
     error_message?: string;
     statements?: { node?: { type?: string; modifiers?: unknown[] } }[];
   };
-  if (parsed.error) throw new Error(`predicate rejected: ${parsed.error_message ?? "not a single SELECT"}`);
+  if (parsed.error) throw new FusenError(`predicate rejected: ${parsed.error_message ?? "not a single SELECT"}`);
   const statements = parsed.statements ?? [];
   const node = statements[0]?.node;
   if (statements.length !== 1 || node?.type !== "SELECT_NODE" || node.modifiers?.length) {
-    throw new Error("predicate rejected: it must stay a single plain SELECT");
+    throw new FusenError("predicate rejected: it must stay a single plain SELECT");
   }
 }

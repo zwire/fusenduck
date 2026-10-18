@@ -1,4 +1,6 @@
 import { realpathSync } from "node:fs";
+import { isAbsolute, relative } from "node:path";
+import { FusenError } from "./errors.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
 export type Row = Record<string, unknown>;
@@ -20,13 +22,44 @@ export function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
+const inside = (root: string, path: string): boolean => {
+  const rel = relative(root, path);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+};
+
+/**
+ * The real path of `source`, checked against the roots once. The engine is opened on this same
+ * path, so a symlink swapped after the check cannot redirect it. A missing file and a file
+ * outside the roots give one message, so the error does not tell a caller what exists elsewhere.
+ */
+function resolveWithin(source: string, roots: string[] | undefined): string {
+  const denied = new FusenError(`the source is not readable or is outside the allowed roots: ${source}`);
+  let path: string;
+  try {
+    path = realpathSync(source);
+  } catch {
+    throw denied;
+  }
+  if (roots) {
+    const real = roots.flatMap((root) => {
+      try {
+        return [realpathSync(root)];
+      } catch {
+        return [];
+      }
+    });
+    if (!real.some((root) => inside(root, path))) throw denied;
+  }
+  return path;
+}
+
 /**
  * Opens one file read-only by construction. The engine is locked down before it is returned:
  * only this exact path is readable, nothing can be written (COPY TO, ATTACH, overwriting the
  * source), and the configuration cannot be changed afterwards. See docs/adr/0001.
  */
-export async function openSource(source: string): Promise<Engine> {
-  const path = realpathSync(source);
+export async function openSource(source: string, opts: { roots?: string[] } = {}): Promise<Engine> {
+  const path = resolveWithin(source, opts.roots);
   const instance = await DuckDBInstance.create(":memory:");
   const connection: DuckDBConnection = await instance.connect();
   await connection.run(`SET allowed_paths=[${lit(path)}]`);
@@ -41,7 +74,7 @@ export async function openSource(source: string): Promise<Engine> {
         const reader = await connection.runAndReadAll(sql);
         return reader.getRowObjectsJson() as Row[];
       } catch (error) {
-        if (timer && /interrupt/i.test(String(error))) throw new Error(`query stopped after ${opts.timeoutMs} ms`);
+        if (timer && /interrupt/i.test(String(error))) throw new FusenError(`query stopped after ${opts.timeoutMs} ms`);
         throw error;
       } finally {
         clearTimeout(timer);
