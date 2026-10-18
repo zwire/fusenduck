@@ -38,10 +38,10 @@ export async function resolveRef(
   const ref = parseRef(text);
   // A Ref names its own file, so a pasted Ref must not be able to point anywhere on disk.
   const engine = await openSource(ref.source, { roots: opts.roots });
-  const now = await fingerprint(engine);
-  if (now !== ref.fingerprint) return renderChanged(ref, now);
   if (ref.query) await checkQuery(engine, ref.query);
   if (ref.where) await checkPredicate(engine, engine.source, ref.where, ref.query);
+  const now = await fingerprint(engine);
+  if (now !== ref.fingerprint) return renderChanged(ref, now);
   // A Ref edited after it was minted no longer hashes to its id. (Skipped under another engine version.)
   if (ref.id && ref.engine === (await engineVersion(engine)) && ref.id !== (await refId(engine, ref))) {
     throw new FusenError("the Ref's id does not match its selection: it was edited after it was minted");

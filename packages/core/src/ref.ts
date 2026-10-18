@@ -151,15 +151,23 @@ export async function engineVersion(engine: Engine): Promise<string> {
   return String((await engine.query("SELECT version() AS v"))[0]?.v);
 }
 
+// The parsed form keeps long numeric literals as doubles, so two literals that differ in the last
+// digits would hash alike. Their text goes into the hash as well.
+const numericLiterals = (text: string | undefined): string[] => text?.match(/\d[\d_.eE+-]*/g) ?? [];
+
 /**
- * The id of a selection: a hash of its parsed form (case, spacing and comments do not change it),
- * the source path, and nothing else. It does not detect queries that mean the same in different
- * words. Under another engine version the parsed form may differ, so the Ref records the version.
+ * The id of a selection: a hash of its parsed form (case and spacing do not change it), its
+ * numeric literals as written, and the source path. It catches a Ref that was edited by accident;
+ * it is not a signature, because anyone can drop it (`id=`, `e=`) or recompute it, and a Ref is
+ * always checked and run under the engine lock whatever its id says. It does not detect queries
+ * that mean the same in different words. Under another engine version the parsed form may differ,
+ * so the Ref records the version.
  */
 export async function refId(engine: Engine, ref: Ref): Promise<string> {
   const rows = await engine.query(`SELECT json_serialize_sql(${lit(selectionSql(ref))}) AS j`);
   const parsed = JSON.parse(String(rows[0]?.j)) as { error?: boolean };
   if (parsed.error) throw new FusenError("the selection could not be parsed");
   const form = JSON.stringify(parsed, (key, value) => (key === "query_location" ? undefined : value));
-  return createHash("sha256").update(`${ref.source}\n${form}`).digest("hex").slice(0, 12);
+  const literals = [...numericLiterals(ref.query), "|", ...numericLiterals(ref.where)].join(",");
+  return createHash("sha256").update(`${ref.source}\n${form}\n${literals}`).digest("hex").slice(0, 12);
 }

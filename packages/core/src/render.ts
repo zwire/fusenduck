@@ -30,14 +30,41 @@ export function renderCard(card: DataCard, source: string): string {
   );
 }
 
+/** A string cell longer than this is cut; a result longer than MAX_BYTES stops adding rows. */
+export const MAX_CELL_CHARS = 2000;
+export const MAX_BYTES = 256 * 1024;
+
+const cutCell = (value: unknown): unknown =>
+  typeof value === "string" && value.length > MAX_CELL_CHARS
+    ? `${value.slice(0, MAX_CELL_CHARS)}…[+${value.length - MAX_CELL_CHARS} chars]`
+    : value;
+
 export function renderRows(ref: Ref, rows: Row[], total: number): string {
-  const shown = rows.length;
-  const omitted =
+  let cut = false;
+  let bytes = 0;
+  const lines: string[] = [];
+  for (const row of rows) {
+    const clipped = Object.fromEntries(
+      Object.entries(row).map(([k, v]) => {
+        const c = cutCell(v);
+        if (c !== v) cut = true;
+        return [k, c];
+      }),
+    );
+    const line = JSON.stringify(clipped);
+    if (bytes + line.length > MAX_BYTES && lines.length > 0) break;
+    bytes += line.length;
+    lines.push(line);
+  }
+  const shown = lines.length;
+  const notes = [
     shown === total
       ? `OMITTED: none. All ${total} matching rows are shown.`
       : `OMITTED: ${total - shown} of ${total} rows are not shown (the first ${shown} in file order are). ` +
-        `To see others, mint a new Ref with a narrower where.`;
-  return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"`, rows.map((r) => JSON.stringify(r)), omitted);
+        `To see others, mint a new Ref with a narrower where.`,
+    ...(cut ? [`Text cells longer than ${MAX_CELL_CHARS} characters are cut (the cut is marked in the cell).`] : []),
+  ];
+  return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"`, lines, notes.join(" "));
 }
 
 export function renderChanged(ref: Ref, now: string): string {

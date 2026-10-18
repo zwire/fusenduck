@@ -22,6 +22,8 @@ export function ident(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
+const MEMORY_LIMIT = "512MB";
+
 const inside = (root: string, path: string): boolean => {
   const rel = relative(root, path);
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
@@ -63,6 +65,9 @@ export async function openSource(source: string, opts: { roots?: string[] } = {}
   const instance = await DuckDBInstance.create(":memory:");
   const connection: DuckDBConnection = await instance.connect();
   await connection.run(`SET allowed_paths=[${lit(path)}]`);
+  // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
+  await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
+  await connection.run("SET threads=4");
   await connection.run("SET enable_external_access=false");
   // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
   await connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
