@@ -1,0 +1,7 @@
+{
+  "ref": "fusen://file/%2Fdata%2Fcustomers.parquet?v=abc123def456",
+  "parsed": {
+    "source": "/data/customers.parquet",
+    "fingerprint": "abc123def456"
+  }
+}
