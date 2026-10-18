@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { VERSION, RUNTIME, SKILL_FIELDS, NAME_RE, LIFECYCLE_RANK, RANK_NAME } from "./contract.mjs";
 import { parseFrontmatter } from "./frontmatter.mjs";
 import { bindingNames, projectFile, readProject, repoSpecific, readBindings } from "./bindings.mjs";
@@ -136,15 +137,21 @@ export function validateSkill(dir, { project } = {}) {
   }
 
   // Runtime: generated skills carry their own copy of the rails.
-  const rtLib = path.join(dir, "scripts", "lib", "contract.mjs");
   const rtMissing = RUNTIME.filter((f) => !fs.existsSync(path.join(dir, "scripts", f)));
   // A copy from before the runtime was split into lib/ lacks the whole folder; name it once.
   const noLib = RUNTIME.filter((f) => f.startsWith("lib/")).every((f) => rtMissing.includes(f));
   const shown = noLib ? [...rtMissing.filter((f) => !f.startsWith("lib/")), "lib/"] : rtMissing;
   if (rtMissing.length) warn("scripts/", `runtime missing (${shown.join(", ")}): nothing enforces the graph; copy flow.mjs, validate.mjs and lib/ from vajra's scripts/`);
   else {
-    const v = fs.readFileSync(rtLib, "utf8").match(/export const VERSION = "([^"]+)"/);
-    if (!v || v[1] !== VERSION) warn("scripts/", `runtime is vajra ${v ? v[1] : "unknown"}, validator is ${VERSION}; run Evolve to update the runtime`);
+    // Compare contents, not version numbers: the runtime is copied unchanged, so any difference means one side is out of date.
+    const own = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const read = (f) => fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n");
+    const stale = RUNTIME.filter((f) => read(path.join(dir, "scripts", f)) !== read(path.join(own, f)));
+    const left = fs.readdirSync(path.join(dir, "scripts", "lib")).filter((f) => f.endsWith(".mjs") && !RUNTIME.includes(`lib/${f}`));
+    if (stale.length || left.length) {
+      const what = [stale.length && `differs in ${stale.join(", ")}`, left.length && `has files vajra no longer ships (lib/${left.join(", lib/")})`].filter(Boolean).join(" and ");
+      warn("scripts/", `runtime does not match vajra ${VERSION}: it ${what}; when this vajra is the newer, update the skill as vajra's workflows/evolve.md#update-to-a-new-vajra says`);
+    }
     if (!/scripts\/flow\.mjs/.test(skillBody)) warn("SKILL.md", "router does not tell the agent to drive the run with scripts/flow.mjs");
   }
 

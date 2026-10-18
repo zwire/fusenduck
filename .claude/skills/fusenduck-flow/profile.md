@@ -101,3 +101,4 @@ Known gaps between stand-ins and reality, kept in the docs: generated fixtures l
 ## History
 
 - 2026-10-18: generated.
+- 2026-10-18: runtime (scripts/) updated to the current vajra@0.3.0 copy; schema 2 unchanged.

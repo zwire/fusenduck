@@ -24,7 +24,7 @@ const HARNESSES = {
     hooks: (scope) => (scope === "local" ? ".claude/settings.local.json" : ".claude/settings.json"),
     fromRoot: true,
     entry: (command) => ({ hooks: [{ type: "command", command }] }),
-    // The user's pick in an AskUserQuestion dialog answers a gate (lib/ask.mjs); only that tool.
+    // The user's pick in an AskUserQuestion dialog is kept like a message they sent (lib/ask.mjs); only that tool.
     extra: { "post-tool-use": ["PostToolUse", "AskUserQuestion"] },
     mcp: { file: ".mcp.json", format: "json" },
   },

@@ -10,7 +10,7 @@ import { globToRegExp, stepCommands } from "./match.mjs";
 import { guardMatches } from "./shell.mjs";
 import { toolAction } from "./tools.mjs";
 import { shellViolation, codeTouchesRails } from "./protect.mjs";
-import { pick, readsAsReply, askAtGate, GATE, SUSPEND } from "./reply.mjs";
+import { askAtGate } from "./reply.mjs";
 import { beforeAsk, afterAsk } from "./ask.mjs";
 import { dropsHooks, railsPaths, inside, samePath } from "./settings.mjs";
 import { openStore } from "./store.mjs";
@@ -22,9 +22,9 @@ const railsMsg = (root) => `the workflow's own rules (its playbooks, profile and
 
 const STATE_MSG = "the run state and project bindings in .flow/ are changed only through flow.mjs or by the user (reading them with cat, jq, grep or Get-Content is fine; or try `flow status` or `flow log`).";
 const SHELL_MSG = {
-  human: (root) => `only the user can approve, reject or suspend, and flow.mjs hook and mcp are run by the agent harness, not from the shell. At a human gate, stop and ${askAtGate()}. To change the workflow's own files, ${askToSuspend(root)}.`,
+  human: (root) => `only the user can approve, reject or suspend, and flow.mjs hook and mcp are run by the agent harness, not from the shell. At a human gate, stop and ${askAtGate("<n>", flowCmd(root))}. To change the workflow's own files, ${askToSuspend(root)}.`,
   rails: railsMsg,
-  agent: () => "this would hand a prompt to an agent session that the rails cannot tell from the user's own: one that picks a choice (`approve`, `reject`, `suspend`, `1`, `2`), or that the rails cannot read (a variable, stdin). Its hooks are this workflow's, so it could answer a human gate or a suspend request in the user's place. Write the prompt as a plain task that does not start with those, or ask the user.",
+  agent: () => "the user's answer to a waiting question is a message they send, and a prompt handed to another agent session (or scheduled, or sent to one) arrives there as such a message, since its hooks are this workflow's. Wait until the user has answered, then start it.",
   complex: "this command nests shells or scripts too deeply for the rails to check. Run it as simpler, separate commands.",
   clean: "git clean -x would delete the run state in .flow/; clean without -x/-X, or ask the user.",
   state: STATE_MSG,
@@ -33,9 +33,9 @@ const SHELL_MSG = {
 // Checks that protect the rails themselves: the run state, the project bindings, the skill, the
 // hook settings and the human-only commands. They need no graph, so they hold even while the
 // graph is invalid.
-function railsCheck(act, g, root, cwd) {
+function railsCheck(act, g, root, cwd, waiting) {
   const rp = railsPaths(root, skillDir);
-  const ctx = { root, cwd, skillDir };
+  const ctx = { root, cwd, skillDir, waiting };
   const pathCheck = (abs, change) => {
     const rel = relPath(root, abs);
     if (samePath(rel, g.projectFile)) return `the project bindings in ${g.projectFile} are part of the rails; they change only while the rails are suspended, which only the user can allow. Ask the user for the values, or propose them from the repository. If the change is needed, ${askToSuspend(root)}.`;
@@ -54,7 +54,7 @@ function railsCheck(act, g, root, cwd) {
     if (v) return typeof SHELL_MSG[v] === "function" ? SHELL_MSG[v](root) : SHELL_MSG[v];
   }
   if (act.kind !== "other" || act.readOnly) return null;
-  if (act.prompts.some(readsAsReply)) return SHELL_MSG.agent(root);
+  if (waiting && act.prompts.length) return SHELL_MSG.agent(root);
   if (act.code.some((c) => codeTouchesRails(c, ctx))) return `${STATE_MSG} The same holds for the workflow's own files and hook settings.`;
   for (const { text: t, context } of act.values) {
     const abs = path.resolve(cwd, t.replace(/^~(?=\/|\\|$)/, os.homedir()));
@@ -70,7 +70,7 @@ function preToolUse(g, state, input, root, opts) {
   if (state.suspended || (g.ok && rails === "advisory")) return null;
   const act = toolAction(input, opts);
   const cwd = input.cwd || root;
-  const own = railsCheck(act, g, root, cwd);
+  const own = railsCheck(act, g, root, cwd, !!(state.request || state.run?.awaiting));
   if (own || !g.ok) return own;
   const run = state.run;
   const f = flowCmd(root);
@@ -135,40 +135,9 @@ function stopCheck(g, state, input, root) {
   return `${where}. Next: ${nextHint(node, run, root)}. If you must stop (for example to ask the user something), run \`${f} pause --note "<why>"\` first.`;
 }
 
-// Records the user's pick at the waiting gate; `via` says where it came from (chat or dialog).
-function answerGate(st, state, r, via) {
-  const { run } = state;
-  const yes = r.choice === "Approve";
-  const by = `the user (${via})`;
-  const n = yes ? approve(state, by, r.rest) : reject(state, by, r.rest);
-  st.save(state);
-  st.log({ event: yes ? "approve" : "reject", run: run.id, playbook: run.playbook, step: n, by: `user-${via}`, text: r.rest.slice(0, 200) });
-  const what = `${yes ? "approved" : "rejected"} step ${n} of ${run.playbook}`;
-  return { note: `${tag} The user ${what}.\n`, notice: `${tag} You ${what}${r.rest ? `: ${r.rest.slice(0, 120)}` : ""}.` };
-}
-
-function suspendFromDialog(st, state, r, root) {
-  const { reason } = state.request;
-  const yes = r.choice === "Suspend";
-  state.request = null;
-  state.suspended = yes;
-  st.save(state);
-  st.log({ event: yes ? "suspend" : "reject-request", by: "the user (dialog)", reason, ...(r.rest ? { note: r.rest } : {}) });
-  return yes
-    ? { note: `${tag} The user suspended the rails so you can ${reason}. Do only that, then run \`${flowCmd(root)} unsuspend\`.\n`, notice: `${tag} You suspended the rails so the agent can ${reason}.` }
-    : { note: `${tag} The user did not suspend the rails${r.rest ? `: ${r.rest}` : ""}. Carry on without changing the workflow's own files.\n`, notice: `${tag} You kept the rails on.` };
-}
-
-// The user's pick in a choice dialog, for the question it asked.
-function fromDialog(g, st, state, { kind, text }, root) {
-  if (kind === "gate" && g.ok && state.run?.awaiting) { const r = pick(text, GATE); return r && answerGate(st, state, r, "dialog"); }
-  if (kind === "suspend" && state.request && !state.suspended) { const r = pick(text, SUSPEND); return r && suspendFromDialog(st, state, r, root); }
-  return null;
-}
-
 // What a hook answers, or null for nothing:
-//   { context: text, event }   context for the agent (event: the hook event name to report), and
-//                              notice: a line to show the user, where the agent shows one
+//   { context: text, event }   context for the agent (event: the hook event name to report)
+//   { heard: [text] }          what the user picked in a choice dialog, for flow.mjs to keep
 //   { deny: reason }           refuse the tool call
 //   { block: reason }          bounce the stop
 // opts are passed to toolAction (which shell a Bash tool runs).
@@ -178,15 +147,11 @@ export function runHook(event, input, root, opts = {}) {
   const state = st.load();
   const event_ = input.hook_event_name || "SessionStart";
   if (event === "session-start") return { context: describe(g, state, root), event: event_ };
+  // The user's own words are kept by flow.mjs for `flow answer`; nothing here reads them.
   if (event === "user-prompt") {
-    const p = String(input.prompt ?? input.user_prompt ?? input.message ?? "").trim();
-    let note = "";
-    let notice;
-    const r = g.ok && state.run?.awaiting && !state.suspended && pick(p, GATE);
-    if (r) ({ note, notice } = answerGate(st, state, r, "chat"));
     // Without a run there is nothing to track on every prompt; session start already said how to begin.
-    if (!note && g.ok && !state.run && !state.suspended && railsLevel(g) !== "strict") return null;
-    return { context: note + describe(g, state, root), event: event_, notice };
+    if (g.ok && !state.run && !state.suspended && !state.request && railsLevel(g) !== "strict") return null;
+    return { context: describe(g, state, root), event: event_ };
   }
   if (event === "pre-tool-use") {
     const ask = beforeAsk(input, state);
@@ -196,13 +161,12 @@ export function runHook(event, input, root, opts = {}) {
     st.log({ event: "block-tool", tool: input.tool_name, reason });
     return { deny: reason };
   }
+  // The user's picks in a choice dialog, which flow.mjs keeps like their messages.
   if (event === "post-tool-use") {
-    const answers = afterAsk(input, state);
-    if (!answers) return null;
+    const heard = afterAsk(input, state);
+    if (!heard) return null;
     st.save(state);
-    const done = answers.map((a) => fromDialog(g, st, state, a, root)).filter(Boolean);
-    if (!done.length) return null;
-    return { context: done.map((d) => d.note).join("") + describe(g, state, root), event: input.hook_event_name || "PostToolUse", notice: done.map((d) => d.notice).join(" ") };
+    return { heard };
   }
   if (event === "stop") {
     const reason = stopCheck(g, state, input, root);

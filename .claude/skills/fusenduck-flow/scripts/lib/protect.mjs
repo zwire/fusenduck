@@ -6,7 +6,6 @@ import os from "node:os";
 import path from "node:path";
 import { shellCommands, programName, commandStart } from "./shell.mjs";
 import { HOOK_CONFIGS, DISABLES_HOOKS, railsPaths, inside, samePath } from "./settings.mjs";
-import { readsAsReply } from "./reply.mjs";
 
 // Whether code for an interpreter names the run state or the rails: any mention counts, as it
 // can open any path. ctx = { root, skillDir }.
@@ -86,7 +85,8 @@ const SCRIPTED = new Set(["sed", "awk", "gawk", "less"]);
 const OUTPUT_FLAG = /^(-o|--output|--output-file|--log-file|-outfile)$/i;
 const GIT_READS = new Set(["add", "commit", "log", "show", "diff", "status", "blame", "ls-files", "ls-tree", "grep", "cat-file", "check-ignore", "rev-parse", "describe", "shortlog"]);
 const INTERPRETERS = /^(python\d*(\.\d+)?|node|nodejs|deno|bun|ruby|perl|php|osascript|lua|tclsh)$/;
-// `unsuspend` only turns the rails back on, so the agent may run it, and `request suspend` only asks.
+// `unsuspend` only turns the rails back on, so the agent may run it; `request suspend` only asks, and
+// `answer` records an answer the user has sent (flow.mjs checks it against their messages).
 const HUMAN_ONLY = new Set(["approve", "reject", "suspend", "hook", "mcp"]);
 
 // The program a simple command runs and its arguments, past assignments and wrappers like sudo.
@@ -138,17 +138,15 @@ function copyDestination(name, args) {
 }
 
 // ---------- prompts the agent could put in the human's place ----------
-// The human answers a gate or a suspend request in their own words (see reply.mjs). A prompt the
-// agent writes must not read as such an answer, wherever it would be submitted: to another agent
-// session it starts (whose hooks are this skill's, so its prompt would count as the human's), or to
-// one it schedules or sends.
+// While a question waits for the user, their answer is the next message they send (reply.mjs), so
+// the agent may not hand a prompt to another agent session it starts: that session's hooks are this
+// skill's, and its prompt would be kept as the user's.
 const AGENT_CLIS = new Set(["claude", "codex", "copilot"]);
 const RUNNERS = new Set(["timeout", "gtimeout", "xargs", "setsid", "stdbuf", "unbuffer", "caffeinate", "npx", "bunx", "pnpx"]);
 const AGENT_PACKAGE = /(^|[/@\\])(anthropic-ai[/\\]claude-code|openai[/\\]codex|github[/\\]copilot)([@/\\]|$)/i;
 
-// Whether a simple command starts an agent session whose prompt could be a reply: one given as an
-// argument that reads as an answer ("approve", "yes", "ok", "sure"), or one the rails cannot read (a variable, a substitution,
-// stdin from a pipe, a heredoc or a file). `codex exec "review the diff"` runs.
+// Whether a simple command starts an agent session with a prompt: an argument that is not a flag,
+// or stdin from a pipe, a heredoc or a file. `claude --version` starts none.
 function nestedAgent(w) {
   const { k, name } = head(w);
   // The program, or the one a runner starts (`timeout 60 claude ...`, `xargs claude ...`).
@@ -157,16 +155,16 @@ function nestedAgent(w) {
   if (at < 0) return false;
   const args = w.slice(at + 1);
   if (w.piped || w.fed || args.some((x) => typeof x.redir === "string" && x.redir.startsWith("<"))) return true;
-  return args.some((x) => !x.redir && (readsAsReply(x.text) || /[$`]/.test(x.text)));
+  return args.some((x) => !x.redir && !/^-/.test(x.text));
 }
 
 function commandViolation(w, ctx) {
   const { name, args: all } = head(w);
-  if (nestedAgent(w)) return "agent";
+  if (ctx?.waiting && nestedAgent(w)) return "agent";
   if (CHDIR.test(name)) return null;
   const args = all.filter((x) => !x.redir);
   const flowAt = w.findIndex((x) => programName(x.text) === "flow.mjs");
-  if (flowAt >= 0 && w[flowAt + 1]?.text !== "request" && w.slice(flowAt + 1).some((x) => HUMAN_ONLY.has(x.text.toLowerCase()))) return "human";
+  if (flowAt >= 0 && !["request", "answer"].includes(w[flowAt + 1]?.text) && w.slice(flowAt + 1).some((x) => HUMAN_ONLY.has(x.text.toLowerCase()))) return "human";
   // Code that loads the runtime itself could call approve() or answer a gate.
   if (INTERPRETERS.test(name) && all.some((x) => namesRuntime(x.text, ctx) && programName(x.text) !== "flow.mjs")) return "human";
   // git clean -x deletes ignored files, .flow/ among them, unless it dry-runs or excludes .flow (-e .flow).
@@ -283,7 +281,7 @@ export function shellViolation(command, ps, ctx) {
   if (statePiped) found.add("state");
   if (failed) {
     // Unreadable as shell: fall back to the raw text, conservatively.
-    if (/(?:(?<![\w-])|scripts)flow\.mjs["']?\s+(?!\s|request\s)(.*\s)?(approve|reject|suspend|hook|mcp)\b/i.test(command)) found.add("human");
+    if (/(?:(?<![\w-])|scripts)flow\.mjs["']?\s+(?!\s|request\s|answer\s)(.*\s)?(approve|reject|suspend|hook|mcp)\b/i.test(command)) found.add("human");
     if (/(^|[\s'"=:(/\\,])\.flow([\\/\s'")]|$)/i.test(command)) found.add("state");
   }
   if (failed && ctx && (/disableAllHooks/i.test(command) || norm(command).includes(norm(path.relative(ctx.root, ctx.skillDir))))) found.add("rails");
