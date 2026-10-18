@@ -1,6 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { statSync } from "node:fs";
+import { DuckDBInstance } from "@duckdb/node-api";
 import { HOSTILE_NOTE, tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 const cli = join(import.meta.dirname, "../../packages/cli/src/index.ts");
@@ -72,6 +74,21 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("DATA_CHANGED");
     expect(r.stdout).not.toContain('"region"');
+  });
+
+  it("a rewrite that keeps the row count and the file size, but changes values, is detected", async () => {
+    const changed = join(dir, "same-shape.parquet");
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    const write = (offset: number) =>
+      connection.run(`COPY (SELECT ${offset} + i AS v FROM range(1, 1001) t(i)) TO '${changed}' (FORMAT parquet)`);
+    await write(1000);
+    const size = statSync(changed).size;
+    const ref = run("ref", changed, "--where", "v > 0").stdout.trim();
+    await write(1001);
+    expect(statSync(changed).size).toBe(size); // the cheap fingerprint cannot tell these apart
+    const r = resolve(dir, ref);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toContain("DATA_CHANGED");
   });
 
   it("a Ref outside --root is refused", () => {
