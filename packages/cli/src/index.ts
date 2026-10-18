@@ -1,32 +1,51 @@
 #!/usr/bin/env node
 // `fusen card | ref | resolve` entry point. See docs/vision.md and docs/adr/0001.
+import { parseArgs } from "node:util";
 import { buildCard, mintRef, openSource, renderCard, resolveRef } from "@fusenduck/core";
 
 const USAGE = `usage:
   fusen card <file.parquet>
   fusen ref <file.parquet> [--where <predicate>] [--columns a,b]
-  fusen resolve <ref> [--limit <n>]`;
+  fusen resolve <ref> [--limit <n>] [--root <dir>]...   (roots default to the current directory)`;
 
-function option(args: string[], name: string): string | undefined {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
-}
-
-async function main(args: string[]): Promise<string> {
-  const [command, target] = args;
-  if (!command || !target) throw new Error(USAGE);
+async function main(argv: string[]): Promise<string> {
+  const { positionals, values } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    strict: true,
+    options: {
+      where: { type: "string" },
+      columns: { type: "string" },
+      limit: { type: "string" },
+      root: { type: "string", multiple: true },
+    },
+  });
+  const [command, target, ...extra] = positionals;
+  if (!command || !target || extra.length) throw new Error(USAGE);
+  const only = (...allowed: string[]) => {
+    const stray = Object.keys(values).filter((k) => !allowed.includes(k));
+    if (stray.length) throw new Error(`${command} does not take --${stray.join(", --")}\n${USAGE}`);
+  };
   switch (command) {
     case "card": {
+      only();
       const engine = await openSource(target);
       return renderCard(await buildCard(engine), engine.source);
     }
     case "ref": {
-      const columns = option(args, "--columns")?.split(",");
-      return `${await mintRef(target, { where: option(args, "--where"), columns })}\n`;
+      only("where", "columns");
+      const columns = values.columns?.split(",");
+      if (columns?.some((c) => c === "")) throw new Error("--columns needs a comma-separated list of names");
+      if (values.where !== undefined && values.where.trim() === "") throw new Error("--where needs a predicate");
+      return `${await mintRef(target, { where: values.where, columns })}\n`;
     }
     case "resolve": {
-      const limit = option(args, "--limit");
-      return resolveRef(target, limit === undefined ? {} : { limit: Number(limit) });
+      only("limit", "root");
+      const limit = values.limit === undefined ? undefined : Number(values.limit);
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
+        throw new Error("--limit must be a non-negative integer");
+      }
+      return resolveRef(target, { ...(limit === undefined ? {} : { limit }), roots: values.root ?? [process.cwd()] });
     }
     default:
       throw new Error(USAGE);

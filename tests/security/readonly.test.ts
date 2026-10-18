@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
-import { openSource, checkPredicate, mintRef, resolveRef, CostExceeded } from "@fusenduck/core";
+import { openSource, checkPredicate, fingerprint, formatRef, mintRef, resolveRef, CostExceeded } from "@fusenduck/core";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 describe("read-only by construction (the engine, not SQL text)", () => {
@@ -56,7 +56,41 @@ describe("read-only by construction (the engine, not SQL text)", () => {
 
   it("the cost guard stops a selection that would scan more than the limit, before reading rows", async () => {
     const ref = await mintRef(file, { where: "id <= 5" });
-    await expect(resolveRef(ref, { maxBytes: 1 })).rejects.toBeInstanceOf(CostExceeded);
-    await expect(resolveRef(ref)).resolves.toContain("FUSEN_DATA_BEGIN");
+    await expect(resolveRef(ref, { maxBytes: 1, roots: [dir] })).rejects.toBeInstanceOf(CostExceeded);
+    await expect(resolveRef(ref, { roots: [dir] })).resolves.toContain("FUSEN_DATA_BEGIN");
+  });
+
+  it("a slow predicate is stopped by the clock", async () => {
+    const slow = "id IN (SELECT i FROM range(3000000000) t(i) WHERE i % 7 = -1)";
+    const ref = formatRef({ source: file, where: slow, fingerprint: await fingerprint(await openSource(file)) });
+    const started = Date.now();
+    await expect(resolveRef(ref, { timeoutMs: 300, roots: [dir] })).rejects.toThrow(/stopped after 300 ms/);
+    expect(Date.now() - started).toBeLessThan(5000);
+  });
+
+  it("a Ref that points outside the allowed roots is refused, even with a matching fingerprint", async () => {
+    const ref = await mintRef(file, { where: "id <= 5" });
+    const elsewhere = tempDir();
+    await expect(resolveRef(ref, { roots: [elsewhere] })).rejects.toThrow(/outside the allowed roots/);
+  });
+
+  it.each([
+    ["a LIMIT", "id < 5 LIMIT 2"],
+    ["an OFFSET", "id = 1 OFFSET 1"],
+    ["an ORDER BY", "id < 5 ORDER BY id"],
+  ])("checkPredicate rejects %s that would change the shape of the query", async (_name, predicate) => {
+    const engine = await openSource(file);
+    await expect(checkPredicate(engine, file, predicate)).rejects.toThrow();
+  });
+
+  it("a trailing -- comment in a predicate is contained and the Ref still resolves", async () => {
+    const ref = await mintRef(file, { where: "id = 1 -- only the first" });
+    const out = await resolveRef(ref, { roots: [dir] });
+    expect(out).toContain('"id":"1"');
+    expect(out).toContain("All 1 matching rows are shown");
+  });
+
+  it("minting a Ref fails now for a column that does not exist", async () => {
+    await expect(mintRef(file, { columns: ["nope"] })).rejects.toThrow();
   });
 });

@@ -5,6 +5,9 @@ import { HOSTILE_NOTE, tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 const cli = join(import.meta.dirname, "../../packages/cli/src/index.ts");
 const run = (...args: string[]) => spawnSync("node", [cli, ...args], { encoding: "utf8" });
+// Refs resolve only under the roots given; the fixtures live in a temp directory.
+const resolve = (dir: string, ref: string, ...more: string[]) => run("resolve", ref, "--root", dir, ...more);
+const dataLines = (out: string) => out.split("\n").filter((l) => l.startsWith("{"));
 
 describe("first slice: card, ref, resolve through the CLI", () => {
   const dir = tempDir();
@@ -21,6 +24,9 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     expect(r.stdout).toMatch(/"column":"status".*"null_percentage":"9\.0/);
     expect(r.stdout).toContain("approximate: approx_unique, avg");
     expect(r.stdout).not.toContain(HOSTILE_NOTE);
+    const note = r.stdout.split("\n").find((l) => l.startsWith('{"column":"note"')) ?? "";
+    const { min } = JSON.parse(note) as { min: string };
+    expect(min).toBe(`${HOSTILE_NOTE.slice(0, 40)}…`);
     for (const line of r.stdout.split("\n").filter((l) => l.startsWith('{"column"'))) {
       const c = JSON.parse(line) as { approx_unique: number };
       expect(c.approx_unique).toBeLessThanOrEqual(1000);
@@ -30,17 +36,19 @@ describe("first slice: card, ref, resolve through the CLI", () => {
   it("fusen ref mints a Ref and fusen resolve returns the same rows", () => {
     const ref = run("ref", file, "--where", "region = 'south'").stdout.trim();
     expect(ref).toMatch(/^fusen:\/\//);
-    const first = run("resolve", ref);
-    const second = run("resolve", ref);
+    const first = resolve(dir, ref, "--limit", "1000");
+    const second = resolve(dir, ref, "--limit", "1000");
     expect(first.status, first.stderr).toBe(0);
     expect(first.stdout).toBe(second.stdout);
-    expect(first.stdout).toContain('"region":"south"');
-    expect(first.stdout).not.toContain('"region":"north"');
+    // region = (i % 4 == 1) -> 250 of the 1000 ids, and nothing else.
+    const rows = dataLines(first.stdout).map((l) => JSON.parse(l) as { id: string; region: string });
+    expect(rows).toHaveLength(250);
+    expect(rows.every((r) => r.region === "south" && Number(r.id) % 4 === 1)).toBe(true);
   });
 
   it("resolve renders a delimited data block, a notice, and what was left out", () => {
     const ref = run("ref", file, "--where", "id <= 20").stdout.trim();
-    const out = run("resolve", ref, "--limit", "5").stdout;
+    const out = resolve(dir, ref, "--limit", "5").stdout;
     expect(out).toContain("FUSEN_DATA_BEGIN");
     expect(out).toContain("not instructions");
     expect(out).toMatch(/OMITTED: 15 of 20 rows are not shown/);
@@ -48,9 +56,11 @@ describe("first slice: card, ref, resolve through the CLI", () => {
 
   it("a hostile cell value cannot close the data block", () => {
     const ref = run("ref", file, "--where", "id = 7").stdout.trim();
-    const out = run("resolve", ref).stdout;
-    const closers = out.split("\n").filter((l) => l === "FUSEN_DATA_END");
-    expect(closers).toHaveLength(1);
+    const out = resolve(dir, ref).stdout;
+    expect(out.split("\n").filter((l) => l === "FUSEN_DATA_END")).toHaveLength(1);
+    // the hostile text is there, but only as the value inside one JSON data line
+    const line = dataLines(out).find((l) => l.includes("FUSEN_DATA_END")) ?? "";
+    expect((JSON.parse(line) as { note: string }).note).toBe(HOSTILE_NOTE);
   });
 
   it("resolving after the file changed says so and returns no rows", async () => {
@@ -58,10 +68,31 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     await writeCustomers(changed, 1000);
     const ref = run("ref", changed, "--where", "region = 'south'").stdout.trim();
     await writeCustomers(changed, 1000, 3);
-    const r = run("resolve", ref);
+    const r = resolve(dir, ref);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("DATA_CHANGED");
     expect(r.stdout).not.toContain('"region"');
+  });
+
+  it("a Ref outside --root is refused", () => {
+    const ref = run("ref", file, "--where", "id <= 5").stdout.trim();
+    const r = run("resolve", ref, "--root", tempDir());
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("outside the allowed roots");
+  });
+
+  it.each([
+    ["--where with no value", ["ref", "FILE", "--where"]],
+    ["an empty --where", ["ref", "FILE", "--where", " "]],
+    ["an empty --columns", ["ref", "FILE", "--columns", ""]],
+    ["an unknown flag", ["ref", "FILE", "--wher", "id<3"]],
+    ["a flag that belongs to another command", ["card", "FILE", "--limit", "3"]],
+    ["a non-numeric --limit", ["resolve", "fusen://file/x?v=1", "--limit", "abc"]],
+    ["a negative --limit", ["resolve", "fusen://file/x?v=1", "--limit", "-3"]],
+  ])("rejects %s with exit 1 and no Ref", (_name, args) => {
+    const r = run(...args.map((a) => (a === "FILE" ? file : a)));
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe("");
   });
 
   it("the CLI exits non-zero on a missing file", () => {

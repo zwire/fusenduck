@@ -15,7 +15,7 @@ const card = await buildCard(engine);
 const cardMs = Math.round(performance.now() - t0);
 
 const ref = await mintRef(file, { where: "id <= 11" });
-const rendered = await resolveRef(ref, { limit: 11 });
+const rendered = await resolveRef(ref, { limit: 11, roots: [dir] });
 // Tokens are estimated as characters / 3.5; no tokenizer is used.
 const tokens = (s: string) => Math.round(s.length / 3.5);
 

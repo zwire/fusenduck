@@ -18,6 +18,7 @@ export interface DataCard {
 }
 
 const MAX_TEXT = 40;
+const MAX_NAME = 80;
 
 // A text column's min/max is a cell value, so it can carry instructions: keep it short.
 function shorten(value: string | null, type: string): string | null {
@@ -25,13 +26,16 @@ function shorten(value: string | null, type: string): string | null {
   return value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}…` : value;
 }
 
+// Column names are source text too.
+const clip = (value: string): string => (value.length > MAX_NAME ? `${value.slice(0, MAX_NAME)}…` : value);
+
 export async function buildCard(engine: Engine): Promise<DataCard> {
   const summary = await engine.query(`SUMMARIZE SELECT * FROM read_parquet(${lit(engine.source)})`);
   const rows = Number(summary[0]?.count ?? 0);
   const columns = summary.map((c): CardColumn => {
     const type = String(c.column_type);
     return {
-      column: String(c.column_name),
+      column: clip(String(c.column_name)),
       type,
       min: shorten((c.min as string | null) ?? null, type),
       max: shorten((c.max as string | null) ?? null, type),

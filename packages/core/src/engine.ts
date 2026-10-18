@@ -7,7 +7,7 @@ export interface Engine {
   /** The absolute path of the one file this engine may read. */
   readonly source: string;
   /** Runs one statement and returns its rows as JSON-safe objects (BIGINT and DECIMAL arrive as strings). */
-  query(sql: string): Promise<Row[]>;
+  query(sql: string, opts?: { timeoutMs?: number }): Promise<Row[]>;
 }
 
 /** A SQL string literal. */
@@ -34,9 +34,18 @@ export async function openSource(source: string): Promise<Engine> {
   await connection.run("SET lock_configuration=true");
   return {
     source: path,
-    async query(sql: string): Promise<Row[]> {
-      const reader = await connection.runAndReadAll(sql);
-      return reader.getRowObjectsJson() as Row[];
+    async query(sql: string, opts: { timeoutMs?: number } = {}): Promise<Row[]> {
+      // A predicate is untrusted SQL and can be slow without reading many bytes; stop it on a clock.
+      const timer = opts.timeoutMs ? setTimeout(() => connection.interrupt(), opts.timeoutMs) : undefined;
+      try {
+        const reader = await connection.runAndReadAll(sql);
+        return reader.getRowObjectsJson() as Row[];
+      } catch (error) {
+        if (timer && /interrupt/i.test(String(error))) throw new Error(`query stopped after ${opts.timeoutMs} ms`);
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }

@@ -21,13 +21,25 @@ export function formatRef(ref: Ref): string {
 
 export function parseRef(text: string): Ref {
   if (!text.startsWith(PREFIX)) throw new Error(`not a fusen:// Ref: ${text.slice(0, 40)}`);
-  const [path = "", query = ""] = text.slice(PREFIX.length).split("?", 2) as [string, string?];
-  const source = decodeURIComponent(path);
+  const rest = text.slice(PREFIX.length);
+  const cut = rest.indexOf("?");
+  const path = cut < 0 ? rest : rest.slice(0, cut);
+  const query = cut < 0 ? "" : rest.slice(cut + 1);
+  let source: string;
+  const params = new Map<string, string>();
+  try {
+    source = decodeURIComponent(path);
+    for (const part of query.split("&").filter(Boolean)) {
+      const i = part.indexOf("=");
+      if (i <= 0) throw new Error(`malformed parameter "${part}"`);
+      const key = part.slice(0, i);
+      if (params.has(key)) throw new Error(`duplicate parameter "${key}"`);
+      params.set(key, part.slice(i + 1));
+    }
+  } catch (error) {
+    throw new Error(`malformed Ref: ${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!source) throw new Error("Ref has no source");
-  const params = new Map(query.split("&").filter(Boolean).map((p) => {
-    const i = p.indexOf("=");
-    return [p.slice(0, i), p.slice(i + 1)] as const;
-  }));
   const fingerprint = params.get("v");
   if (!fingerprint) throw new Error("Ref has no fingerprint (v=)");
   const ref: Ref = { source, fingerprint };
@@ -43,11 +55,16 @@ export function baseQuery(source: string): string {
   return `SELECT * FROM read_parquet(${lit(source)})`;
 }
 
+// The predicate sits alone on its lines inside parentheses: a "--" comment cannot swallow what
+// follows it, and LIMIT, OFFSET, ORDER BY or a UNION written into it is a syntax error.
+function whereClause(predicate: string | undefined): string {
+  return predicate ? ` WHERE (\n${predicate}\n)` : "";
+}
+
 /** The SELECT a Ref stands for (no row limit). */
 export function selectionSql(ref: Ref): string {
   const cols = ref.columns?.length ? ref.columns.map(ident).join(", ") : "*";
-  const where = ref.where ? ` WHERE ${ref.where}` : "";
-  return `SELECT ${cols} FROM (${baseQuery(ref.source)})${where}`;
+  return `SELECT ${cols} FROM (${baseQuery(ref.source)})${whereClause(ref.where)}`;
 }
 
 /**
@@ -56,16 +73,17 @@ export function selectionSql(ref: Ref): string {
  * reading or writing anything else.
  */
 export async function checkPredicate(engine: Engine, source: string, predicate: string): Promise<void> {
-  const sql = `SELECT * FROM (${baseQuery(source)}) WHERE ${predicate}`;
+  const sql = `SELECT * FROM (${baseQuery(source)})${whereClause(predicate)}`;
   const rows = await engine.query(`SELECT json_serialize_sql(${lit(sql)}) AS j`);
   const parsed = JSON.parse(String(rows[0]?.j)) as {
     error?: boolean;
     error_message?: string;
-    statements?: { node?: { type?: string } }[];
+    statements?: { node?: { type?: string; modifiers?: unknown[] } }[];
   };
   if (parsed.error) throw new Error(`predicate rejected: ${parsed.error_message ?? "not a single SELECT"}`);
   const statements = parsed.statements ?? [];
-  if (statements.length !== 1 || statements[0]?.node?.type !== "SELECT_NODE") {
+  const node = statements[0]?.node;
+  if (statements.length !== 1 || node?.type !== "SELECT_NODE" || node.modifiers?.length) {
     throw new Error("predicate rejected: it must stay a single plain SELECT");
   }
 }
