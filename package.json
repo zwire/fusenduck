@@ -7,11 +7,17 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "pnpm -r --parallel typecheck",
-    "build": "pnpm -r build"
+    "typecheck": "pnpm -r --parallel typecheck && tsc -p tsconfig.json",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:integration": "vitest run tests/integration",
+    "test:security": "vitest run tests/security",
+    "bench": "node tests/bench/card.bench.ts"
   },
   "devDependencies": {
+    "@duckdb/node-api": "1.5.6-r.1",
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.5"
   }
 }
