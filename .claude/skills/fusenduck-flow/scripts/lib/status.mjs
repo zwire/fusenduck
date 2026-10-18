@@ -7,7 +7,7 @@ import { askAtGate, askSuspend } from "./reply.mjs";
 export function nextHint(node, run, root) {
   const f = flowCmd(root);
   if (run.paused) return `the run is paused (${run.paused.note}); continue with \`${f} resume\``;
-  if (run.awaiting) return `waiting for the human at step ${run.awaiting.step}; stop and ${askAtGate(run.awaiting.step)}`;
+  if (run.awaiting) return `waiting for the human at step ${run.awaiting.step}; stop and ${askAtGate(run.awaiting.step, f)}`;
   const pending = node.steps.find((s) => run.steps[s.n].status === "pending");
   if (pending) {
     return pending.humanGate
@@ -23,11 +23,11 @@ export function nextHint(node, run, root) {
 export function describe(g, state, root) {
   const text = describeState(g, state, root);
   if (!state.request || state.suspended) return text;
-  return `${text}\n${tag} Waiting for the user to answer your request to suspend the rails so you can ${state.request.reason}: ${askSuspend}.`;
+  return `${text}\n${tag} Waiting for the user to answer your request to suspend the rails so you can ${state.request.reason}: ${askSuspend(flowCmd(root))}.`;
 }
 
 // How the agent asks to change what only a suspended rail lets it change.
-export const askToSuspend = (root, why = "<what you will change>") => `run \`${flowCmd(root)} request suspend --reason "${why}"\`, then stop and ${askSuspend}`;
+export const askToSuspend = (root, why = "<what you will change>") => `run \`${flowCmd(root)} request suspend --reason "${why}"\`, then stop and ${askSuspend(flowCmd(root))}`;
 
 function describeState(g, state, root) {
   if (!g.ok) return `${tag} The workflow graph is invalid, so the rails are off until it validates: ${g.errors[0]}. To repair the skill, ${askToSuspend(root, "<what you will repair>")}.`;

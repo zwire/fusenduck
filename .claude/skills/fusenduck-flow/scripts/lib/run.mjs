@@ -115,7 +115,7 @@ export function cmdStep(g, state, st, [nArg], o) {
     if (run.steps[n].status === "rejected") refuse(`step ${n} was rejected; finish the playbook and take the exit that fits`);
     run.awaiting = { step: n, since: now() };
     st.log({ event: "await", run: run.id, playbook: node.id, step: n });
-    throw new Stop(`STOP. Step ${n} is a human gate: "${gateText(s)}"\nPresent what the user needs to decide, then ${askAtGate(n)}; end your turn. Only the user can pass it (or run \`flow approve\` themselves).`, 3);
+    throw new Stop(`STOP. Step ${n} is a human gate: "${gateText(s)}"\nPresent what the user needs to decide, then ${askAtGate(n)}. Only the user can pass it (or run \`flow approve\` themselves).`, 3);
   }
   if (!o.evidence && !o.skip) throw new Stop(`usage: flow step ${n} --evidence "<what shows it>" | --skip "<reason>"`, 2);
   run.steps[n] = o.skip ? { status: "skipped", reason: o.skip, at: now() } : { status: "done", evidence: o.evidence, at: now() };

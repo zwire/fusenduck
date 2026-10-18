@@ -26,8 +26,8 @@ const MAX_READS = 500;
 const MAX_CHARS = 4_000_000;
 class TooComplex extends Error {}
 
-// The program a word names, as the shell would look it up: no directory, no .exe, any case.
-export const programName = (t) => t.replace(/\\/g, "/").split("/").pop().toLowerCase().replace(/\.exe$/, "");
+// The program a word names, as the shell would look it up: no directory, no Windows extension (.exe, .cmd, .bat, .ps1), any case.
+export const programName = (t) => t.replace(/\\/g, "/").split("/").pop().toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, "");
 
 // Index of the first word that is the program itself, past assignments and wrappers like sudo.
 export function commandStart(w) {
