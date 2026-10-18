@@ -38,17 +38,22 @@ export function createServer(roots: string[]): McpServer {
     "fusen_ref",
     {
       description:
-        "Mint a Ref (a fusen:// string) for a selection of a Parquet file: an optional SQL WHERE predicate " +
-        "and optional column names. Hand the Ref to fusen_resolve to read the rows.",
+        "Mint a Ref (a fusen:// string) for a selection of a Parquet file: an optional SELECT over the file " +
+        "(as the table `data`), an optional SQL WHERE predicate, and optional column names. Hand the Ref to fusen_resolve to read the rows.",
       inputSchema: {
         path: z.string().describe("Path of a Parquet file under an allowed root"),
-        where: z.string().min(1).optional().describe("SQL predicate over the file's columns"),
+        query: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("A single SELECT that reads the file as the table `data`, e.g. an aggregate"),
+        where: z.string().min(1).optional().describe("SQL predicate over the columns of the query (or the file)"),
         columns: z.array(z.string().min(1)).min(1).optional().describe("Column names to keep"),
       },
     },
-    async ({ path, where, columns }) => {
+    async ({ path, query, where, columns }) => {
       try {
-        return text(await mintRef(path, { where, columns, roots }));
+        return text(await mintRef(path, { query, where, columns, roots }));
       } catch (error) {
         return failure(error);
       }
