@@ -8,6 +8,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fusenduck/core": "workspace:*"
+    "@fusenduck/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
   }
 }

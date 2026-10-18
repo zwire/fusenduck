@@ -4,4 +4,4 @@ export { buildCard, type DataCard, type CardColumn } from "./card.ts";
 export { fingerprint } from "./fingerprint.ts";
 export { formatRef, parseRef, checkPredicate, selectionSql, type Ref } from "./ref.ts";
 export { renderCard, renderRows, renderChanged } from "./render.ts";
-export { mintRef, resolveRef, CostExceeded, DEFAULT_LIMIT, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from "./resolve.ts";
+export { assertInRoots, mintRef, resolveRef, CostExceeded, DEFAULT_LIMIT, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from "./resolve.ts";

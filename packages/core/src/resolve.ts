@@ -19,6 +19,14 @@ const inside = (root: string, path: string): boolean => {
   return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 };
 
+/** Throws unless the file is under one of the roots (symlinks resolved). */
+export function assertInRoots(path: string, roots: string[]): void {
+  const real = realpathSync(path);
+  if (!roots.some((root) => inside(realpathSync(root), real))) {
+    throw new Error(`the source is outside the allowed roots: ${path}`);
+  }
+}
+
 export async function mintRef(source: string, opts: { where?: string; columns?: string[] } = {}): Promise<string> {
   const engine = await openSource(source);
   if (opts.where) await checkPredicate(engine, engine.source, opts.where);
@@ -36,10 +44,7 @@ export async function resolveRef(
 ): Promise<string> {
   const ref = parseRef(text);
   // A Ref names its own file, so a pasted Ref must not be able to point anywhere on disk.
-  const source = realpathSync(ref.source);
-  if (!opts.roots.some((root) => inside(realpathSync(root), source))) {
-    throw new Error(`the Ref's source is outside the allowed roots: ${ref.source}`);
-  }
+  assertInRoots(ref.source, opts.roots);
   const engine = await openSource(ref.source);
   const now = await fingerprint(engine);
   if (now !== ref.fingerprint) return renderChanged(ref, now);

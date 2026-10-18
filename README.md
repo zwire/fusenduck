@@ -35,4 +35,10 @@ node packages/cli/src/index.ts resolve '<上で出た Ref>' [--root <dir>]
 
 Ref は自分でファイルの場所を持つので、`resolve` は `--root` で許可したディレクトリの下のファイルだけを開きます(既定はカレントディレクトリ)。
 
+エージェントからは MCP サーバー経由で同じ 3 つの操作(`fusen_card`、`fusen_ref`、`fusen_resolve`)を呼べます。読めるファイルは `--root` の下だけです。
+
+```sh
+node packages/mcp/src/index.ts --root /path/to/data
+```
+
 TypeScript は Node の型除去で直接実行します(ビルド工程はまだありません)。決定の経緯は [docs/adr](docs/adr/0001-engine-ref-rendering.md) を参照。
