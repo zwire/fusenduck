@@ -1,0 +1,13 @@
+{
+  "name": "@fusenduck/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "fusenduck command line and TUI client.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fusenduck/core": "workspace:*"
+  }
+}

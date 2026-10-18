@@ -1,0 +1,13 @@
+{
+  "name": "@fusenduck/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server exposing fusenduck Refs and queries to agents.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fusenduck/core": "workspace:*"
+  }
+}

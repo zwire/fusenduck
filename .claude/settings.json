@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(node -p \"process.env.CLAUDE_PROJECT_DIR||(require('child_process').spawnSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).stdout||'').trim()||'.'\")/.claude/skills/fusenduck-flow/scripts/flow.mjs\" hook session-start --agent claude"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(node -p \"process.env.CLAUDE_PROJECT_DIR||(require('child_process').spawnSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).stdout||'').trim()||'.'\")/.claude/skills/fusenduck-flow/scripts/flow.mjs\" hook user-prompt --agent claude"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(node -p \"process.env.CLAUDE_PROJECT_DIR||(require('child_process').spawnSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).stdout||'').trim()||'.'\")/.claude/skills/fusenduck-flow/scripts/flow.mjs\" hook pre-tool-use --agent claude"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(node -p \"process.env.CLAUDE_PROJECT_DIR||(require('child_process').spawnSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).stdout||'').trim()||'.'\")/.claude/skills/fusenduck-flow/scripts/flow.mjs\" hook stop --agent claude"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(node -p \"process.env.CLAUDE_PROJECT_DIR||(require('child_process').spawnSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).stdout||'').trim()||'.'\")/.claude/skills/fusenduck-flow/scripts/flow.mjs\" hook post-tool-use --agent claude"
+          }
+        ]
+      }
+    ]
+  }
+}

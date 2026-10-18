@@ -1,0 +1,13 @@
+{
+  "name": "@fusenduck/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Engine, Ref model and protocol shared by every fusenduck client.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

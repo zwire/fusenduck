@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.fusenduck/
+*.duckdb
+*.duckdb.wal
+.DS_Store
+
+# fusenduck-flow
+.scratch/
+.flow/*/state.json
+.flow/*/log.jsonl
+.flow/*/runs/
