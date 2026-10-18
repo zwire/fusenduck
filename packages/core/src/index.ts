@@ -5,3 +5,4 @@ export { fingerprint } from "./fingerprint.ts";
 export { formatRef, parseRef, checkPredicate, selectionSql, type Ref } from "./ref.ts";
 export { renderCard, renderRows, renderChanged } from "./render.ts";
 export { mintRef, resolveRef, CostExceeded, DEFAULT_LIMIT, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from "./resolve.ts";
+export { FusenError, describeError } from "./errors.ts";
