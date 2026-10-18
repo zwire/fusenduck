@@ -1,0 +1,8 @@
+{
+  "ref": "fusen://file/%2Fd%2Fwe%3Fird%26n%3Da%2Cme.parquet?v=abc123def456&where=region%20%3D%20'a%26b%3Dc%2Cd%3F'",
+  "parsed": {
+    "source": "/d/we?ird&n=a,me.parquet",
+    "where": "region = 'a&b=c,d?'",
+    "fingerprint": "abc123def456"
+  }
+}

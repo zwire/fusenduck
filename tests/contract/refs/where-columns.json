@@ -1,0 +1,12 @@
+{
+  "ref": "fusen://file/%2Fdata%2Fa%20b%2Fcustomers.parquet?v=abc123def456&cols=id,amount&where=region%20%3D%20'south'%20AND%20amount%20%3E%20900",
+  "parsed": {
+    "source": "/data/a b/customers.parquet",
+    "where": "region = 'south' AND amount > 900",
+    "columns": [
+      "id",
+      "amount"
+    ],
+    "fingerprint": "abc123def456"
+  }
+}

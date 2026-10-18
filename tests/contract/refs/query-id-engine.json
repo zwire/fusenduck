@@ -1,0 +1,11 @@
+{
+  "ref": "fusen://file/%2Fd%2Fa.parquet?v=abc123def456&e=v1.5.6&id=0123456789ab&q=SELECT%20region%2C%20sum(amount)%20AS%20total%20FROM%20data%20GROUP%20BY%20region&where=total%20%3E%200",
+  "parsed": {
+    "source": "/d/a.parquet",
+    "query": "SELECT region, sum(amount) AS total FROM data GROUP BY region",
+    "where": "total > 0",
+    "fingerprint": "abc123def456",
+    "id": "0123456789ab",
+    "engine": "v1.5.6"
+  }
+}
