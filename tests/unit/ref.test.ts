@@ -32,3 +32,17 @@ describe("Ref string", () => {
     expect(() => parseRef(text)).toThrow(/malformed Ref|no fingerprint/);
   });
 });
+
+describe("Ref string with a query, an id and an engine version", () => {
+  it("round-trips them", () => {
+    const ref = {
+      source: "/d/a.parquet",
+      query: "SELECT region, sum(amount) AS total FROM data GROUP BY region",
+      where: "total > 1000",
+      fingerprint: "abc123def456",
+      id: "0123456789ab",
+      engine: "v1.5.6",
+    };
+    expect(parseRef(formatRef(ref))).toEqual(ref);
+  });
+});

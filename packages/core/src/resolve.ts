@@ -1,7 +1,7 @@
 import { lit, openSource } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
-import { checkPredicate, formatRef, parseRef, selectionSql, type Ref } from "./ref.ts";
+import { checkPredicate, checkQuery, engineVersion, formatRef, parseRef, refId, selectionSql, type Ref } from "./ref.ts";
 import { renderChanged, renderRows } from "./render.ts";
 
 export const DEFAULT_LIMIT = 100;
@@ -15,15 +15,19 @@ export class CostExceeded extends FusenError {}
 
 export async function mintRef(
   source: string,
-  opts: { where?: string; columns?: string[]; roots?: string[] } = {},
+  opts: { query?: string; where?: string; columns?: string[]; roots?: string[] } = {},
 ): Promise<string> {
   const engine = await openSource(source, { roots: opts.roots });
-  if (opts.where) await checkPredicate(engine, engine.source, opts.where);
+  if (opts.query) await checkQuery(engine, opts.query);
+  if (opts.where) await checkPredicate(engine, engine.source, opts.where, opts.query);
   const ref: Ref = { source: engine.source, fingerprint: await fingerprint(engine) };
+  if (opts.query) ref.query = opts.query;
   if (opts.where) ref.where = opts.where;
   if (opts.columns?.length) ref.columns = opts.columns;
   // Plan it now (no rows read) so a missing column or a bad predicate fails here, not later.
   await engine.query(`${selectionSql(ref)} LIMIT 0`, { timeoutMs: DEFAULT_TIMEOUT_MS });
+  ref.engine = await engineVersion(engine);
+  ref.id = await refId(engine, ref);
   return formatRef(ref);
 }
 
@@ -36,7 +40,12 @@ export async function resolveRef(
   const engine = await openSource(ref.source, { roots: opts.roots });
   const now = await fingerprint(engine);
   if (now !== ref.fingerprint) return renderChanged(ref, now);
-  if (ref.where) await checkPredicate(engine, engine.source, ref.where);
+  if (ref.query) await checkQuery(engine, ref.query);
+  if (ref.where) await checkPredicate(engine, engine.source, ref.where, ref.query);
+  // A Ref edited after it was minted no longer hashes to its id. (Skipped under another engine version.)
+  if (ref.id && ref.engine === (await engineVersion(engine)) && ref.id !== (await refId(engine, ref))) {
+    throw new FusenError("the Ref's id does not match its selection: it was edited after it was minted");
+  }
 
   // The byte guard counts the whole source (a predicate cannot make a scan bigger than the file);
   // the clock below is what bounds a predicate that is slow without reading much.

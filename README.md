@@ -30,6 +30,8 @@ pnpm test
 ```sh
 node packages/cli/src/index.ts card data.parquet
 node packages/cli/src/index.ts ref data.parquet --where "region = 'south'"
+# ファイルを `data` という名前で読む SELECT を持たせることもできます
+node packages/cli/src/index.ts ref data.parquet --query "SELECT region, sum(amount) AS total FROM data GROUP BY region" --where "total > 0"
 node packages/cli/src/index.ts resolve '<上で出た Ref>' [--root <dir>]
 ```
 

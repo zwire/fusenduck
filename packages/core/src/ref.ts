@@ -1,26 +1,48 @@
+import { createHash } from "node:crypto";
 import { ident, lit, type Engine } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 
 export interface Ref {
   /** Absolute path of the source file. */
   source: string;
-  /** SQL predicate over the source's columns. Untrusted: see checkPredicate. */
+  /**
+   * A SELECT over the source, which it names `data`. Without one, the Ref selects the whole file.
+   * Untrusted: see checkQuery.
+   */
+  query?: string;
+  /** SQL predicate over the columns of the query (or of the file). Untrusted: see checkPredicate. */
   where?: string;
   columns?: string[];
   /** Data fingerprint at the time the Ref was minted. */
   fingerprint: string;
+  /** Hash of the selection's parsed form, so a Ref edited by hand can be told from one that was minted. */
+  id?: string;
+  /** The engine version the id was computed under; the id is only checked under the same version. */
+  engine?: string;
 }
 
 const PREFIX = "fusen://file/";
 
 export function formatRef(ref: Ref): string {
   const params = [`v=${ref.fingerprint}`];
+  if (ref.engine) params.push(`e=${encodeURIComponent(ref.engine)}`);
+  if (ref.id) params.push(`id=${ref.id}`);
+  if (ref.query) params.push(`q=${encodeURIComponent(ref.query)}`);
   if (ref.columns?.length) params.push(`cols=${ref.columns.map(encodeURIComponent).join(",")}`);
   if (ref.where) params.push(`where=${encodeURIComponent(ref.where)}`);
   return `${PREFIX}${encodeURIComponent(ref.source)}?${params.join("&")}`;
 }
 
 export function parseRef(text: string): Ref {
+  try {
+    return parseRefUnchecked(text);
+  } catch (error) {
+    if (error instanceof FusenError) throw error;
+    throw new FusenError(`malformed Ref: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function parseRefUnchecked(text: string): Ref {
   if (!text.startsWith(PREFIX)) throw new FusenError(`not a fusen:// Ref: ${text.slice(0, 40)}`);
   const rest = text.slice(PREFIX.length);
   const cut = rest.indexOf("?");
@@ -48,8 +70,18 @@ export function parseRef(text: string): Ref {
   if (cols) ref.columns = cols.split(",").map(decodeURIComponent);
   const where = params.get("where");
   if (where) ref.where = decodeURIComponent(where);
+  const q = params.get("q");
+  if (q) ref.query = decodeURIComponent(q);
+  const id = params.get("id");
+  if (id) ref.id = id;
+  const engine = params.get("e");
+  if (engine) ref.engine = decodeURIComponent(engine);
   return ref;
 }
+
+// A query sits alone on its lines inside parentheses, like a predicate (see whereClause).
+const base = (ref: Pick<Ref, "source" | "query">): string =>
+  ref.query ? `\n${ref.query}\n` : baseQuery(ref.source);
 
 /** The base query of a source. */
 export function baseQuery(source: string): string {
@@ -65,7 +97,7 @@ function whereClause(predicate: string | undefined): string {
 /** The SELECT a Ref stands for (no row limit). */
 export function selectionSql(ref: Ref): string {
   const cols = ref.columns?.length ? ref.columns.map(ident).join(", ") : "*";
-  return `SELECT ${cols} FROM (${baseQuery(ref.source)})${whereClause(ref.where)}`;
+  return `SELECT ${cols} FROM (${base(ref)})${whereClause(ref.where)}`;
 }
 
 /**
@@ -73,8 +105,13 @@ export function selectionSql(ref: Ref): string {
  * is untrusted SQL: this is only an early reject. The engine lock is what keeps a predicate from
  * reading or writing anything else.
  */
-export async function checkPredicate(engine: Engine, source: string, predicate: string): Promise<void> {
-  const sql = `SELECT * FROM (${baseQuery(source)})${whereClause(predicate)}`;
+export async function checkPredicate(
+  engine: Engine,
+  source: string,
+  predicate: string,
+  query?: string,
+): Promise<void> {
+  const sql = `SELECT * FROM (${base({ source, query })})${whereClause(predicate)}`;
   const rows = await engine.query(`SELECT json_serialize_sql(${lit(sql)}) AS j`);
   const parsed = JSON.parse(String(rows[0]?.j)) as {
     error?: boolean;
@@ -87,4 +124,42 @@ export async function checkPredicate(engine: Engine, source: string, predicate: 
   if (statements.length !== 1 || node?.type !== "SELECT_NODE" || node.modifiers?.length) {
     throw new FusenError("predicate rejected: it must stay a single plain SELECT");
   }
+}
+
+/**
+ * Rejects a query that is not one SELECT, before the engine runs anything. Like a predicate, it
+ * is untrusted SQL: this is an early reject, and the engine lock is what keeps it from reading or
+ * writing anything but the source.
+ */
+export async function checkQuery(engine: Engine, query: string): Promise<void> {
+  const sql = `SELECT * FROM (\n${query}\n)`;
+  const rows = await engine.query(`SELECT json_serialize_sql(${lit(sql)}) AS j`);
+  const parsed = JSON.parse(String(rows[0]?.j)) as {
+    error?: boolean;
+    error_message?: string;
+    statements?: { node?: { type?: string; from_table?: { type?: string } } }[];
+  };
+  // The query must stay the subquery the wrapper made of it: text that closes the parenthesis early
+  // and adds a UNION or another FROM turns the outer node into something else.
+  const node = parsed.statements?.[0]?.node;
+  if (parsed.error || parsed.statements?.length !== 1 || node?.type !== "SELECT_NODE" || node.from_table?.type !== "SUBQUERY") {
+    throw new FusenError(`query rejected: ${parsed.error_message ?? "it must be a single SELECT"}`);
+  }
+}
+
+export async function engineVersion(engine: Engine): Promise<string> {
+  return String((await engine.query("SELECT version() AS v"))[0]?.v);
+}
+
+/**
+ * The id of a selection: a hash of its parsed form (case, spacing and comments do not change it),
+ * the source path, and nothing else. It does not detect queries that mean the same in different
+ * words. Under another engine version the parsed form may differ, so the Ref records the version.
+ */
+export async function refId(engine: Engine, ref: Ref): Promise<string> {
+  const rows = await engine.query(`SELECT json_serialize_sql(${lit(selectionSql(ref))}) AS j`);
+  const parsed = JSON.parse(String(rows[0]?.j)) as { error?: boolean };
+  if (parsed.error) throw new FusenError("the selection could not be parsed");
+  const form = JSON.stringify(parsed, (key, value) => (key === "query_location" ? undefined : value));
+  return createHash("sha256").update(`${ref.source}\n${form}`).digest("hex").slice(0, 12);
 }

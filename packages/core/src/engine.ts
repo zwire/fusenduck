@@ -64,6 +64,8 @@ export async function openSource(source: string, opts: { roots?: string[] } = {}
   const connection: DuckDBConnection = await instance.connect();
   await connection.run(`SET allowed_paths=[${lit(path)}]`);
   await connection.run("SET enable_external_access=false");
+  // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
+  await connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
   await connection.run("SET lock_configuration=true");
   return {
     source: path,

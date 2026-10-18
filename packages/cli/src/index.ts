@@ -5,7 +5,7 @@ import { buildCard, describeError, FusenError, mintRef, openSource, renderCard, 
 
 const USAGE = `usage:
   fusen card <file.parquet>
-  fusen ref <file.parquet> [--where <predicate>] [--columns a,b]
+  fusen ref <file.parquet> [--query <select over data>] [--where <predicate>] [--columns a,b]
   fusen resolve <ref> [--limit <n>] [--root <dir>]...   (roots default to the current directory)`;
 
 async function main(argv: string[]): Promise<string> {
@@ -16,6 +16,7 @@ async function main(argv: string[]): Promise<string> {
       allowPositionals: true,
       strict: true,
       options: {
+        query: { type: "string" },
         where: { type: "string" },
         columns: { type: "string" },
         limit: { type: "string" },
@@ -39,11 +40,12 @@ async function main(argv: string[]): Promise<string> {
       return renderCard(await buildCard(engine), engine.source);
     }
     case "ref": {
-      only("where", "columns");
+      only("query", "where", "columns");
       const columns = values.columns?.split(",");
       if (columns?.some((c) => c === "")) throw new FusenError("--columns needs a comma-separated list of names");
       if (values.where !== undefined && values.where.trim() === "") throw new FusenError("--where needs a predicate");
-      return `${await mintRef(target, { where: values.where, columns })}\n`;
+      if (values.query !== undefined && values.query.trim() === "") throw new FusenError("--query needs a SELECT");
+      return `${await mintRef(target, { query: values.query, where: values.where, columns })}\n`;
     }
     case "resolve": {
       only("limit", "root");

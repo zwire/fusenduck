@@ -50,6 +50,18 @@ describe("MCP adapter over stdio", () => {
     expect(out.text).toContain("OMITTED: none");
   });
 
+  it("fusen_ref takes a query over `data`, and resolve returns the aggregate", async () => {
+    const query = "SELECT region, count(*) AS n FROM data GROUP BY region";
+    const ref = (await call("fusen_ref", { path: file, query, where: "n > 0" })).text;
+    expect(ref).toMatch(/^fusen:\/\//);
+    const out = await call("fusen_resolve", { ref });
+    const rows = out.text.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as { n: string });
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => Number(r.n) === 250)).toBe(true);
+    const bad = await call("fusen_ref", { path: file, query: "SELECT 1; DROP TABLE data" });
+    expect(bad.isError).toBe(true);
+  });
+
   it("a hostile cell value comes back only inside the data block", async () => {
     const ref = (await call("fusen_ref", { path: file, where: "id = 7" })).text;
     const out = (await call("fusen_resolve", { ref })).text;
