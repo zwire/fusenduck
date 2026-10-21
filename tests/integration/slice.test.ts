@@ -107,6 +107,7 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     expect(dataLines(out.slice(out.indexOf('level="rows"'))).length).toBe(5);
     expect(run("peek", file, "--rows", "-1").status).toBe(1);
     expect(run("peek", file, "--rows", "1000").status).toBe(1);
+    for (const bad of ["", " 3", "1e1", "1.5", "abc"]) expect(run("peek", file, "--rows", bad).status, bad).toBe(1);
   });
 
   it("a Ref outside --root is refused", () => {

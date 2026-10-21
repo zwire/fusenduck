@@ -43,6 +43,7 @@ async function main(argv: string[]): Promise<string> {
     }
     case "peek": {
       only("rows");
+      if (values.rows !== undefined && !/^\d+$/.test(values.rows)) throw new FusenError("--rows must be a non-negative integer");
       const rows = values.rows === undefined ? undefined : Number(values.rows);
       return peek(target, rows === undefined ? {} : { rows });
     }
