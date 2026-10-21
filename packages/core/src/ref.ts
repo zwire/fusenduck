@@ -89,7 +89,7 @@ const base = (ref: Pick<Ref, "source" | "query" | "where">): string =>
  * the SQL (and the id) it had. Positions are safe because the fingerprint refuses a changed file.
  * A file with a real column of that name keeps it: the predicate then reads the column, not the position.
  */
-const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
+export const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
   !ref.query && /\bfile_row_number\b/i.test(ref.where ?? "");
 
 /** The base query of a source. */

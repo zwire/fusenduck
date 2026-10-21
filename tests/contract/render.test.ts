@@ -20,11 +20,11 @@ describe("rows rendering", () => {
         "",
       ].join("\n"),
     );
-    expect(renderRows(ref, rows, 2, 2)).toBe(renderRows(ref, rows, 2));
+    expect(renderRows(ref, rows, 2, { distinct: 2, byPosition: true })).toBe(renderRows(ref, rows, 2));
   });
 
   it("says the selection is ambiguous when matching rows are identical copies", () => {
-    const out = renderRows(ref, rows, 2, 1);
+    const out = renderRows(ref, rows, 2, { distinct: 1, byPosition: true });
     expect(out.split("\n")[0]).toBe(
       '<<<FUSEN_RESULT ref="fusen://file/%2Fd%2Fkeyless.parquet?v=f&where=k%20%3D%20\'a\'" level="rows" distinct="1">>>',
     );
@@ -36,11 +36,17 @@ describe("rows rendering", () => {
   });
 
   it("has no position to offer for the rows of a query", () => {
-    const out = renderRows({ ...ref, query: "SELECT k FROM data" }, [...rows, { k: "b" }], 3, 2);
+    const out = renderRows({ ...ref, query: "SELECT k FROM data" }, [...rows, { k: "b" }], 3, { distinct: 2, byPosition: false });
     expect(out).toContain(
       "AMBIGUOUS: the 3 matching rows hold only 2 distinct rows (1 is an identical copy), so this Ref cannot single out one of them. " +
         "Rows of a query have no position: add columns that tell them apart.",
     );
+    expect(out).not.toContain("file_row_number");
+  });
+
+  it("names the selected columns, and offers no position when the file has its own file_row_number column", () => {
+    const out = renderRows({ ...ref, columns: ["k"] }, rows, 2, { distinct: 1, byPosition: false });
+    expect(out).toContain("(1 is an identical copy in the selected columns), so this Ref cannot single out one of them. Add columns that tell them apart.");
     expect(out).not.toContain("file_row_number");
   });
 });
