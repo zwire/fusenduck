@@ -1,8 +1,10 @@
+import { dirname } from "node:path";
 import { lit, openSource } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
 import { checkPredicate, checkQuery, engineVersion, formatRef, parseRef, refId, selectionSql, type Ref } from "./ref.ts";
-import { renderChanged, renderRows } from "./render.ts";
+import { buildCard } from "./card.ts";
+import { renderCard, renderChanged, renderRows } from "./render.ts";
 
 export const DEFAULT_LIMIT = 100;
 /** Refuse to scan more than this many compressed bytes; a first default, see docs/adr/0001. */
@@ -10,6 +12,9 @@ export const DEFAULT_MAX_BYTES = 512 * 1024 * 1024;
 
 /** A query on an untrusted predicate may run this long before it is stopped. */
 export const DEFAULT_TIMEOUT_MS = 10_000;
+
+export const DEFAULT_PEEK_ROWS = 5;
+export const MAX_PEEK_ROWS = 50;
 
 export class CostExceeded extends FusenError {}
 
@@ -63,4 +68,23 @@ export async function resolveRef(
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
   const rows = await engine.query(`${selection} LIMIT ${limit}`, { timeoutMs });
   return renderRows(ref, rows, total);
+}
+
+/**
+ * The first look at a file in one result: its data card, then the first rows with the Ref that
+ * stands for them (the whole file), so an agent can cite what it saw.
+ */
+export async function peek(
+  source: string,
+  opts: { rows?: number; roots?: string[] } = {},
+): Promise<string> {
+  const rows = opts.rows ?? DEFAULT_PEEK_ROWS;
+  if (!Number.isInteger(rows) || rows < 0 || rows > MAX_PEEK_ROWS) {
+    throw new FusenError(`rows must be an integer from 0 to ${MAX_PEEK_ROWS}`);
+  }
+  const engine = await openSource(source, { roots: opts.roots });
+  const card = renderCard(await buildCard(engine), engine.source);
+  const ref = await mintRef(source, { roots: opts.roots });
+  // The Ref was just minted from this file, so resolving it may read this file's own directory.
+  return `${card}\n${await resolveRef(ref, { limit: rows, roots: opts.roots ?? [dirname(engine.source)] })}`;
 }
