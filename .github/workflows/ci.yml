@@ -21,3 +21,18 @@ jobs:
       - run: pnpm test
       - run: pnpm contract:check
       - run: pnpm build
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Fails when any number is over its budget in bench/budgets.json; the table goes to the job summary.
+      - run: |
+          set -o pipefail
+          pnpm -s bench | tee -a "$GITHUB_STEP_SUMMARY"
