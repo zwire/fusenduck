@@ -1,7 +1,7 @@
 // Measures the budgets in bench/budgets.json on a generated 1,000,000-row Parquet file
 // and exits non-zero when any number is over its budget.
 // Run: pnpm bench   (add --write to record the measured numbers)
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildCard, mintRef, openSource, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
@@ -29,6 +29,7 @@ const numbers = {
   card_render_tokens: tokens(renderCard(card, file)),
   rows_render_tokens_11_rows: tokens(rendered),
 };
+rmSync(dir, { recursive: true, force: true });
 const rows = compare(numbers, budgets);
 console.log(table(rows));
 if (process.argv.includes("--write")) {

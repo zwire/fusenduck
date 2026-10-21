@@ -12,7 +12,7 @@ export interface Row {
 export function compare(measured: Numbers, budgets: Numbers): Row[] {
   return Object.entries(budgets).map(([name, budget]) => {
     const value = measured[name];
-    return { name, measured: value ?? NaN, budget, over: value === undefined || value > budget };
+    return { name, measured: value ?? NaN, budget, over: value === undefined || !Number.isFinite(value) || value > budget };
   });
 }
 

@@ -16,4 +16,8 @@ describe("bench budgets", () => {
   it("flags a budget with no measured number", () => {
     expect(compare({}, { a: 10 })[0]?.over).toBe(true);
   });
+
+  it("flags a measured number that is not finite", () => {
+    expect(compare({ a: NaN }, { a: 10 })[0]?.over).toBe(true);
+  });
 });
