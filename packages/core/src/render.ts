@@ -39,7 +39,23 @@ const cutCell = (value: unknown): unknown =>
     ? `${value.slice(0, MAX_CELL_CHARS)}…[+${value.length - MAX_CELL_CHARS} chars]`
     : value;
 
-export function renderRows(ref: Ref, rows: Row[], total: number): string {
+/**
+ * Says that identical rows matched, which a predicate cannot tell apart. `distinct` counts the
+ * distinct matching rows (undefined when it was not counted); fewer than `total` makes it ambiguous.
+ */
+function ambiguity(ref: Ref, total: number, distinct: number | undefined): string[] {
+  if (distinct === undefined || distinct >= total) return [];
+  const copies = total - distinct;
+  const how = ref.query
+    ? "Rows of a query have no position: add columns that tell them apart."
+    : 'To cite one copy, mint a Ref whose where names its position in the file, such as "file_row_number = <n>" (positions count from 0).';
+  return [
+    `AMBIGUOUS: the ${total} matching rows hold only ${distinct} distinct ${distinct === 1 ? "row" : "rows"} ` +
+      `(${copies} ${copies === 1 ? "is an identical copy" : "are identical copies"}), so this Ref cannot single out one of them. ${how}`,
+  ];
+}
+
+export function renderRows(ref: Ref, rows: Row[], total: number, distinct?: number): string {
   let cut = false;
   let bytes = 0;
   const lines: string[] = [];
@@ -63,8 +79,10 @@ export function renderRows(ref: Ref, rows: Row[], total: number): string {
       : `OMITTED: ${total - shown} of ${total} rows are not shown (the first ${shown} in file order are). ` +
         `To see others, mint a new Ref with a narrower where.`,
     ...(cut ? [`Text cells longer than ${MAX_CELL_CHARS} characters are cut (the cut is marked in the cell).`] : []),
+    ...ambiguity(ref, total, distinct),
   ];
-  return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"`, lines, notes.join(" "));
+  const ambiguous = distinct !== undefined && distinct < total ? ` distinct="${distinct}"` : "";
+  return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"${ambiguous}`, lines, notes.join(" "));
 }
 
 export function renderChanged(ref: Ref, now: string): string {

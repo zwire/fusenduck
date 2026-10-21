@@ -204,3 +204,53 @@ describe("selecting rows of a table without a key by position", () => {
 
 const rowsOf2 = (out: string) =>
   out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as Record<string, unknown>);
+
+describe("a selection that matches identical rows", () => {
+  const dir = tempDir();
+  const file = join(dir, "dupes.parquet");
+
+  beforeAll(async () => {
+    // 30 rows, no key: each (k, flag) pair appears 5 times as identical rows.
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(
+      `COPY (SELECT ['a','b','c'][1 + (i % 3)] AS k, i % 2 AS flag FROM range(30) t(i)) TO '${file}' (FORMAT parquet)`,
+    );
+  });
+
+  it("returns the rows and says they are ambiguous, with the way to pick one", () => {
+    const ref = run("ref", file, "--where", "k = 'a' AND flag = 1").stdout.trim();
+    const out = run("resolve", ref, "--root", dir);
+    expect(out.status, out.stderr).toBe(0);
+    expect(rowsOf2(out.stdout)).toHaveLength(5);
+    expect(out.stdout).toContain('level="rows" distinct="1"');
+    expect(out.stdout).toContain("AMBIGUOUS: the 5 matching rows hold only 1 distinct row (4 are identical copies)");
+    expect(out.stdout).toContain("file_row_number");
+  });
+
+  it("a Ref by position picks one copy and is not ambiguous", () => {
+    const ref = run("ref", file, "--where", "file_row_number = 3").stdout.trim();
+    const out = run("resolve", ref, "--root", dir);
+    expect(rowsOf2(out.stdout)).toEqual([{ k: "a", flag: "1" }]);
+    expect(out.stdout).not.toContain("AMBIGUOUS");
+    expect(out.stdout).not.toContain("distinct=");
+  });
+
+  it("counts copies over every matching row, not only the ones shown", () => {
+    const ref = run("ref", file, "--where", "k = 'b'").stdout.trim();
+    const out = run("resolve", ref, "--root", dir, "--limit", "1").stdout;
+    expect(out).toContain("OMITTED: 9 of 10 rows are not shown");
+    expect(out).toContain("AMBIGUOUS: the 10 matching rows hold only 2 distinct rows (8 are identical copies)");
+  });
+
+  it("counts copies of the columns the Ref selects", () => {
+    const ref = run("ref", file, "--where", "flag = 0", "--columns", "flag").stdout.trim();
+    expect(run("resolve", ref, "--root", dir).stdout).toContain("only 1 distinct row (14 are identical copies)");
+  });
+
+  it("the rows of a query are checked too, without a position to offer", () => {
+    const ref = run("ref", file, "--query", "SELECT k FROM data", "--where", "k = 'c'").stdout.trim();
+    const out = run("resolve", ref, "--root", dir).stdout;
+    expect(out).toContain("AMBIGUOUS: the 10 matching rows hold only 1 distinct row");
+    expect(out).toContain("Rows of a query have no position");
+  });
+});

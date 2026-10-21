@@ -16,6 +16,12 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_PEEK_ROWS = 5;
 export const MAX_PEEK_ROWS = 50;
 
+/**
+ * Identical copies among the matching rows are counted only up to this many matches: the count
+ * hashes every matching row, and a selection this large is not one an agent cites row by row.
+ */
+export const MAX_AMBIGUITY_ROWS = 10_000;
+
 export class CostExceeded extends FusenError {}
 
 export async function mintRef(
@@ -67,7 +73,12 @@ export async function resolveRef(
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
   const rows = await engine.query(`${selection} LIMIT ${limit}`, { timeoutMs });
-  return renderRows(ref, rows, total);
+  // A predicate cannot tell identical rows apart, so a Ref that matches copies is ambiguous.
+  const distinct =
+    total > 1 && total <= MAX_AMBIGUITY_ROWS
+      ? Number((await engine.query(`SELECT count(DISTINCT s)::VARCHAR AS n FROM (${selection}) s`, { timeoutMs }))[0]?.n ?? 0)
+      : undefined;
+  return renderRows(ref, rows, total, distinct);
 }
 
 /**
