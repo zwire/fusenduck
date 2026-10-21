@@ -45,4 +45,11 @@ Ref は自分でファイルの場所を持つので、`resolve` は `--root` �
 node packages/mcp/src/index.ts --root /path/to/data
 ```
 
+HTTP(Streamable HTTP)でも動かせます。待ち受けはループバック(既定は `127.0.0.1:7457`)だけで、すべての要求に `Authorization: Bearer <token>` が要ります。トークンは環境変数 `FUSEN_MCP_TOKEN`(16 文字以上)で渡します。渡さなければ起動時に生成して標準エラーに表示します。
+
+```sh
+FUSEN_MCP_TOKEN=... node packages/mcp/src/index.ts --http --port 7457 --root /path/to/data
+# → http://127.0.0.1:7457/mcp
+```
+
 TypeScript は Node の型除去で直接実行します(ビルド工程はまだありません)。決定の経緯は [docs/adr](docs/adr/0001-engine-ref-rendering.md) を参照。
