@@ -177,6 +177,24 @@ describe("selecting rows of a table without a key by position", () => {
     expect(r.stdout).not.toContain('"id"');
   });
 
+  it("a file with its own file_row_number column keeps using that column", async () => {
+    const own = join(dir, "own.parquet");
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(`COPY (SELECT i AS id, i * 10 AS file_row_number FROM range(5) t(i)) TO '${own}' (FORMAT parquet)`);
+    const ref = run("ref", own, "--where", "file_row_number = 30", "--columns", "id,file_row_number").stdout.trim();
+    expect(ref).not.toBe("");
+    const out = run("resolve", ref, "--root", dir);
+    expect(out.status, out.stderr).toBe(0);
+    expect(rowsOf2(out.stdout)).toEqual([{ id: "3", file_row_number: "30" }]);
+  });
+
+  it("positions combine with --columns", () => {
+    const ref = run("ref", file, "--where", "file_row_number BETWEEN 2 AND 3", "--columns", "id,region").stdout.trim();
+    const rows = rowsOf2(run("resolve", ref, "--root", dir).stdout);
+    expect(rows.map((r) => r.id)).toEqual(["3", "4"]);
+    expect(Object.keys(rows[0] ?? {})).toEqual(["id", "region"]);
+  });
+
   it("a Ref that does not mention it is selected exactly as before", () => {
     expect(selectionSql({ source: "/d/a.parquet", where: "id = 1", fingerprint: "x" })).toBe(
       "SELECT * FROM (SELECT * FROM read_parquet('/d/a.parquet')) WHERE (\nid = 1\n)",

@@ -87,6 +87,7 @@ const base = (ref: Pick<Ref, "source" | "query" | "where">): string =>
  * A predicate that names `file_row_number` selects rows by their position in the file, which lets
  * a table without a key be addressed. Only then is the position exposed, so every other Ref keeps
  * the SQL (and the id) it had. Positions are safe because the fingerprint refuses a changed file.
+ * A file with a real column of that name keeps it: the predicate then reads the column, not the position.
  */
 const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
   !ref.query && /\bfile_row_number\b/i.test(ref.where ?? "");
@@ -94,7 +95,7 @@ const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
 /** The base query of a source. */
 export function baseQuery(source: string, withPosition = false): string {
   return withPosition
-    ? `SELECT * FROM read_parquet(${lit(source)}, file_row_number = true)`
+    ? `SELECT *, file_row_number FROM read_parquet(${lit(source)})`
     : `SELECT * FROM read_parquet(${lit(source)})`;
 }
 
