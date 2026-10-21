@@ -11,9 +11,9 @@ const entry = join(import.meta.dirname, "../../packages/mcp/src/index.ts");
 const TOKEN = "test-token-0123456789abcdef";
 
 /** A raw request, so headers the client library would fix up can be set by hand. */
-function raw(url: string, headers: Record<string, string>, body = "{}"): Promise<number> {
+function raw(url: string, headers: Record<string, string>, body = "{}", method = "POST"): Promise<number> {
   return new Promise((resolve, reject) => {
-    const req = request(url, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers } }, (res) => {
+    const req = request(url, { method, headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers } }, (res) => {
       res.resume();
       resolve(res.statusCode ?? 0);
     });
@@ -70,6 +70,21 @@ describe("MCP adapter over HTTP", () => {
     expect(await raw(handle.url, { authorization: TOKEN })).toBe(401);
   });
 
+  it("takes the auth scheme in any case, answers 404 off /mcp and 405 to other methods", async () => {
+    const init = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } });
+    expect(await raw(handle.url, { authorization: `bearer ${TOKEN}` }, init)).toBe(200);
+    expect(await raw(handle.url.replace("/mcp", "/other"), { authorization: `Bearer ${TOKEN}` }, init)).toBe(404);
+    expect(await raw(handle.url, { authorization: `Bearer ${TOKEN}` }, "", "GET")).toBe(405);
+  });
+
+  it("accepts the loopback names in the Host header", async () => {
+    const port = new URL(handle.url).port;
+    const init = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } } });
+    for (const host of [`localhost:${port}`, `[::1]:${port}`]) {
+      expect(await raw(handle.url, { authorization: `Bearer ${TOKEN}`, host }, init)).toBe(200);
+    }
+  });
+
   it("refuses a foreign Host header even with the token (DNS rebinding)", async () => {
     expect(await raw(handle.url, { authorization: `Bearer ${TOKEN}`, host: "evil.example:80" })).toBe(403);
   });
@@ -83,6 +98,18 @@ describe("MCP adapter over HTTP", () => {
   it("refuses to bind a non-loopback address or to start with a short token", async () => {
     await expect(startHttpServer({ roots: [dir], token: TOKEN, host: "0.0.0.0" })).rejects.toThrow(/loopback/);
     await expect(startHttpServer({ roots: [dir], token: "short" })).rejects.toThrow(/at least/);
+  });
+
+  it("the entry point rejects bad flags with a message, not a stack trace", async () => {
+    for (const args of [["--http", "--port", "70000"], ["--http", "--port", "-1"], ["--port", "1"]]) {
+      const child = spawn("node", [entry, ...args], { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+      const code = await new Promise((resolve) => child.on("exit", resolve));
+      expect(code).toBe(1);
+      expect(stderr).toMatch(/^fusen-mcp: /);
+      expect(stderr).not.toContain("    at ");
+    }
   });
 
   it("the entry point prints the URL and a generated token, and the token works", async () => {
@@ -99,7 +126,7 @@ describe("MCP adapter over HTTP", () => {
         child.on("exit", () => reject(new Error(stderr)));
       });
       const url = /listening on (\S+)/.exec(stderr)![1]!;
-      const token = /: (\S+)\n$/.exec(stderr)![1]!;
+      const token = /token .*: (\S+)\n/.exec(stderr)![1]!;
       const client = new Client({ name: "test", version: "0.0.0" });
       await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
       expect((await client.listTools()).tools).toHaveLength(4);

@@ -56,14 +56,17 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
   if (options.token.length < MIN_TOKEN_LENGTH) {
     throw new Error(`the token must be at least ${MIN_TOKEN_LENGTH} characters`);
   }
-  const expected = digest(`Bearer ${options.token}`);
+  const expected = digest(options.token);
   let allowedHosts: string[] = [];
 
   const http = createHttpServer(async (req, res) => {
     if (!allowedHosts.includes(req.headers.host ?? "")) return reply(res, 403, "Forbidden host");
-    if (!timingSafeEqual(digest(req.headers.authorization ?? ""), expected)) {
+    // The auth scheme is case-insensitive (RFC 9110); the token is not.
+    const token = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1] ?? "";
+    if (!timingSafeEqual(digest(token), expected)) {
       return reply(res, 401, "Unauthorized", { "www-authenticate": "Bearer" });
     }
+    if (new URL(req.url ?? "/", "http://localhost").pathname !== "/mcp") return reply(res, 404, "Not found");
     if (req.method !== "POST") return reply(res, 405, "Method not allowed", { allow: "POST" });
     let body: unknown;
     try {
@@ -86,6 +89,8 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
     }
   });
 
+  // A slow body holds a connection; tool arguments arrive in well under this.
+  http.requestTimeout = 30_000;
   await new Promise<void>((resolve, reject) => {
     http.once("error", reject);
     http.listen(options.port ?? 0, host, () => resolve());
