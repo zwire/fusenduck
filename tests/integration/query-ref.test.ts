@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { DuckDBInstance } from "@duckdb/node-api";
-import { formatRef, parseRef } from "@fusenduck/core";
+import { formatRef, parseRef, selectionSql } from "@fusenduck/core";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 const cli = join(import.meta.dirname, "../../packages/cli/src/index.ts");
@@ -146,6 +146,59 @@ describe("hand-built Refs and limits", () => {
     const r = ref.status === 0 ? run("resolve", ref.stdout.trim(), "--root", dir) : ref;
     expect(r.status).toBe(1);
     expect(r.stdout).toBe("");
+  });
+});
+
+describe("selecting rows of a table without a key by position", () => {
+  const dir = tempDir();
+  const file = join(dir, "keyless.parquet");
+
+  beforeAll(async () => {
+    await writeCustomers(file, 1000);
+  });
+
+  it("file_row_number works in a predicate, and is not a column of the result", () => {
+    const ref = run("ref", file, "--where", "file_row_number BETWEEN 10 AND 12").stdout.trim();
+    expect(ref).not.toBe("");
+    const out = run("resolve", ref, "--root", dir);
+    expect(out.status, out.stderr).toBe(0);
+    const rows = rowsOf2(out.stdout);
+    expect(rows.map((r) => r.id)).toEqual(["11", "12", "13"]);
+    expect(Object.keys(rows[0] ?? {})).not.toContain("file_row_number");
+  });
+
+  it("a positional Ref stops resolving when the data changed", async () => {
+    const changing = join(dir, "changing.parquet");
+    await writeCustomers(changing, 1000);
+    const ref = run("ref", changing, "--where", "file_row_number = 5").stdout.trim();
+    await writeCustomers(changing, 1000, 3);
+    const r = run("resolve", ref, "--root", dir);
+    expect(r.stdout).toContain("DATA_CHANGED");
+    expect(r.stdout).not.toContain('"id"');
+  });
+
+  it("a file with its own file_row_number column keeps using that column", async () => {
+    const own = join(dir, "own.parquet");
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(`COPY (SELECT i AS id, i * 10 AS file_row_number FROM range(5) t(i)) TO '${own}' (FORMAT parquet)`);
+    const ref = run("ref", own, "--where", "file_row_number = 30", "--columns", "id,file_row_number").stdout.trim();
+    expect(ref).not.toBe("");
+    const out = run("resolve", ref, "--root", dir);
+    expect(out.status, out.stderr).toBe(0);
+    expect(rowsOf2(out.stdout)).toEqual([{ id: "3", file_row_number: "30" }]);
+  });
+
+  it("positions combine with --columns", () => {
+    const ref = run("ref", file, "--where", "file_row_number BETWEEN 2 AND 3", "--columns", "id,region").stdout.trim();
+    const rows = rowsOf2(run("resolve", ref, "--root", dir).stdout);
+    expect(rows.map((r) => r.id)).toEqual(["3", "4"]);
+    expect(Object.keys(rows[0] ?? {})).toEqual(["id", "region"]);
+  });
+
+  it("a Ref that does not mention it is selected exactly as before", () => {
+    expect(selectionSql({ source: "/d/a.parquet", where: "id = 1", fingerprint: "x" })).toBe(
+      "SELECT * FROM (SELECT * FROM read_parquet('/d/a.parquet')) WHERE (\nid = 1\n)",
+    );
   });
 });
 
