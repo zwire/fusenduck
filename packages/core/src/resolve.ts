@@ -1,10 +1,10 @@
 import { dirname } from "node:path";
-import { lit, openSource } from "./engine.ts";
+import { lit, openSource, type Engine } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
-import { checkPredicate, checkQuery, engineVersion, formatRef, parseRef, refId, selectionSql, type Ref } from "./ref.ts";
+import { baseQuery, checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
 import { buildCard } from "./card.ts";
-import { renderCard, renderChanged, renderRows } from "./render.ts";
+import { renderCard, renderChanged, renderRows, type Ambiguity } from "./render.ts";
 
 export const DEFAULT_LIMIT = 100;
 /** Refuse to scan more than this many compressed bytes; a first default, see docs/adr/0001. */
@@ -15,6 +15,12 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
 
 export const DEFAULT_PEEK_ROWS = 5;
 export const MAX_PEEK_ROWS = 50;
+
+/**
+ * Identical copies among the matching rows are counted only up to this many matches: the count
+ * hashes every matching row, and a selection this large is not one an agent cites row by row.
+ */
+export const MAX_AMBIGUITY_ROWS = 10_000;
 
 export class CostExceeded extends FusenError {}
 
@@ -67,7 +73,35 @@ export async function resolveRef(
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
   const rows = await engine.query(`${selection} LIMIT ${limit}`, { timeoutMs });
-  return renderRows(ref, rows, total);
+  return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs));
+}
+
+/**
+ * How many distinct rows a selection matched, so a Ref that matches identical copies can say it is
+ * ambiguous. A Ref that already selects by position is not counted: it names its copies. The count
+ * evaluates every matching cell, which the rows shown do not, so it is best effort: if it fails or
+ * runs out of time or memory, the result is rendered without it, as before.
+ */
+async function countCopies(
+  engine: Engine,
+  ref: Ref,
+  selection: string,
+  total: number,
+  timeoutMs: number,
+): Promise<Ambiguity | undefined> {
+  if (total < 2 || total > MAX_AMBIGUITY_ROWS || positional(ref)) return undefined;
+  try {
+    // DISTINCT * rather than a row alias, which a column of the same name would shadow.
+    const n = (await engine.query(`SELECT count(*)::VARCHAR AS n FROM (SELECT DISTINCT * FROM (${selection}))`, { timeoutMs }))[0]?.n;
+    if (n === undefined) return undefined;
+    // A file with its own file_row_number column reads that column in a predicate, not the position.
+    const own = ref.query
+      ? []
+      : await engine.query(`SELECT 1 FROM (DESCRIBE ${baseQuery(engine.source)}) WHERE column_name = 'file_row_number'`);
+    return { distinct: Number(n), byPosition: !ref.query && own.length === 0 };
+  } catch {
+    return undefined;
+  }
 }
 
 /**

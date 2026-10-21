@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { DuckDBInstance } from "@duckdb/node-api";
-import { formatRef, parseRef, selectionSql } from "@fusenduck/core";
+import { formatRef, MAX_AMBIGUITY_ROWS, parseRef, selectionSql } from "@fusenduck/core";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 const cli = join(import.meta.dirname, "../../packages/cli/src/index.ts");
@@ -204,3 +204,95 @@ describe("selecting rows of a table without a key by position", () => {
 
 const rowsOf2 = (out: string) =>
   out.split("\n").filter((l) => l.startsWith("{")).map((l) => JSON.parse(l) as Record<string, unknown>);
+
+describe("a selection that matches identical rows", () => {
+  const dir = tempDir();
+  const file = join(dir, "dupes.parquet");
+
+  beforeAll(async () => {
+    // 30 rows, no key: each (k, flag) pair appears 5 times as identical rows.
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(
+      `COPY (SELECT ['a','b','c'][1 + (i % 3)] AS k, i % 2 AS flag FROM range(30) t(i)) TO '${file}' (FORMAT parquet)`,
+    );
+  });
+
+  it("returns the rows and says they are ambiguous, with the way to pick one", () => {
+    const ref = run("ref", file, "--where", "k = 'a' AND flag = 1").stdout.trim();
+    const out = run("resolve", ref, "--root", dir);
+    expect(out.status, out.stderr).toBe(0);
+    expect(rowsOf2(out.stdout)).toHaveLength(5);
+    expect(out.stdout).toContain('level="rows" distinct="1"');
+    expect(out.stdout).toContain("AMBIGUOUS: the 5 matching rows hold only 1 distinct row (4 are identical copies)");
+    expect(out.stdout).toContain("file_row_number");
+  });
+
+  it("a Ref by position picks one copy and is not ambiguous", () => {
+    const ref = run("ref", file, "--where", "file_row_number = 3").stdout.trim();
+    const out = run("resolve", ref, "--root", dir);
+    expect(rowsOf2(out.stdout)).toEqual([{ k: "a", flag: "1" }]);
+    expect(out.stdout).not.toContain("AMBIGUOUS");
+    expect(out.stdout).not.toContain("distinct=");
+  });
+
+  it("counts copies over every matching row, not only the ones shown", () => {
+    const ref = run("ref", file, "--where", "k = 'b'").stdout.trim();
+    const out = run("resolve", ref, "--root", dir, "--limit", "1").stdout;
+    expect(out).toContain("OMITTED: 9 of 10 rows are not shown");
+    expect(out).toContain("AMBIGUOUS: the 10 matching rows hold only 2 distinct rows (8 are identical copies)");
+  });
+
+  it("counts copies of the columns the Ref selects", () => {
+    const ref = run("ref", file, "--where", "flag = 0", "--columns", "flag").stdout.trim();
+    expect(run("resolve", ref, "--root", dir).stdout).toContain("only 1 distinct row (14 are identical copies in the selected columns)");
+  });
+
+  it("the rows of a query are checked too, without a position to offer", () => {
+    const ref = run("ref", file, "--query", "SELECT k FROM data", "--where", "k = 'c'").stdout.trim();
+    const out = run("resolve", ref, "--root", dir).stdout;
+    expect(out).toContain("AMBIGUOUS: the 10 matching rows hold only 1 distinct row");
+    expect(out).toContain("Rows of a query have no position");
+  });
+
+  const write = async (name: string, select: string) => {
+    const path = join(dir, name);
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(`COPY (${select}) TO '${path}' (FORMAT parquet)`);
+    return path;
+  };
+  const resolveWhere = (path: string, ...args: string[]) => run("resolve", run("ref", path, ...args).stdout.trim(), "--root", dir, "--limit", "3");
+
+  it("a column named like a row alias does not change the count", async () => {
+    const differ = await write("s-differ.parquet", "SELECT 1 AS s, i AS x FROM range(5) t(i)");
+    expect(resolveWhere(differ, "--where", "s = 1").stdout).not.toContain("AMBIGUOUS");
+    const nulls = await write("s-null.parquet", "SELECT NULL::INT AS s, 1 AS x FROM range(5) t(i)");
+    expect(resolveWhere(nulls, "--where", "x = 1").stdout).toContain("only 1 distinct row (4 are identical copies)");
+  });
+
+  it("a count that fails leaves the result as it was before", async () => {
+    const late = await write("late.parquet", "SELECT CASE WHEN i < 150 THEN i::VARCHAR ELSE 'x' END AS v FROM range(200) t(i)");
+    const out = run("resolve", run("ref", late, "--query", "SELECT v::INT AS n FROM data").stdout.trim(), "--root", dir, "--limit", "3");
+    expect(out.status, out.stderr).toBe(0);
+    expect(out.stdout).toContain("OMITTED: 197 of 200 rows are not shown");
+    expect(out.stdout).not.toContain("AMBIGUOUS");
+  });
+
+  it("a file with its own file_row_number column is not offered positions", async () => {
+    const own = await write("own-frn.parquet", "SELECT 7 AS file_row_number, 'a' AS k FROM range(3)");
+    const out = resolveWhere(own, "--where", "k = 'a'").stdout;
+    expect(out).toContain("AMBIGUOUS: the 3 matching rows hold only 1 distinct row");
+    expect(out).toContain("Add columns that tell them apart.");
+    expect(out).not.toContain("positions count from 0");
+  });
+
+  it("a Ref that selects by position is not called ambiguous", () => {
+    expect(resolveWhere(file, "--where", "file_row_number IN (0, 6)").stdout).not.toContain("AMBIGUOUS");
+  });
+
+  it("selections over MAX_AMBIGUITY_ROWS are not counted", async () => {
+    const many = await write("many.parquet", `SELECT 1 AS k FROM range(${MAX_AMBIGUITY_ROWS + 1})`);
+    expect(resolveWhere(many).stdout).not.toContain("AMBIGUOUS");
+    const edge = await write("edge.parquet", `SELECT 1 AS k FROM range(${MAX_AMBIGUITY_ROWS})`);
+    expect(resolveWhere(edge).stdout).toContain(`AMBIGUOUS: the ${MAX_AMBIGUITY_ROWS} matching rows`);
+  });
+});

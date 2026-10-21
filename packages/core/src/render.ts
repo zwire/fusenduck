@@ -39,7 +39,32 @@ const cutCell = (value: unknown): unknown =>
     ? `${value.slice(0, MAX_CELL_CHARS)}…[+${value.length - MAX_CELL_CHARS} chars]`
     : value;
 
-export function renderRows(ref: Ref, rows: Row[], total: number): string {
+/**
+ * Identical copies among the matching rows. A predicate cannot tell them apart, so a Ref that
+ * matches them cannot cite one. `byPosition` says whether a predicate on `file_row_number` would
+ * pick one copy (a file Ref whose source has no column of that name).
+ */
+export interface Ambiguity {
+  distinct: number;
+  byPosition: boolean;
+}
+
+function ambiguity(ref: Ref, total: number, a: Ambiguity | undefined): string[] {
+  if (!a || a.distinct >= total) return [];
+  const copies = total - a.distinct;
+  const where = ref.columns?.length ? " in the selected columns" : "";
+  const how = a.byPosition
+    ? 'To cite one copy, mint a Ref whose where names its position in the file, such as "file_row_number = <n>" (positions count from 0).'
+    : ref.query
+      ? "Rows of a query have no position: add columns that tell them apart."
+      : "Add columns that tell them apart.";
+  return [
+    `AMBIGUOUS: the ${total} matching rows hold only ${a.distinct} distinct ${a.distinct === 1 ? "row" : "rows"} ` +
+      `(${copies} ${copies === 1 ? "is an identical copy" : "are identical copies"}${where}), so this Ref cannot single out one of them. ${how}`,
+  ];
+}
+
+export function renderRows(ref: Ref, rows: Row[], total: number, ambiguous?: Ambiguity): string {
   let cut = false;
   let bytes = 0;
   const lines: string[] = [];
@@ -63,8 +88,10 @@ export function renderRows(ref: Ref, rows: Row[], total: number): string {
       : `OMITTED: ${total - shown} of ${total} rows are not shown (the first ${shown} in file order are). ` +
         `To see others, mint a new Ref with a narrower where.`,
     ...(cut ? [`Text cells longer than ${MAX_CELL_CHARS} characters are cut (the cut is marked in the cell).`] : []),
+    ...ambiguity(ref, total, ambiguous),
   ];
-  return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"`, lines, notes.join(" "));
+  const distinct = ambiguous && ambiguous.distinct < total ? ` distinct="${ambiguous.distinct}"` : "";
+  return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"${distinct}`, lines, notes.join(" "));
 }
 
 export function renderChanged(ref: Ref, now: string): string {
