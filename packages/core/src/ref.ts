@@ -80,12 +80,22 @@ function parseRefUnchecked(text: string): Ref {
 }
 
 // A query sits alone on its lines inside parentheses, like a predicate (see whereClause).
-const base = (ref: Pick<Ref, "source" | "query">): string =>
-  ref.query ? `\n${ref.query}\n` : baseQuery(ref.source);
+const base = (ref: Pick<Ref, "source" | "query" | "where">): string =>
+  ref.query ? `\n${ref.query}\n` : baseQuery(ref.source, positional(ref));
+
+/**
+ * A predicate that names `file_row_number` selects rows by their position in the file, which lets
+ * a table without a key be addressed. Only then is the position exposed, so every other Ref keeps
+ * the SQL (and the id) it had. Positions are safe because the fingerprint refuses a changed file.
+ */
+const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
+  !ref.query && /\bfile_row_number\b/i.test(ref.where ?? "");
 
 /** The base query of a source. */
-export function baseQuery(source: string): string {
-  return `SELECT * FROM read_parquet(${lit(source)})`;
+export function baseQuery(source: string, withPosition = false): string {
+  return withPosition
+    ? `SELECT * FROM read_parquet(${lit(source)}, file_row_number = true)`
+    : `SELECT * FROM read_parquet(${lit(source)})`;
 }
 
 // The predicate sits alone on its lines inside parentheses: a "--" comment cannot swallow what
@@ -96,7 +106,8 @@ function whereClause(predicate: string | undefined): string {
 
 /** The SELECT a Ref stands for (no row limit). */
 export function selectionSql(ref: Ref): string {
-  const cols = ref.columns?.length ? ref.columns.map(ident).join(", ") : "*";
+  const all = positional(ref) ? "* EXCLUDE (file_row_number)" : "*";
+  const cols = ref.columns?.length ? ref.columns.map(ident).join(", ") : all;
   return `SELECT ${cols} FROM (${base(ref)})${whereClause(ref.where)}`;
 }
 
@@ -111,7 +122,7 @@ export async function checkPredicate(
   predicate: string,
   query?: string,
 ): Promise<void> {
-  const sql = `SELECT * FROM (${base({ source, query })})${whereClause(predicate)}`;
+  const sql = `SELECT * FROM (${base({ source, query, where: predicate })})${whereClause(predicate)}`;
   const rows = await engine.query(`SELECT json_serialize_sql(${lit(sql)}) AS j`);
   const parsed = JSON.parse(String(rows[0]?.j)) as {
     error?: boolean;
