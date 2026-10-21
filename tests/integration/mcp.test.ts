@@ -31,9 +31,23 @@ describe("MCP adapter over stdio", () => {
     await client.close();
   });
 
-  it("lists the three tools", async () => {
+  it("lists the four tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["fusen_card", "fusen_ref", "fusen_resolve"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["fusen_card", "fusen_peek", "fusen_ref", "fusen_resolve"]);
+  });
+
+  it("fusen_peek returns the card, a few rows and a Ref in one result", async () => {
+    const out = await call("fusen_peek", { path: file, rows: 3 });
+    expect(out.isError).toBe(false);
+    expect(out.text).toContain("rows: 1000");
+    expect(out.text.slice(out.text.indexOf('level="rows"')).split("\n").filter((l) => l.startsWith("{"))).toHaveLength(3);
+    expect(out.text).toMatch(/fusen:\/\/file\//);
+    expect(out.text).toContain("OMITTED:");
+  });
+
+  it("fusen_peek refuses a path outside the roots, like the other tools", async () => {
+    const out = await call("fusen_peek", { path: outside });
+    expect(out.isError).toBe(true);
   });
 
   it("card, ref and resolve run end to end and return the selected rows", async () => {

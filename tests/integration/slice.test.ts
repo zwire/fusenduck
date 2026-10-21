@@ -91,6 +91,25 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     expect(r.stdout).toContain("DATA_CHANGED");
   });
 
+  it("fusen peek prints the card, the first rows and a Ref, with hostile values inside the data block", () => {
+    const r = run("peek", file, "--rows", "10");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("rows: 1000");
+    const rowsBlock = r.stdout.slice(r.stdout.indexOf('level="rows"'));
+    expect(dataLines(rowsBlock)).toHaveLength(10);
+    expect(r.stdout.split("\n").filter((l) => l === "FUSEN_DATA_END")).toHaveLength(2); // one block per part
+    const ref = /ref="([^"]+)"/.exec(r.stdout)?.[1];
+    expect(ref).toMatch(/^fusen:\/\//);
+  });
+
+  it("fusen peek defaults to a handful of rows and rejects a bad --rows", () => {
+    const out = run("peek", file).stdout;
+    expect(dataLines(out.slice(out.indexOf('level="rows"'))).length).toBe(5);
+    expect(run("peek", file, "--rows", "-1").status).toBe(1);
+    expect(run("peek", file, "--rows", "1000").status).toBe(1);
+    for (const bad of ["", " 3", "1e1", "1.5", "abc"]) expect(run("peek", file, "--rows", bad).status, bad).toBe(1);
+  });
+
   it("a Ref outside --root is refused", () => {
     const ref = run("ref", file, "--where", "id <= 5").stdout.trim();
     const r = run("resolve", ref, "--root", tempDir());

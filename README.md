@@ -29,6 +29,8 @@ pnpm test
 
 ```sh
 node packages/cli/src/index.ts card data.parquet
+# カード、最初の数行、ファイル全体を指す Ref を 1 回で
+node packages/cli/src/index.ts peek data.parquet [--rows 5]
 node packages/cli/src/index.ts ref data.parquet --where "region = 'south'"
 # ファイルを `data` という名前で読む SELECT を持たせることもできます
 node packages/cli/src/index.ts ref data.parquet --query "SELECT region, sum(amount) AS total FROM data GROUP BY region" --where "total > 0"
@@ -37,7 +39,7 @@ node packages/cli/src/index.ts resolve '<上で出た Ref>' [--root <dir>]
 
 Ref は自分でファイルの場所を持つので、`resolve` は `--root` で許可したディレクトリの下のファイルだけを開きます(既定はカレントディレクトリ)。
 
-エージェントからは MCP サーバー経由で同じ 3 つの操作(`fusen_card`、`fusen_ref`、`fusen_resolve`)を呼べます。読めるファイルは `--root` の下だけです。
+エージェントからは MCP サーバー経由で同じ操作(`fusen_card`、`fusen_peek`、`fusen_ref`、`fusen_resolve`)を呼べます。読めるファイルは `--root` の下だけです。
 
 ```sh
 node packages/mcp/src/index.ts --root /path/to/data

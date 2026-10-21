@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // `fusen card | ref | resolve` entry point. See docs/vision.md and docs/adr/0001.
 import { parseArgs } from "node:util";
-import { buildCard, describeError, FusenError, mintRef, openSource, renderCard, resolveRef } from "@fusenduck/core";
+import { buildCard, describeError, FusenError, mintRef, openSource, peek, renderCard, resolveRef } from "@fusenduck/core";
 
 const USAGE = `usage:
   fusen card <file.parquet>
+  fusen peek <file.parquet> [--rows <n>]   (the card, the first rows and a Ref in one result)
   fusen ref <file.parquet> [--query <select over data>] [--where <predicate>] [--columns a,b]
   fusen resolve <ref> [--limit <n>] [--root <dir>]...   (roots default to the current directory)`;
 
@@ -20,6 +21,7 @@ async function main(argv: string[]): Promise<string> {
         where: { type: "string" },
         columns: { type: "string" },
         limit: { type: "string" },
+        rows: { type: "string" },
         root: { type: "string", multiple: true },
       },
     });
@@ -38,6 +40,12 @@ async function main(argv: string[]): Promise<string> {
       only();
       const engine = await openSource(target);
       return renderCard(await buildCard(engine), engine.source);
+    }
+    case "peek": {
+      only("rows");
+      if (values.rows !== undefined && !/^\d+$/.test(values.rows)) throw new FusenError("--rows must be a non-negative integer");
+      const rows = values.rows === undefined ? undefined : Number(values.rows);
+      return peek(target, rows === undefined ? {} : { rows });
     }
     case "ref": {
       only("query", "where", "columns");
