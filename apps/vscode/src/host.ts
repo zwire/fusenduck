@@ -102,9 +102,9 @@ export class Host {
         return next.opened;
       }
       case "rows":
-        return this.#current(params).rows(params.fingerprint, params.offset, params.limit);
+        return this.#current(params).rows(params.fingerprint, params.offset, params.limit, params.where);
       case "ref":
-        return this.#current(params).ref(params.fingerprint, params.ranges);
+        return this.#current(params).ref(params.fingerprint, params.ranges, params.where, params.columns);
       case "copy":
         if (typeof params.text !== "string" || !isRef(params.text)) throw new FusenError("only a Ref can be copied");
         await this.#options.copy(params.text);

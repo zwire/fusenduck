@@ -48,6 +48,17 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
     expect(copied.at(-1)).toBe(ref);
   });
 
+  it("passes a filter and kept columns through to rows and the Ref", async () => {
+    const { fingerprint } = await result<{ fingerprint: string }>("open", { path: file });
+    const where = "region = 'east'";
+    const page = await result<{ rows: { pos: number }[] }>("rows", { source: file, fingerprint, offset: 0, limit: 3, where });
+    expect(page.rows.map((r) => r.pos)).toEqual([1, 5, 9]);
+    const ref = await result<string>("ref", { source: file, fingerprint, ranges: [], where, columns: ["id"] });
+    const out = await resolveRef(ref, { roots: [dir], limit: 3 });
+    expect(ids(out)).toEqual([2, 6, 10]);
+    expect(out).not.toContain('"region"');
+  });
+
   it("opens only the file of its own editor", async () => {
     const other = join(dir, "other.parquet");
     copyFileSync(file, other);

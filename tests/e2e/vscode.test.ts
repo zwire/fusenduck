@@ -82,7 +82,7 @@ describe("VS Code webview in Chromium", () => {
     await page.locator('#rows tbody tr[data-pos="6"]').click({ modifiers: ["Shift"] });
     // Copy right after the click: Copy waits for the newest Ref.
     await page.click("#copy");
-    await page.waitForFunction(() => /^Copied the Ref for 4 rows/.test(document.getElementById("status")?.textContent ?? ""));
+    await page.waitForFunction(() => /^Copied the Ref for 4 selected rows/.test(document.getElementById("status")?.textContent ?? ""));
     expect(copied).toHaveLength(1);
     expect(ids(await resolveRef(copied[0]!, { roots: [dir] }))).toEqual([4, 5, 6, 7]);
   });
