@@ -1,7 +1,9 @@
 // Loads a packaged .vsix the way VS Code would, without VS Code: unpacks it, loads dist/extension.cjs
 // with a stand-in `vscode` module, activates it, opens a Parquet file in its editor and sends the
 // webview's messages. It proves the package carries a DuckDB binding that loads on this machine, and
-// that the editor answers from inside the package's own layout.
+// that the editor answers from inside the package's own layout. Each load runs in a process of its own
+// that has loaded no other DuckDB: the system loader would reuse an already loaded libduckdb by name,
+// and hide a package that lacks its own. That also lets Windows delete the folders afterwards.
 //
 //   node smoke.ts out/fusenduck-<target>-<version>.vsix
 import { execFileSync } from "node:child_process";
@@ -11,11 +13,9 @@ import Module from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { DuckDBInstance } from "@duckdb/node-api";
 import { TAR } from "./engine.ts";
 
-const vsix = resolve(process.argv[2] ?? "");
-const temp = mkdtempSync(join(tmpdir(), "fusenduck-smoke-"));
+const [, script, first = "", ...rest] = process.argv;
 
 function check(ok: unknown, what: string): void {
   if (!ok) throw new Error(`smoke: ${what}`);
@@ -23,8 +23,7 @@ function check(ok: unknown, what: string): void {
 }
 
 /** Unpacks the .vsix (a zip) into a new folder and returns its extension/ folder. */
-function unpack(name: string): string {
-  const into = join(temp, name);
+function unpack(vsix: string, into: string): string {
   mkdirSync(into);
   // GNU tar (Linux) does not read zip.
   if (process.platform === "linux") execFileSync("unzip", ["-q", vsix, "-d", into]);
@@ -89,16 +88,18 @@ function load(root: string): { open(path: string): Promise<Panel>; errors: strin
   };
 }
 
-try {
-  const file = join(temp, "smoke.parquet");
-  const connection = await (await DuckDBInstance.create(":memory:")).connect();
-  await connection.run(`COPY (SELECT i AS id, 'row ' || i AS label FROM range(0, 500) t(i)) TO '${file.replaceAll("'", "''")}' (FORMAT parquet)`);
-  connection.closeSync();
-
-  const manifest = JSON.parse(readFileSync(join(unpack("good"), "package.json"), "utf8")) as { main: string };
-  check(manifest.main === "./dist/extension.cjs", "the package's main is the bundled extension");
-
-  const good = load(join(temp, "good/extension"));
+/** In a child process: loads the extension in `root` and opens `file`; `broken` expects the load to fail. */
+async function child(root: string, file: string, broken: boolean): Promise<void> {
+  if (broken) {
+    // The same package without its binding: the extension still activates, and the editor says why it
+    // cannot open the file instead of failing.
+    const bad = load(root);
+    const message = (await bad.open(file)).html;
+    check(message.includes("could not load its DuckDB engine"), "a binding that cannot load is shown in the editor");
+    check(bad.errors.some((line) => line.includes("duckdb.node")), "and its error goes to the log");
+    return;
+  }
+  const good = load(root);
   const panel = await good.open(file);
   check(panel.html.includes('data-host="vscode"') && panel.html.includes("Content-Security-Policy"), "the editor shows the webview page with its CSP");
   await panel.send({ id: 1, method: "open", params: { path: file } });
@@ -113,16 +114,32 @@ try {
   check(good.copied.at(-1) === ref && ref.startsWith("fusen://"), "a Ref for the selection reaches the clipboard");
   panel.dispose();
   check(good.errors.length === 0, "nothing was logged");
+}
 
-  // The same package without its binding: the extension still activates, and the editor says why it
-  // cannot open the file instead of failing.
-  const broken = join(temp, "broken/extension");
-  unpack("broken");
-  renameSync(join(broken, "dist/native/duckdb.node"), join(broken, "dist/native/moved.node"));
-  const bad = load(broken);
-  const message = (await bad.open(file)).html;
-  check(message.includes("could not load its DuckDB engine"), "a binding that cannot load is shown in the editor");
-  check(bad.errors.some((line) => line.includes("duckdb.node")), "and its error goes to the log");
-} finally {
-  rmSync(temp, { recursive: true, force: true });
+if (first === "--child") {
+  const [root = "", file = "", mode] = rest;
+  await child(root, file, mode === "broken");
+} else {
+  const vsix = resolve(first);
+  const temp = mkdtempSync(join(tmpdir(), "fusenduck-smoke-"));
+  const run = (args: string[], options: { cwd?: string } = {}) => execFileSync(process.execPath, args, { stdio: "inherit", ...options });
+  try {
+    const file = join(temp, "smoke.parquet");
+    // Written by the repository's own DuckDB, in a process of its own.
+    const write = `import { DuckDBInstance } from "@duckdb/node-api";
+      const connection = await (await DuckDBInstance.create(":memory:")).connect();
+      await connection.run("COPY (SELECT i AS id, 'row ' || i AS label FROM range(0, 500) t(i)) TO " + process.argv[1] + " (FORMAT parquet)");`;
+    run(["--input-type=module", "-e", write, `'${file.replaceAll("'", "''")}'`], { cwd: import.meta.dirname });
+
+    const good = unpack(vsix, join(temp, "good"));
+    const manifest = JSON.parse(readFileSync(join(good, "package.json"), "utf8")) as { main: string };
+    check(manifest.main === "./dist/extension.cjs", "the package's main is the bundled extension");
+    run([script!, "--child", good, file]);
+
+    const broken = unpack(vsix, join(temp, "broken"));
+    renameSync(join(broken, "dist/native/duckdb.node"), join(broken, "dist/native/moved.node"));
+    run([script!, "--child", broken, file, "broken"]);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 }

@@ -6,7 +6,7 @@
 // the registry, checked against the integrity pnpm-lock.yaml records.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -59,6 +59,12 @@ const requireFromBindings = createRequire(join(bindings, "package.json"));
 /** The installed @duckdb/node-bindings version, which every platform package matches. */
 export const BINDINGS_VERSION = (JSON.parse(readFileSync(join(bindings, "package.json"), "utf8")) as { version: string }).version;
 
+// npm's own script beside this Node (Windows) or under its lib (elsewhere), so no shell is needed.
+const npmCli = [join(dirname(process.execPath), "node_modules/npm/bin/npm-cli.js"), join(dirname(process.execPath), "../lib/node_modules/npm/bin/npm-cli.js")].find(
+  (path) => existsSync(path),
+);
+const npm = npmCli ? [process.execPath, npmCli] : ["npm"];
+
 /** The folder of the binding package for `target`: installed, or fetched into a temporary folder. */
 function bindingFolder(target: Target): { folder: string; cleanup(): void } {
   const name = `@duckdb/node-bindings-${TARGETS[target]}`;
@@ -69,12 +75,12 @@ function bindingFolder(target: Target): { folder: string; cleanup(): void } {
   }
   const spec = `${name}@${BINDINGS_VERSION}`;
   const escaped = spec.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
-  const integrity = new RegExp(`'${escaped}':\\n\\s+resolution: \\{integrity: (sha512-[A-Za-z0-9+/=]+)\\}`).exec(readFileSync(lockfile, "utf8"))?.[1];
+  const integrity = new RegExp(`'${escaped}':\\r?\\n\\s+resolution: \\{integrity: (sha512-[A-Za-z0-9+/=]+)\\}`).exec(readFileSync(lockfile, "utf8"))?.[1];
   if (!integrity) throw new Error(`pnpm-lock.yaml has no integrity for ${spec}`);
   const temp = mkdtempSync(join(tmpdir(), "fusenduck-binding-"));
   const cleanup = () => rmSync(temp, { recursive: true, force: true });
   try {
-    const out = execFileSync("npm", ["pack", spec, "--silent", "--pack-destination", temp], { encoding: "utf8", shell: process.platform === "win32" });
+    const out = execFileSync(npm[0]!, [...npm.slice(1), "pack", spec, "--silent", "--pack-destination", temp], { encoding: "utf8" });
     const tarball = join(temp, out.trim().split(/\r?\n/).pop()!);
     const actual = `sha512-${createHash("sha512").update(readFileSync(tarball)).digest("base64")}`;
     if (actual !== integrity) throw new Error(`${spec} does not match pnpm-lock.yaml (${actual})`);

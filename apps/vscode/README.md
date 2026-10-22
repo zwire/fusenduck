@@ -25,7 +25,7 @@
 ## うまくいかないとき
 
 - **「Details are withheld because they can contain values from the source.」と出る**: エンジンのエラー文はセルの値を含みうるので、画面には出しません。ログ(`fusenduck: Show Log`)にはセルの値を載せず、エラーの種類とスタックの行だけを書きます。メッセージまで見たいときは、環境変数 `FUSEN_DEBUG=1` を付けて VS Code を起動します(メッセージにはセルの値が入りえます)。
-- **「fusenduck could not load its DuckDB engine.」と出る**: 拡張に入っている DuckDB が、この OS と CPU 向けではありません。いまの環境向けのビルドを入れ直し、ウィンドウを再読み込み(`Developer: Reload Window`)します。理由はログにあります。
+- **「fusenduck could not load its DuckDB engine.」と出る**: 拡張に入っている DuckDB を読み込めませんでした。多いのは、別の OS や CPU 向けのビルドを入れたときです(ほかに、glibc が古い、セキュリティソフトがライブラリを止めた、など)。理由はログにあります(読み込みの失敗はインストールの問題でデータの話ではないので、メッセージ全体を書きます)。いまの環境向けのビルドを入れ直し、ウィンドウを再読み込み(`Developer: Reload Window`)します。
 - **「fusenduck opens files on this computer's disk only.」と出る**: Git の差分の左側など、ディスク上のファイルではないものは開けません。エクスプローラーからファイルを開きます。
 - **Filter rows の理由**: 列名の打ち間違いなどは理由をそのまま表示し、それまでの表と条件は残ります。表を読む関数(`read_csv` など)、`*`、`COLUMNS(*)` は使えません。
 
@@ -65,7 +65,7 @@ code --install-extension apps/vscode/out/fusenduck-linux-x64-0.0.0.vsix   # 作�
 | `webview/vscode.css` | VS Code のテーマの色とフォント |
 | `build.ts` | esbuild でホスト側(core、Web UI の `View`、DuckDB の JavaScript)を `dist/extension.cjs` に 1 本にまとめ、`dist/webview.js` を作る。DuckDB のネイティブ部分は `dist/native` に置く |
 | `engine.ts` | VS Code のプラットフォームと DuckDB のバイナリの対応。バイナリを `dist/native` に置く |
-| `package.ts` | `dist` と README、LICENSE だけを別のフォルダーに並べ、vsce で `.vsix` にする |
-| `smoke.ts` | `.vsix` を、VS Code の代わりの小さな `vscode` モジュールで読み込んで動かす |
+| `package.ts` | `dist` と README、LICENSE、同梱した JavaScript のライセンス(`ThirdPartyNotices.txt`)だけを別のフォルダーに並べ、vsce で `.vsix` にする |
+| `smoke.ts` | `.vsix` を、VS Code の代わりの小さな `vscode` モジュールで読み込んで動かす。読み込みは DuckDB をまだ読んでいない別プロセスで行う(読み込み済みの libduckdb が使い回され、入れ忘れが隠れないように) |
 
 設計は [ADR 0002](../../docs/adr/0002-web-ui-transport.md)、Ref と条件の詳しい扱いは [docs/guide.md](../../docs/guide.md) にあります。

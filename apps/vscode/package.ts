@@ -18,7 +18,7 @@ if (placedTarget(join(here, "dist/native")) !== target) throw new Error(`dist/na
 
 const manifest = JSON.parse(readFileSync(join(here, "package.json"), "utf8")) as Record<string, unknown>;
 for (const key of ["private", "scripts", "dependencies", "devDependencies"]) delete manifest[key];
-manifest.files = ["dist", "README.md", "LICENSE"];
+manifest.files = ["dist", "README.md", "LICENSE", "ThirdPartyNotices.txt"];
 
 rmSync(stage, { recursive: true, force: true });
 mkdirSync(stage, { recursive: true });
@@ -26,6 +26,19 @@ writeFileSync(join(stage, "package.json"), `${JSON.stringify(manifest, null, 2)}
 cpSync(join(here, "dist"), join(stage, "dist"), { recursive: true });
 cpSync(join(here, "README.md"), join(stage, "README.md"));
 cpSync(join(here, "../../LICENSE"), join(stage, "LICENSE"));
+// dist/extension.cjs carries DuckDB's JavaScript and its loader's dependency; their licenses go along.
+const requireFromHere = createRequire(join(here, "package.json"));
+const requireFromApi = createRequire(requireFromHere.resolve("@duckdb/node-api"));
+const requireFromBindings = createRequire(requireFromApi.resolve("@duckdb/node-bindings"));
+const notices = [
+  ["@duckdb/node-api", requireFromHere],
+  ["@duckdb/node-bindings", requireFromApi],
+  ["detect-libc", requireFromBindings],
+].map(([name, from]) => {
+  const folder = dirname((from as NodeJS.Require).resolve(`${name as string}/package.json`));
+  return `${name as string}\n\n${readFileSync(join(folder, "LICENSE"), "utf8").trim()}\n`;
+});
+writeFileSync(join(stage, "ThirdPartyNotices.txt"), `This extension bundles the following packages.\n\n${notices.join("\n---\n\n")}`);
 
 const vsix = join(out, `fusenduck-${target}-${manifest.version as string}.vsix`);
 const vsce = join(dirname(createRequire(import.meta.url).resolve("@vscode/vsce/package.json")), "vsce");
