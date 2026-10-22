@@ -62,8 +62,11 @@ function resolveWithin(source: string, roots: string[] | undefined): string {
  * only this exact path is readable, nothing can be written (COPY TO, ATTACH, overwriting the
  * source), and the configuration cannot be changed afterwards. See docs/adr/0001.
  */
-export async function openSource(source: string, opts: { roots?: string[] } = {}): Promise<Engine> {
+export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal } = {}): Promise<Engine> {
   const path = resolveWithin(source, opts.roots);
+  const { signal } = opts;
+  const cancelled = () => new FusenError("the request was cancelled");
+  if (signal?.aborted) throw cancelled();
   const instance = await DuckDBInstance.create(":memory:");
   const connection: DuckDBConnection = await instance.connect();
   await connection.run(`SET allowed_paths=[${lit(path)}]`);
@@ -77,19 +80,36 @@ export async function openSource(source: string, opts: { roots?: string[] } = {}
   // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
   await connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
   await connection.run("SET lock_configuration=true");
+  if (signal?.aborted) {
+    connection.closeSync();
+    instance.closeSync();
+    throw cancelled();
+  }
   return {
     source: path,
     async query(sql: string, opts: { timeoutMs?: number } = {}): Promise<Row[]> {
       // A predicate is untrusted SQL and can be slow without reading many bytes; stop it on a clock.
+      if (signal?.aborted) throw cancelled();
       const timer = opts.timeoutMs ? setTimeout(() => connection.interrupt(), opts.timeoutMs) : undefined;
+      // A caller that goes away (a closed connection, a cancelled tool call) stops the running query.
+      // An interrupt that lands before DuckDB has started the query is dropped, so it repeats until the query ends.
+      let repeat: ReturnType<typeof setInterval> | undefined;
+      const stop = () => {
+        connection.interrupt();
+        repeat = setInterval(() => connection.interrupt(), 25);
+      };
+      signal?.addEventListener("abort", stop, { once: true });
       try {
         const reader = await connection.runAndReadAll(sql);
         return reader.getRowObjectsJson() as Row[];
       } catch (error) {
+        if (signal?.aborted) throw cancelled();
         if (timer && /interrupt/i.test(String(error))) throw new FusenError(`query stopped after ${opts.timeoutMs} ms`);
         throw error;
       } finally {
         clearTimeout(timer);
+        clearInterval(repeat);
+        signal?.removeEventListener("abort", stop);
       }
     },
     close(): void {

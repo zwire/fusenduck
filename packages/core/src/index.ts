@@ -1,6 +1,6 @@
 // Engine, Ref model and protocol live here. See docs/vision.md and docs/adr/0001.
 export { openSource, lit, ident, type Engine, type Row } from "./engine.ts";
-export { buildCard, type DataCard, type CardColumn } from "./card.ts";
+export { buildCard, CARD_TIMEOUT_MS, type DataCard, type CardColumn } from "./card.ts";
 export { fingerprint } from "./fingerprint.ts";
 export { formatRef, parseRef, checkPredicate, checkQuery, engineVersion, refId, selectionSql, type Ref } from "./ref.ts";
 export { renderCard, renderRows, renderChanged, type Ambiguity } from "./render.ts";

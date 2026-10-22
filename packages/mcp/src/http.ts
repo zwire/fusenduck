@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Gate } from "./gate.ts";
 import { createServer } from "./server.ts";
 
 // MCP over Streamable HTTP, stateless: each POST gets its own server and transport. The listener
@@ -15,12 +16,18 @@ export const LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"] as const;
 export const MAX_BODY_BYTES = 1024 * 1024;
 /** Shortest token accepted, so a guessable one is refused at startup. */
 export const MIN_TOKEN_LENGTH = 16;
+/** Tool calls that run at once. Each opens an engine of up to 512MB (peek opens two). */
+export const MAX_CONCURRENT = 4;
+/** Tool calls that wait for a slot; past this a call is refused as busy. */
+export const MAX_QUEUED = 16;
 
 export interface HttpOptions {
   roots: string[];
   token: string;
   host?: string;
   port?: number;
+  maxConcurrent?: number;
+  maxQueued?: number;
 }
 
 export interface HttpHandle {
@@ -58,6 +65,7 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
     throw new Error(`the token must be at least ${MIN_TOKEN_LENGTH} characters`);
   }
   const expected = digest(options.token);
+  const gate = new Gate(options.maxConcurrent ?? MAX_CONCURRENT, options.maxQueued ?? MAX_QUEUED);
   let allowedHosts: string[] = [];
   let allowedOrigins: string[] = [];
 
@@ -78,8 +86,9 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
     } catch (error) {
       return error instanceof BodyTooLarge ? reply(res, 413, "Request body too large") : reply(res, 400, "Invalid JSON");
     }
-    const server = createServer(options.roots);
+    const server = createServer(options.roots, gate);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    // A client that hangs up closes the transport, which cancels its tool call and stops the query.
     res.on("close", () => {
       void transport.close();
       void server.close();
