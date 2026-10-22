@@ -80,15 +80,25 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
   await connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
   await connection.run("SET lock_configuration=true");
-  // A caller that goes away (a closed connection, a cancelled tool call) stops the running query.
-  const interrupt = () => connection.interrupt();
-  signal?.addEventListener("abort", interrupt);
+  if (signal?.aborted) {
+    connection.closeSync();
+    instance.closeSync();
+    throw cancelled();
+  }
   return {
     source: path,
     async query(sql: string, opts: { timeoutMs?: number } = {}): Promise<Row[]> {
       // A predicate is untrusted SQL and can be slow without reading many bytes; stop it on a clock.
       if (signal?.aborted) throw cancelled();
       const timer = opts.timeoutMs ? setTimeout(() => connection.interrupt(), opts.timeoutMs) : undefined;
+      // A caller that goes away (a closed connection, a cancelled tool call) stops the running query.
+      // An interrupt that lands before DuckDB has started the query is dropped, so it repeats until the query ends.
+      let repeat: ReturnType<typeof setInterval> | undefined;
+      const stop = () => {
+        connection.interrupt();
+        repeat = setInterval(() => connection.interrupt(), 25);
+      };
+      signal?.addEventListener("abort", stop, { once: true });
       try {
         const reader = await connection.runAndReadAll(sql);
         return reader.getRowObjectsJson() as Row[];
@@ -98,10 +108,11 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
         throw error;
       } finally {
         clearTimeout(timer);
+        clearInterval(repeat);
+        signal?.removeEventListener("abort", stop);
       }
     },
     close(): void {
-      signal?.removeEventListener("abort", interrupt);
       connection.closeSync();
       instance.closeSync();
     },

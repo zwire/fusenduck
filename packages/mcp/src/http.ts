@@ -16,7 +16,7 @@ export const LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"] as const;
 export const MAX_BODY_BYTES = 1024 * 1024;
 /** Shortest token accepted, so a guessable one is refused at startup. */
 export const MIN_TOKEN_LENGTH = 16;
-/** Tool calls that run at once. Each opens an engine of up to 512MB, so four bound the server near 2GB. */
+/** Tool calls that run at once. Each opens an engine of up to 512MB (peek opens two). */
 export const MAX_CONCURRENT = 4;
 /** Tool calls that wait for a slot; past this a call is refused as busy. */
 export const MAX_QUEUED = 16;

@@ -18,6 +18,7 @@ export class Gate {
   }
 
   async run<T>(signal: AbortSignal, work: () => Promise<T>): Promise<T> {
+    if (signal.aborted) throw new FusenError("the request was cancelled");
     if (this.#running < this.maxRunning) {
       this.#running += 1;
     } else {
