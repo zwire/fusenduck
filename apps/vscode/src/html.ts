@@ -41,3 +41,21 @@ export function webviewPage(options: PageOptions): string {
   );
   return swap(html, /<script type="module" src="app.js"><\/script>/, `<script type="module" nonce="${attr(options.nonce)}" src="${attr(options.script)}"></script>`);
 }
+
+const text = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+
+/** A page with a message instead of the editor (a file that cannot open), with nothing to run or load. */
+export function messagePage(title: string, detail: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'" />
+  </head>
+  <body>
+    <h3>${text(title)}</h3>
+    <p>${text(detail)}</p>
+  </body>
+</html>
+`;
+}

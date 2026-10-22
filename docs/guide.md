@@ -193,14 +193,18 @@ fusen-web --root /path/to/data
 
 ### VS Code 拡張
 
-同じ画面を VS Code の中で使えます(`apps/vscode`)。エクスプローラーで `.parquet` ファイルを開くと、カードと表のエディターが開き、選び方と Copy は Web UI と同じです。Copy した Ref は VS Code のクリップボードに入ります。
+同じ画面を VS Code の中で使えます(`apps/vscode`)。エクスプローラーで `.parquet` ファイルを開くと、カードと表のエディターが開き、選び方と Copy は Web UI と同じです。Copy した Ref は VS Code のクリップボードに入ります。使い方、エラーのときの見え方、開発とパッケージ化の手順は [apps/vscode/README.md](../apps/vscode/README.md) にあります。
 
 ```sh
-pnpm build                                              # 初回だけ(拡張を apps/vscode/dist に出す)
+pnpm build                                              # 初回だけ(拡張とこの OS 向けの DuckDB を apps/vscode/dist に出す)
 code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を読み込んだ VS Code を開く
+pnpm --filter fusenduck package                         # この OS 向けの .vsix を apps/vscode/out に作る
+code --install-extension apps/vscode/out/fusenduck-<target>-0.0.0.vsix
 ```
 
 - ファイルが変わったら、上の Reload で読み直します。
+- エンジンのエラー文は画面には出さず(セルの値を含みうるため)、画面の文には `fusenduck: Show Log` で開くログを見るよう添えます。ログにはエラーの種類とスタックの行だけを書きます(`FUSEN_DEBUG=1` を付けて VS Code を起動すれば、メッセージも)。
+- DuckDB はネイティブなので、`.vsix` は VS Code のプラットフォーム(`linux-x64`、`darwin-arm64`、`win32-x64` など 8 つ)ごとに作ります。CI の `vsix` ジョブが全部を作り、Linux・macOS・Windows ではその OS 向けのものを展開して読み込み、ファイルを開けることを確かめます(`apps/vscode/smoke.ts`。VS Code 本体は起動しません)。
 - 拡張はポートを開きません。画面(webview)は拡張のホストとメッセージでだけやり取りし、エンジンが読めるのは開いたファイルのフォルダーだけです。
 - webview の CSP は、スクリプトをページごとの nonce 付きのものだけ、スタイルと画像を拡張自身のファイルだけに絞り、通信(`connect-src`)をすべて止め、`require-trusted-types-for 'script'` を付けています。
 - Marketplace や Open VSX にはまだ出していません。
@@ -221,13 +225,13 @@ code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を�
 | 再現性 | `pnpm repro:check` | HEAD のきれいな clone が lockfile から入り、ビルドでき、同じフィクスチャを同じバイトで書き、ここで作った golden の Ref を同じ文字列に解決すること(同じマシンの上での比較で、マシン間の比較ではない)。結果の表は `.scratch/repro/report.md`(CI ではジョブのサマリー) |
 | 契約リファレンス | `pnpm docs:reference` | `docs/reference/mcp-tools.md` を MCP ツールのスキーマから作り直す。古いままだと `pnpm test` が落ちる |
 | ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI と VS Code 拡張の webview を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる(webview は拡張のホストの処理につなぐが、VS Code 本体は起動しない) |
-| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench、ブラウザのテスト、repro:check は Linux で回し、bench と repro:check の表をジョブのサマリーに出す |
+| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench、ブラウザのテスト、repro:check は Linux で回し、bench と repro:check の表をジョブのサマリーに出す。VS Code 拡張の `.vsix` をプラットフォームごとに作り、各 OS で自分向けのものを読み込んで確かめる |
 
 ## まだできないこと
 
 - Parquet 以外のソース(CSV、データベース、S3/HTTP)。
 - ファイルを移動したあとの Ref の解決。
-- npm への公開、`fusen` コマンドとしてのインストール、VS Code 拡張の公開(いまは開発用に読み込むだけ)。
+- npm への公開、`fusen` コマンドとしてのインストール、VS Code 拡張の公開(いまは開発用に読み込むか、CI や手元で作った `.vsix` を入れる)。
 - Web UI での列の選択、述語の入力、クエリ付き Ref、ファイルの一覧(いまはパスの入力だけ)。
 - Ref の文法のリファレンスの生成(MCP ツールの形は生成済み。Ref の文法はこのガイドと `tests/contract/refs` の凍結コーパスが拠り所です)。
 
