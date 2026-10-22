@@ -14,3 +14,6 @@ dist/
 .flow/*/state.json
 .flow/*/log.jsonl
 .flow/*/runs/
+
+# DuckDB spill directory (the engine turns spilling off; tests create it to prove that)
+.tmp/

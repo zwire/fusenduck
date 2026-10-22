@@ -6,7 +6,8 @@ import { createServer } from "./server.ts";
 
 // MCP over Streamable HTTP, stateless: each POST gets its own server and transport. The listener
 // binds a loopback address only, and every request must carry the bearer token. The Host header is
-// checked too, so a page that rebinds its DNS name to 127.0.0.1 cannot reach the server.
+// checked too, so a page that rebinds its DNS name to 127.0.0.1 cannot reach the server, and a
+// browser request from any other web origin is refused (the MCP spec asks servers to check Origin).
 
 /** Hosts the server may bind. Anything else would expose local files to the network. */
 export const LOOPBACK_HOSTS = ["127.0.0.1", "::1", "localhost"] as const;
@@ -58,9 +59,12 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
   }
   const expected = digest(options.token);
   let allowedHosts: string[] = [];
+  let allowedOrigins: string[] = [];
 
   const http = createHttpServer(async (req, res) => {
     if (!allowedHosts.includes(req.headers.host ?? "")) return reply(res, 403, "Forbidden host");
+    const origin = req.headers.origin;
+    if (origin !== undefined && !allowedOrigins.includes(origin)) return reply(res, 403, "Forbidden origin");
     // The auth scheme is case-insensitive (RFC 9110); the token is not.
     const token = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "")?.[1] ?? "";
     if (!timingSafeEqual(digest(token), expected)) {
@@ -97,6 +101,7 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
   });
   const { port } = http.address() as AddressInfo;
   allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+  allowedOrigins = allowedHosts.map((h) => `http://${h}`);
   const hostPart = host === "::1" ? "[::1]" : host;
   return {
     url: `http://${hostPart}:${port}/mcp`,

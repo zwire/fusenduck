@@ -68,6 +68,9 @@ export async function openSource(source: string, opts: { roots?: string[] } = {}
   // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
   await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
   await connection.run("SET threads=4");
+  // DuckDB may always read and write its spill directory (default: .tmp under the working
+  // directory), whatever the lock says. No spill directory means nothing outside the source is reachable.
+  await connection.run("SET temp_directory=''");
   await connection.run("SET enable_external_access=false");
   // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
   await connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);

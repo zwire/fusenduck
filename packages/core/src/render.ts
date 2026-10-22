@@ -64,7 +64,8 @@ function ambiguity(ref: Ref, total: number, a: Ambiguity | undefined): string[] 
   ];
 }
 
-export function renderRows(ref: Ref, rows: Row[], total: number, ambiguous?: Ambiguity): string {
+/** `fetchBudget` is set when rows were left unread because they did not fit in that many bytes. */
+export function renderRows(ref: Ref, rows: Row[], total: number, ambiguous?: Ambiguity, fetchBudget?: number): string {
   let cut = false;
   let bytes = 0;
   const lines: string[] = [];
@@ -88,6 +89,7 @@ export function renderRows(ref: Ref, rows: Row[], total: number, ambiguous?: Amb
       : `OMITTED: ${total - shown} of ${total} rows are not shown (the first ${shown} in file order are). ` +
         `To see others, mint a new Ref with a narrower where.`,
     ...(cut ? [`Text cells longer than ${MAX_CELL_CHARS} characters are cut (the cut is marked in the cell).`] : []),
+    ...(fetchBudget ? [`The rows past ${fetchBudget} bytes are not read: select fewer or shorter columns to see them.`] : []),
     ...ambiguity(ref, total, ambiguous),
   ];
   const distinct = ambiguous && ambiguous.distinct < total ? ` distinct="${ambiguous.distinct}"` : "";

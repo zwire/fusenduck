@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { lit, openSource, type Engine } from "./engine.ts";
+import { lit, openSource, type Engine, type Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
 import { baseQuery, checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
@@ -21,6 +21,12 @@ export const MAX_PEEK_ROWS = 50;
  * hashes every matching row, and a selection this large is not one an agent cites row by row.
  */
 export const MAX_AMBIGUITY_ROWS = 10_000;
+
+/**
+ * Rows are read from the engine only up to this many bytes (each row measured as text). Rendering
+ * cuts long cells, but only after the rows are in memory, and a query can make a cell of any size.
+ */
+export const MAX_FETCH_BYTES = 8 * 1024 * 1024;
 
 export class CostExceeded extends FusenError {}
 
@@ -72,8 +78,30 @@ export async function resolveRef(
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
-  const rows = await engine.query(`${selection} LIMIT ${limit}`, { timeoutMs });
-  return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs));
+  const { rows, fit } = await readWithin(engine, selection, limit, timeoutMs);
+  const budget = fit < Math.min(limit, total) ? MAX_FETCH_BYTES : undefined;
+  return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs), budget);
+}
+
+/**
+ * The first `limit` rows, as many as fit in MAX_FETCH_BYTES. The rows are run once into a table in
+ * the engine (under its memory limit and the clock), then measured and read from it, so a query that
+ * answers differently each time it runs cannot be small when measured and large when read.
+ */
+async function readWithin(engine: Engine, selection: string, limit: number, timeoutMs: number): Promise<{ rows: Row[]; fit: number }> {
+  await engine.query(`CREATE OR REPLACE TEMP TABLE fusen_rows AS SELECT * FROM (${selection} LIMIT ${limit})`, { timeoutMs });
+  // One size per cell; a text cell's size is read without copying it.
+  const sizes = await engine.query("SELECT strlen(CAST(COLUMNS(*) AS VARCHAR)) FROM fusen_rows", { timeoutMs });
+  let bytes = 0;
+  let fit = 0;
+  for (const row of sizes) {
+    bytes += Object.values(row).reduce<number>((sum, n) => sum + Number(n ?? 0), 0);
+    if (bytes > MAX_FETCH_BYTES) break;
+    fit += 1;
+  }
+  const rows = await engine.query(`SELECT * FROM fusen_rows LIMIT ${fit}`, { timeoutMs });
+  await engine.query("DROP TABLE fusen_rows");
+  return { rows, fit };
 }
 
 /**
