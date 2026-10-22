@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-import { lit, openSource, type Engine } from "./engine.ts";
+import { lit, openSource, type Engine, type Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
 import { baseQuery, checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
@@ -78,16 +78,20 @@ export async function resolveRef(
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
-  const fit = await rowsWithin(engine, selection, limit, timeoutMs);
-  const rows = await engine.query(`${selection} LIMIT ${fit}`, { timeoutMs });
+  const { rows, fit } = await readWithin(engine, selection, limit, timeoutMs);
   const budget = fit < Math.min(limit, total) ? MAX_FETCH_BYTES : undefined;
   return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs), budget);
 }
 
-/** How many of the first `limit` rows fit in MAX_FETCH_BYTES. The sizes are measured in the engine, under the clock. */
-async function rowsWithin(engine: Engine, selection: string, limit: number, timeoutMs: number): Promise<number> {
+/**
+ * The first `limit` rows, as many as fit in MAX_FETCH_BYTES. The rows are run once into a table in
+ * the engine (under its memory limit and the clock), then measured and read from it, so a query that
+ * answers differently each time it runs cannot be small when measured and large when read.
+ */
+async function readWithin(engine: Engine, selection: string, limit: number, timeoutMs: number): Promise<{ rows: Row[]; fit: number }> {
+  await engine.query(`CREATE OR REPLACE TEMP TABLE fusen_rows AS SELECT * FROM (${selection} LIMIT ${limit})`, { timeoutMs });
   // One size per cell; a text cell's size is read without copying it.
-  const sizes = await engine.query(`SELECT strlen(CAST(COLUMNS(*) AS VARCHAR)) FROM (${selection} LIMIT ${limit})`, { timeoutMs });
+  const sizes = await engine.query("SELECT strlen(CAST(COLUMNS(*) AS VARCHAR)) FROM fusen_rows", { timeoutMs });
   let bytes = 0;
   let fit = 0;
   for (const row of sizes) {
@@ -95,7 +99,9 @@ async function rowsWithin(engine: Engine, selection: string, limit: number, time
     if (bytes > MAX_FETCH_BYTES) break;
     fit += 1;
   }
-  return fit;
+  const rows = await engine.query(`SELECT * FROM fusen_rows LIMIT ${fit}`, { timeoutMs });
+  await engine.query("DROP TABLE fusen_rows");
+  return { rows, fit };
 }
 
 /**

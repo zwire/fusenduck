@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openSource, checkPredicate, fingerprint, formatRef, mintRef, resolveRef, CostExceeded } from "@fusenduck/core";
+import { lit } from "../../packages/core/src/engine.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 describe("read-only by construction (the engine, not SQL text)", () => {
@@ -96,7 +97,7 @@ describe("read-only by construction (the engine, not SQL text)", () => {
 
   // A pasted Ref carries its own query, and the result is materialized before rendering cuts it.
   it("a query of huge cells does not materialize them: rows past the fetch budget are left out and said so", async () => {
-    const huge = await mintRef(file, { query: "SELECT id, repeat('x', 3000000) AS s FROM data", roots: [dir] });
+    const huge = await mintRef(file, { query: "SELECT id, repeat('x', 1000000) AS s FROM data", roots: [dir] });
     const started = Date.now();
     const out = await resolveRef(huge, { limit: 1000, roots: [dir] });
     expect(Date.now() - started).toBeLessThan(10_000);
@@ -104,6 +105,14 @@ describe("read-only by construction (the engine, not SQL text)", () => {
     expect(shown.length).toBeGreaterThan(0);
     expect(shown.length).toBeLessThan(100);
     expect(out).toContain(`of 100 rows are not shown`);
+    expect(out).toMatch(/rows past \d+ bytes are not read/);
+  });
+
+  it("a query that answers differently when it is measured cannot slip past the fetch budget", async () => {
+    // current_query() differs between two runs of the same selection: empty while sized, large when read.
+    const sly = "SELECT CASE WHEN contains(current_query(), 'str' || 'len(') THEN '' ELSE repeat('y', 1000000) END AS s FROM data";
+    const out = await resolveRef(await mintRef(file, { query: sly, roots: [dir] }), { limit: 1000, roots: [dir] });
+    expect(out.split("\n").filter((l) => l.startsWith("{")).length).toBeLessThan(10);
     expect(out).toMatch(/rows past \d+ bytes are not read/);
   });
 
@@ -145,10 +154,10 @@ describe("read-only by construction (the engine, not SQL text)", () => {
     });
 
     it.each([
-      ["reading a file in it", () => `SELECT * FROM read_text('${planted}')`],
-      ["listing it", () => `SELECT * FROM glob('${tmp}/*')`],
-      ["COPY TO it", () => `COPY (SELECT 1 AS x) TO '${join(tmp, "written.csv")}'`],
-      ["ATTACH a database file in it", () => `ATTACH '${join(tmp, "written.db")}' AS w`],
+      ["reading a file in it", () => `SELECT * FROM read_text(${lit(planted)})`],
+      ["listing it", () => `SELECT * FROM glob(${lit(join(tmp, "*"))})`],
+      ["COPY TO it", () => `COPY (SELECT 1 AS x) TO ${lit(join(tmp, "written.csv"))}`],
+      ["ATTACH a database file in it", () => `ATTACH ${lit(join(tmp, "written.db"))} AS w`],
     ])("rejects %s", async (_name, sql) => {
       const engine = await openSource(file);
       await expect(engine.query(sql())).rejects.toThrow(/Permission Error/);
@@ -157,7 +166,7 @@ describe("read-only by construction (the engine, not SQL text)", () => {
     });
 
     it("a Ref whose query reads it is refused", async () => {
-      const ref = mintRef(file, { query: `SELECT * FROM read_text('${planted}')`, roots: [dir] });
+      const ref = mintRef(file, { query: `SELECT * FROM read_text(${lit(planted)})`, roots: [dir] });
       await expect(ref).rejects.toThrow();
     });
   });
