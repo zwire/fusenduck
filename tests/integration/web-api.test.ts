@@ -216,6 +216,83 @@ describe("Web UI server: open, rows and ref", () => {
     expect((await api("/api/rows", { source: path, fingerprint, offset: 0 })).status).toBe(409);
   });
 
+  it("pages through the rows that pass a filter, by position, and counts them", async () => {
+    const { fingerprint } = (await api("/api/open", { path: file })).body as { fingerprint: string };
+    const where = "region = 'south' AND id <= 40";
+    const pages: { pos: number[]; next: number | null; matched: number }[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const res = await api("/api/rows", { source: file, fingerprint, offset, limit: 4, where });
+      expect(res.status).toBe(200);
+      const body = res.body as { rows: { pos: number; cells: string[] }[]; next: number | null; matched: number };
+      pages.push({ pos: body.rows.map((r) => r.pos), next: body.next, matched: body.matched });
+      offset = body.next;
+    }
+    expect(pages).toEqual([
+      { pos: [0, 4, 8, 12], next: 16, matched: 10 },
+      { pos: [16, 20, 24, 28], next: 32, matched: 10 },
+      { pos: [32, 36], next: null, matched: 10 },
+    ]);
+    // No filter (or a blank one) is every row.
+    const all = (await api("/api/rows", { source: file, fingerprint, offset: 0, limit: 1, where: "  " })).body;
+    expect(all.matched).toBe(1000);
+    const none = (await api("/api/rows", { source: file, fingerprint, offset: 0, limit: 5, where: "id < 0" })).body;
+    expect(none).toEqual({ rows: [], next: null, cut: false, matched: 0 });
+  });
+
+  it("mints a Ref for the rows that pass a filter, or for selected rows, keeping only the chosen columns", async () => {
+    const { fingerprint } = (await api("/api/open", { path: file })).body as { fingerprint: string };
+    const where = "region = 'south' AND id <= 40";
+    const filtered = String((await api("/api/ref", { source: file, fingerprint, ranges: [], where, columns: ["note", "id"] })).body.ref);
+    // Columns keep the file's order, whatever order the page sent them in.
+    expect(filtered).toContain("&cols=id,note&");
+    expect(decodeURIComponent(filtered)).toContain(`where=${where}`);
+    const out = await resolveRef(filtered, { roots: [dir] });
+    expect(ids(out)).toEqual(Array.from({ length: 10 }, (_, i) => 1 + 4 * i));
+    expect(out).not.toContain('"region"');
+
+    // Selected rows are named by position; the filter they were picked under is not added.
+    const picked = String((await api("/api/ref", { source: file, fingerprint, ranges: [[8, 8]], where, columns: ["id"] })).body.ref);
+    expect(decodeURIComponent(picked)).toContain("cols=id&where=file_row_number = 8");
+    expect(decodeURIComponent(picked)).not.toContain("region");
+    expect(ids(await resolveRef(picked, { roots: [dir] }))).toEqual([9]);
+
+    // Columns alone, and every column (which leaves cols= out).
+    const cols = String((await api("/api/ref", { source: file, fingerprint, ranges: [], columns: ["amount"] })).body.ref);
+    expect(cols).toContain("cols=amount");
+    expect(cols).not.toContain("where=");
+    const every = String(
+      (await api("/api/ref", { source: file, fingerprint, ranges: [[0, 0]], columns: ["id", "region", "amount", "status", "note"] })).body.ref,
+    );
+    expect(every).not.toContain("cols=");
+  });
+
+  it("refuses a bad filter with the reason, and bad columns", async () => {
+    const { fingerprint } = (await api("/api/open", { path: file })).body as { fingerprint: string };
+    const rows = (where: unknown) => api("/api/rows", { source: file, fingerprint, offset: 0, limit: 5, where });
+    const ref = (where: unknown, columns?: unknown) => api("/api/ref", { source: file, fingerprint, ranges: [], where, columns });
+
+    // A misspelled column: the binder's message names it, so the person can fix the filter.
+    const typo = await rows("amont > 1");
+    expect(typo.status).toBe(400);
+    expect(String(typo.body.error)).toMatch(/^filter rejected: .*amont/);
+    expect((await ref("amont > 1")).status).toBe(400);
+    for (const bad of ["id > 1; DROP TABLE t", "id > 1) UNION SELECT * FROM t WHERE (1=1", "id > 1 LIMIT 1", "count(*) > 1", 7, "x".repeat(5000)]) {
+      expect((await rows(bad)).status, String(bad)).toBe(400);
+      expect((await ref(bad)).status, String(bad)).toBe(400);
+    }
+    // A filter that fails only while it reads rows would quote a cell in the engine's message: withheld.
+    const cast = await rows("CAST(note AS INTEGER) > 0");
+    expect(cast.status).toBe(500);
+    expect(String(cast.body.error)).not.toContain("note 1");
+    expect(String(cast.body.error)).toMatch(/withheld/);
+
+    expect((await ref(undefined, ["nope"])).body.error).toBe('this file has no column named "nope"');
+    expect((await ref(undefined, [])).status).toBe(400);
+    expect((await ref(undefined, "id")).status).toBe(400);
+    expect((await ref(undefined, [1])).status).toBe(400);
+  });
+
   it("a file with its own file_row_number column opens, but its rows cannot be selected", async () => {
     const opened = (await api("/api/open", { path: own })).body as { fingerprint: string; selectable: boolean };
     expect(opened.selectable).toBe(false);
@@ -227,5 +304,18 @@ describe("Web UI server: open, rows and ref", () => {
     const ref = await api("/api/ref", { source: own, fingerprint: opened.fingerprint, ranges: [[1, 1]] });
     expect(ref.status).toBe(400);
     expect(String(ref.body.error)).toMatch(/own column named file_row_number/);
+
+    // The filter still works: it reads the file's own column, and pages by offset among the matches.
+    const where = "file_row_number >= 150";
+    const filtered = (await api("/api/rows", { source: own, fingerprint: opened.fingerprint, offset: 3, limit: 3, where })).body as {
+      rows: { pos: number | null; cells: string[] }[];
+      next: number | null;
+      matched: number;
+    };
+    expect(filtered.matched).toBe(5);
+    expect(filtered.rows.map((r) => r.cells[1])).toEqual(["180", "190"]);
+    expect(filtered.next).toBeNull();
+    const minted = await api("/api/ref", { source: own, fingerprint: opened.fingerprint, ranges: [], where });
+    expect(ids(await resolveRef(String(minted.body.ref), { roots: [dir] }))).toEqual([15, 16, 17, 18, 19]);
   });
 });

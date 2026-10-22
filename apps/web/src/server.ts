@@ -137,9 +137,9 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
         return next.opened;
       }
       case "/api/rows":
-        return current(body).rows(body.fingerprint, body.offset, body.limit);
+        return current(body).rows(body.fingerprint, body.offset, body.limit, body.where);
       case "/api/ref":
-        return { ref: await current(body).ref(body.fingerprint, body.ranges) };
+        return { ref: await current(body).ref(body.fingerprint, body.ranges, body.where, body.columns) };
       default:
         throw new HttpError(404, "not found");
     }

@@ -24,14 +24,24 @@ export interface Page {
   rows: { pos: number | null; cells: (string | null)[] }[];
   next: number | null;
   cut: boolean;
+  matched: number;
 }
 
 export type Range = [number, number];
 
+/** What a Ref covers: the selected rows (or, when none, the rows that pass the filter) and the kept columns. */
+export interface Selection {
+  ranges: Range[];
+  /** A SQL predicate; omitted for none. */
+  where?: string;
+  /** Omitted for every column. */
+  columns?: string[];
+}
+
 export interface Api {
   open(path: string): Promise<Opened>;
-  rows(file: Opened, offset: number, limit: number): Promise<Page>;
-  ref(file: Opened, ranges: Range[]): Promise<string>;
+  rows(file: Opened, offset: number, limit: number, where?: string): Promise<Page>;
+  ref(file: Opened, selection: Selection): Promise<string>;
 }
 
 /** An error the server described; `changed` means the file changed since it was opened. */
@@ -62,8 +72,9 @@ export async function exchange(code: string): Promise<string> {
 export function httpApi(token: string): Api {
   return {
     open: (path) => post<Opened>("/api/open", { path }, token),
-    rows: (file, offset, limit) => post<Page>("/api/rows", { source: file.source, fingerprint: file.fingerprint, offset, limit }, token),
-    ref: async (file, ranges) =>
-      (await post<{ ref: string }>("/api/ref", { source: file.source, fingerprint: file.fingerprint, ranges }, token)).ref,
+    rows: (file, offset, limit, where) =>
+      post<Page>("/api/rows", { source: file.source, fingerprint: file.fingerprint, offset, limit, where }, token),
+    ref: async (file, selection) =>
+      (await post<{ ref: string }>("/api/ref", { source: file.source, fingerprint: file.fingerprint, ...selection }, token)).ref,
   };
 }

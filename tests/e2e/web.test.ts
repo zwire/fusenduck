@@ -106,6 +106,46 @@ describe("Web UI in Chromium", () => {
     await expect.poll(() => page.locator("#rows tr.selected").count()).toBe(5);
   });
 
+  it("columns left out and a filter: the table shows what the Ref covers, and Copy gives exactly that", async () => {
+    await open(customers);
+    await page.locator('#card input[data-column="region"]').uncheck();
+    await page.locator('#card input[data-column="status"]').uncheck();
+    expect(await page.locator("#rows thead th").allTextContents()).toEqual(["#", "id", "amount", "note"]);
+    expect(await page.locator("#keep-all input").evaluate((box: HTMLInputElement) => box.indeterminate)).toBe(true);
+    const columnsOnly = await copy();
+    expect(columnsOnly).toContain("cols=id,amount,note");
+    expect(await resolved(columnsOnly)).toHaveLength(1000);
+
+    await page.fill("#filter", "region = 'south' AND id <= 40");
+    await page.press("#filter", "Enter");
+    await page.waitForFunction(() => /10 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
+    expect(await page.locator("#rows tbody tr").count()).toBe(10);
+    expect(await page.textContent("#page")).toBe("rows 1–10 of 10 matching the filter (1000 in the file)");
+    expect(await page.textContent("#selection")).toMatch(/^The Ref covers the rows that match the filter, 3 of 5 columns \(id, amount, note\)\./);
+    const filtered = await copy();
+    expect(decodeURIComponent(filtered)).toContain("cols=id,amount,note&where=region = 'south' AND id <= 40");
+    expect(await resolved(filtered)).toEqual(range(0, 9).map((i) => 1 + 4 * i));
+
+    // A row picked among the matches is named by its position.
+    await row(8).click();
+    expect(await resolved(await copy())).toEqual([9]);
+
+    // A bad filter says why and leaves the rows and the filter that was applied.
+    await page.fill("#filter", "amont > 1");
+    await page.click("#filter-form button[type=submit]");
+    await page.waitForFunction(() => document.getElementById("status")?.classList.contains("error"));
+    expect(await page.textContent("#status")).toMatch(/^Filter rejected: .*amont/);
+    expect(await page.getAttribute("#filter", "aria-invalid")).toBe("true");
+    expect(await page.locator("#rows tbody tr").count()).toBe(10);
+
+    // Clear goes back to every row; ticking "all" keeps every column again.
+    await page.click("#clear-filter");
+    await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 100);
+    await page.locator("#keep-all input").check();
+    expect(await page.locator("#rows thead th").count()).toBe(6);
+    expect(await resolved(await copy())).toHaveLength(1000);
+  });
+
   it("6: a click followed at once by another click and Copy copies the newest selection", async () => {
     await open(customers);
     // Slow the mints down so Copy is pressed while they are still running; the first one is the slowest.
@@ -203,6 +243,12 @@ describe("Web UI in Chromium", () => {
     const ref = await copy();
     expect(decodeURIComponent(ref)).not.toContain("where=");
     expect(await resolved(ref)).toEqual(range(0, 19));
+
+    // The filter still picks rows here, through the file's own column.
+    await page.fill("#filter", "file_row_number >= 150");
+    await page.press("#filter", "Enter");
+    await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 5);
+    expect(await resolved(await copy())).toEqual(range(15, 19));
   });
 
   it("logged no CSP violation on its own page", () => {
