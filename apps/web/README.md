@@ -4,15 +4,16 @@ Web UI `fusen-web`。ループバックで待ち受けるローカルサーバ�
 
 ```sh
 pnpm build   # SPA(spa/*.ts)を tsc で dist/ に出す
-node apps/web/src/index.ts [--root <dir>]... [--host <loopback>] [--port <n>]
-# → fusen-web: open this URL within 60 seconds (it works once): http://127.0.0.1:<port>/#c=<code>
+node apps/web/src/index.ts [--root <dir>]... [--host <loopback>] [--port <n>] [--no-open]
+# → fusen-web: opening http://127.0.0.1:<port>/#c=<code> in your browser (the link works once, within 60 seconds)
 ```
 
 ## 構成
 
 | ファイル | 中身 |
 | --- | --- |
-| `src/index.ts` | 起動の入口(引数の解釈、URL の表示、終了時にエンジンを閉じる) |
+| `src/index.ts` | 起動の入口(引数の解釈、URL の表示とブラウザの起動、終了時にエンジンを閉じる) |
+| `src/browser.ts` | 既定のブラウザで URL を開く(`open` / `rundll32` / `xdg-open`、シェルを通さない。ディスプレイがなければ開かない) |
 | `src/server.ts` | HTTP: 引き換えコードとトークン、Host・Origin・JSON・Bearer の検査、CSP などのヘッダ、静的ファイル |
 | `src/files.ts` | ルートの下の Parquet ファイルの一覧(シンボリックリンクはたどらない、隠しファイルは飛ばす、件数に上限) |
 | `src/view.ts` | 開いた 1 ファイル: エンジン(1 ソース 1 つ、操作は 1 つずつ)、行のページ(条件つきも)、位置の範囲・条件・列から Ref |
