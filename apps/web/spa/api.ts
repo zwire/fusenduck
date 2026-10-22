@@ -1,5 +1,5 @@
 // How the SPA reaches core. The page only ever talks to an Api, so a host other than the local
-// server (the VS Code webview, later) can supply its own. Types mirror apps/web/src/view.ts; the API
+// server (the VS Code webview, apps/vscode) can supply its own. Types mirror apps/web/src/view.ts; the API
 // is internal and unversioned (docs/adr/0002).
 
 export interface CardColumn {
@@ -55,6 +55,8 @@ export interface Api {
   open(path: string): Promise<Opened>;
   rows(file: Opened, offset: number, limit: number, where?: string): Promise<Page>;
   ref(file: Opened, selection: Selection): Promise<string>;
+  /** Puts text on the clipboard; without it the page uses the browser's clipboard. */
+  copy?(text: string): Promise<void>;
 }
 
 /** An error the server described; `changed` means the file changed since it was opened. */

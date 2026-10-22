@@ -1,0 +1,50 @@
+/* The Web UI's style.css in VS Code's colors and fonts. Loaded after it. */
+body {
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+input {
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 3px 6px;
+}
+input:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+button {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: none;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+th,
+td {
+  font-family: var(--vscode-editor-font-family);
+  border-color: var(--vscode-panel-border, #8884);
+}
+#rows tbody tr:hover:not(.selected) {
+  background: var(--vscode-list-hoverBackground);
+}
+#rows tr.selected {
+  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--vscode-list-activeSelectionBackground);
+}
+#status.error {
+  color: var(--vscode-errorForeground);
+}
+.note,
+td.null,
+td.pos {
+  color: var(--vscode-descriptionForeground);
+}

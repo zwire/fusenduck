@@ -514,10 +514,11 @@ $("copy").addEventListener("click", async () => {
   const ref = await latest;
   if (ref === undefined) return;
   try {
-    await navigator.clipboard.writeText(ref);
+    await (api?.copy ? api.copy(ref) : navigator.clipboard.writeText(ref));
     if (file) say(`Copied the Ref for ${covers(file)}.`);
-  } catch {
+  } catch (error) {
     refInput.select();
+    if (api?.copy) return say(`${describe(error).replace(/\.$/, "")}. The Ref is selected in the field, copy it from there.`, true);
     say("The browser refused the clipboard: the Ref is selected in the field, copy it from there.", true);
   }
 });
@@ -560,4 +561,17 @@ async function start(): Promise<void> {
   (shown.length ? filterInput : pathInput).focus();
 }
 
-void start();
+/**
+ * Starts the page on an Api from another host (the VS Code webview), with its one file already chosen.
+ * The path stays in the field, and Open becomes Reload, so a changed file can be read again.
+ */
+export function mount(host: Api, path: string): void {
+  api = host;
+  pathInput.value = path;
+  pathInput.readOnly = true;
+  $<HTMLButtonElement>("open").textContent = "Reload";
+  void open(path);
+}
+
+// A host that supplies its own Api marks the page (<html data-host>) and calls mount itself.
+if (document.documentElement.dataset.host === undefined) void start();

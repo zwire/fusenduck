@@ -13,7 +13,7 @@ pnpm lint             # ESLint
 pnpm typecheck        # tsc --noEmit(各パッケージとテスト)
 pnpm test             # すべてのテスト(vitest。ブラウザのテストは除く)
 pnpm test:security    # 読み取り専用の守りのテストだけ
-pnpm test:e2e         # Web UI のブラウザのテスト(Chromium が要る: pnpm exec playwright-core install chromium)
+pnpm test:e2e         # Web UI と VS Code 拡張の webview のブラウザのテスト(Chromium が要る: pnpm exec playwright-core install chromium)
 pnpm contract:check   # Ref の凍結コーパス
 pnpm bench            # 100 万行の Parquet で予算を確かめる。超えたら exit 1
 ```
