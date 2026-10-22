@@ -2,12 +2,20 @@
   "budgets": {
     "card_build_ms": 1000,
     "card_render_tokens": 1000,
-    "rows_render_tokens_11_rows": 1000
+    "rows_render_tokens_11_rows": 1000,
+    "web_open_ms": 1000,
+    "web_rows_page_ms": 200,
+    "web_ref_ms": 100,
+    "web_spa_bytes": 51200
   },
   "measured": {
     "measured_on": "1,000,000 rows x 5 columns (id, region, amount, status, note), Parquet",
     "card_build_ms": 145,
-    "card_render_tokens": 315,
-    "rows_render_tokens_11_rows": 388
+    "card_render_tokens": 312,
+    "rows_render_tokens_11_rows": 388,
+    "web_open_ms": 123,
+    "web_rows_page_ms": 9,
+    "web_ref_ms": 10,
+    "web_spa_bytes": 12904
   }
 }

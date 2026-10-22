@@ -1,14 +1,15 @@
 # fusenduck でいまできること
 
-fusenduck は、Parquet ファイルを読み取り専用で覗き、見た範囲を `fusen://` で始まる 1 本の文字列(Ref)にして AI エージェントへ渡すための道具です。CLI(`fusen`)と MCP サーバー(`fusen-mcp`)の 2 つの入口があり、どちらも同じ core を使います。
+fusenduck は、Parquet ファイルを読み取り専用で覗き、見た範囲を `fusen://` で始まる 1 本の文字列(Ref)にして AI エージェントへ渡すための道具です。CLI(`fusen`)、MCP サーバー(`fusen-mcp`)、Web UI(`fusen-web`)の 3 つの入口があり、どれも同じ core を使います。
 
 ステータス: 実験的(0.0.0、未公開)。Ref の形は凍結コーパスで守っていますが、まだ正式な互換の約束はしていません。対応するソースは Parquet ファイルだけです。
 
-ここでは、このガイドの中だけで使う短い呼び名として、CLI を `fusen`、MCP サーバーを `fusen-mcp` と書きます。現時点ではパッケージとして公開しておらず、実際には次のように実行します。
+ここでは、このガイドの中だけで使う短い呼び名として、CLI を `fusen`、MCP サーバーを `fusen-mcp`、Web UI のサーバーを `fusen-web` と書きます。現時点ではパッケージとして公開しておらず、実際には次のように実行します。
 
 ```sh
 alias fusen='node /path/to/fusenduck/packages/cli/src/index.ts'
 alias fusen-mcp='node /path/to/fusenduck/packages/mcp/src/index.ts'
+alias fusen-web='node /path/to/fusenduck/apps/web/src/index.ts'
 ```
 
 ## 1. カード: 行の中身を見せずに表の形を知る
@@ -151,26 +152,56 @@ FUSEN_MCP_TOKEN=<16 文字以上> fusen-mcp --http --port 7457 --root /path/to/d
 - `Host` ヘッダーも確かめるので、DNS リバインディングで外のページから届くことはありません。
 - ブラウザーが付ける `Origin` ヘッダーがあれば、サーバー自身のループバックのオリジン以外は断ります。
 
-## 9. 読み取り専用の守り
+## 9. Web UI
+
+ブラウザで表を見ながら行を選び、Ref をコピーする入口です。
+
+```sh
+pnpm build                         # 初回だけ(SPA を apps/web/dist に出す)
+fusen-web --root /path/to/data
+# → fusen-web: open this URL within 60 seconds (it works once): http://127.0.0.1:<port>/#c=<code>
+```
+
+1. 表示された URL をブラウザで開き、Parquet ファイルのパス(絶対パス、または最初の `--root` からの相対パス)を入れて Open を押します。
+2. カードと、100 行ずつの表が出ます。表の `#` はファイル内の位置(0 から)です。200 文字を超えるセルは切って `…` を付けます。
+3. 行をクリックすると 1 行、Shift+クリックで範囲、Ctrl(⌘)+クリックで行の追加と取り消しです。ページをまたいだ範囲も選べます。何も選んでいなければファイル全体の Ref です。
+4. Copy を押すと、選んだ行だけを返す Ref(`where=file_row_number BETWEEN 10 AND 14 OR file_row_number = 40` の形)がクリップボードに入ります。エージェントは `fusen resolve` や MCP でそのまま解決できます。
+
+- **見たものと Ref が一致します。** ページは開いたときの指紋を持ち、Ref を作るたびにサーバーがファイルの指紋と比べます。違えば Ref を作らず「The file changed since it was opened. Open it again.」と出します。ただし列統計がすべて同じままの書き換えは指紋で見分けられません(ADR 0001)。
+- ファイルが `file_row_number` という列を持つときは、位置で選べないので選択を無効にし、その旨を表示します(Copy はファイル全体の Ref)。
+- 1 回の選択でまとめた範囲は 1,000 個までです。
+
+守り(詳細は [ADR 0002](adr/0002-web-ui-transport.md)):
+
+- 待ち受けはループバックだけで、ポートは既定で OS が選びます(`--port` で固定、`--host` はループバックのみ)。
+- URL に載るのはセッショントークンではなく、1 回だけ・60 秒だけ使える引き換えコードです。ページはそれをトークンに替えてタブの中(sessionStorage)にだけ持ち、アドレスバーから消します。URL を後から共有しても開けません。
+- API の要求はすべて、Host と Origin がサーバー自身であること、本文が JSON であること、トークンを確かめます。CORS には応じません。
+- 応答には厳しい CSP(`frame-ancestors 'none'`、`require-trusted-types-for 'script'` を含む)を付け、セルの値は文字列としてだけ表示します。
+- 同じ利用者の権限で動く他のプロセス(ブラウザ拡張を含む)は守りの外です。
+- Web UI の API は内部用で、契約ではありません(予告なく変わります)。
+
+## 10. 読み取り専用の守り
 
 読み取り専用は SQL の文字列検査ではなく、DuckDB の設定で強制しています。ソースを開いた直後に、開くファイルだけを許す `allowed_paths`、外部アクセスの禁止、ディスクへの書き出し(スピル)の無効化、設定の固定(`lock_configuration`)を必ずかけます。DuckDB はスピル先のディレクトリ(既定は作業ディレクトリの `.tmp`)を外部アクセスの禁止中でも読み書きさせるため、スピルは使いません。開いたファイル以外の読み取り、`COPY TO`、`ATTACH`、設定の解除がどれも拒否されることを、セキュリティテスト(`pnpm test:security`)で毎回確かめています。
 
 コストの上限もあります。resolve の前に、ファイル全体の圧縮バイト数(Parquet のメタデータ)が 512MB を超えるなら止め、実行が 10 秒を超えたら打ち切ります。エンジンのメモリは 512MB までです。行はエンジンの中で一度作ってから大きさを測り、合計 8MB 分までしか読み出さず、それを超える行は `OMITTED:` に「読んでいない」と書きます(長いセルを作るクエリで、表示の前にメモリを使い尽くさないため)。
 
-## 10. 品質の守り(開発者向け)
+## 11. 品質の守り(開発者向け)
 
 | 仕組み | コマンド | 守るもの |
 | --- | --- | --- |
 | lint | `pnpm lint` | ESLint(typescript-eslint) |
 | Ref の凍結コーパス | `pnpm contract:check` | `tests/contract/refs/` の Ref が、同じ項目に読めて同じ文字列に戻ること。エージェントがすでに持っている Ref を壊す変更はここで落ちる |
-| bench | `pnpm bench` | 100 万行の Parquet で、カード作成 1 秒以内、カード描画と 11 行の描画が各 1,000 トークン以内(`bench/budgets.json`)。超えたら exit 1 |
-| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench は Linux で回し、表をジョブのサマリーに出す |
+| bench | `pnpm bench` | 100 万行の Parquet で、カード作成 1 秒以内、カード描画と 11 行の描画が各 1,000 トークン以内。Web UI は開く 1 秒、100 行のページ 0.2 秒、Ref の作成 0.1 秒、SPA 50KB 以内(`bench/budgets.json`)。超えたら exit 1 |
+| ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる |
+| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench とブラウザのテストは Linux で回し、bench の表をジョブのサマリーに出す |
 
 ## まだできないこと
 
 - Parquet 以外のソース(CSV、データベース、S3/HTTP)。
 - ファイルを移動したあとの Ref の解決。
-- npm への公開、`fusen` コマンドとしてのインストール、Web UI、エディタ拡張。
+- npm への公開、`fusen` コマンドとしてのインストール、エディタ拡張。
+- Web UI での列の選択、述語の入力、クエリ付き Ref、ファイルの一覧(いまはパスの入力だけ)。
 - 契約(Ref の文法、MCP ツールの形)のリファレンスをスキーマから生成すること。いまはこのガイドが手書きの説明です。
 
 設計の経緯は [ADR 0001](adr/0001-engine-ref-rendering.md)、構想は [vision.md](vision.md) にあります。

@@ -10,6 +10,8 @@ export interface Engine {
   readonly source: string;
   /** Runs one statement and returns its rows as JSON-safe objects (BIGINT and DECIMAL arrive as strings). */
   query(sql: string, opts?: { timeoutMs?: number }): Promise<Row[]>;
+  /** Releases the engine. A query after this fails. */
+  close(): void;
 }
 
 /** A SQL string literal. */
@@ -89,6 +91,10 @@ export async function openSource(source: string, opts: { roots?: string[] } = {}
       } finally {
         clearTimeout(timer);
       }
+    },
+    close(): void {
+      connection.closeSync();
+      instance.closeSync();
     },
   };
 }

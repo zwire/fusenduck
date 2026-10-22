@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
+    "test:e2e": "pnpm --filter @fusenduck/web build && vitest run --config vitest.e2e.config.ts",
     "bench": "node tests/bench/card.bench.ts",
     "lint": "eslint .",
     "contract:check": "vitest run tests/contract"
@@ -22,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^24.0.0",
     "eslint": "^9",
+    "playwright-core": "1.56.1",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8",
     "vitest": "^5.0.5"

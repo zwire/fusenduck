@@ -30,14 +30,38 @@ export const MAX_FETCH_BYTES = 8 * 1024 * 1024;
 
 export class CostExceeded extends FusenError {}
 
-export async function mintRef(
-  source: string,
-  opts: { query?: string; where?: string; columns?: string[]; roots?: string[] } = {},
-): Promise<string> {
+/** The source's fingerprint is not the one the caller expected: the file changed since it was read. */
+export class SourceChanged extends FusenError {}
+
+export interface MintOptions {
+  query?: string;
+  where?: string;
+  columns?: string[];
+  /**
+   * The fingerprint the caller's view of the file was read under. Minting refuses when the file's
+   * fingerprint differs, so a Ref cannot select other rows than the ones a person saw (docs/adr/0002).
+   */
+  expect?: string;
+}
+
+export async function mintRef(source: string, opts: MintOptions & { roots?: string[] } = {}): Promise<string> {
   const engine = await openSource(source, { roots: opts.roots });
+  try {
+    return await mintRefWith(engine, opts);
+  } finally {
+    engine.close();
+  }
+}
+
+/** Mints a Ref on an engine that is already open (and stays open). */
+export async function mintRefWith(engine: Engine, opts: MintOptions = {}): Promise<string> {
+  const now = await fingerprint(engine);
+  if (opts.expect !== undefined && opts.expect !== now) {
+    throw new SourceChanged("the file changed since it was read. Read it again before selecting rows.");
+  }
   if (opts.query) await checkQuery(engine, opts.query);
   if (opts.where) await checkPredicate(engine, engine.source, opts.where, opts.query);
-  const ref: Ref = { source: engine.source, fingerprint: await fingerprint(engine) };
+  const ref: Ref = { source: engine.source, fingerprint: now };
   if (opts.query) ref.query = opts.query;
   if (opts.where) ref.where = opts.where;
   if (opts.columns?.length) ref.columns = opts.columns;

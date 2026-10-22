@@ -48,3 +48,19 @@ jobs:
       - run: |
           set -o pipefail
           pnpm -s bench | tee -a "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    # The Web UI in a real Chromium (docs/adr/0002, acceptance tests). One platform: the browser
+    # behaviour under test (CSP, clipboard, selection) does not depend on the OS.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright-core install --with-deps chromium
+      - run: pnpm test:e2e

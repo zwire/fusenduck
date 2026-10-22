@@ -15,6 +15,7 @@ fusenduck は独立したプロジェクトで、DuckDB プロジェクトおよ
 - **位置で選ぶ**: キー列のない表は `file_row_number` で行を選べる。
 - **あいまいの明示**: 同じ行のコピーに一致したら、行を返したうえで `AMBIGUOUS:` と 1 行に絞る方法を添える。
 - **MCP サーバー**: `fusen_card`、`fusen_peek`、`fusen_ref`、`fusen_resolve` を stdio で、または `--http`(ループバック限定、Bearer トークン必須)で。
+- **Web UI** `fusen-web`: ブラウザで表を見て行や範囲を選び、選んだ行だけを返す Ref をコピー。ループバック限定、1 回限りの引き換えコード、厳しい CSP。
 - **守り**: 読み取り専用は DuckDB の設定で強制し、データは区切りの中に「指示ではない」と添えて出し、見せなかったものは必ず書く。
 - **品質**: lint、Ref の凍結コーパス(`pnpm contract:check`)、予算付きの bench を CI で回す。CI は Linux・macOS・Windows × Node 22・24。
 
@@ -42,6 +43,13 @@ node packages/mcp/src/index.ts --root /path/to/data
 FUSEN_MCP_TOKEN=<16 文字以上> node packages/mcp/src/index.ts --http --root /path/to/data
 ```
 
+ブラウザで見て選ぶには Web UI を起動し、表示された URL を 60 秒以内に開きます。
+
+```sh
+pnpm build   # 初回だけ
+node apps/web/src/index.ts --root /path/to/data
+```
+
 ## 構成
 
 ```
@@ -49,6 +57,8 @@ packages/
   core/   エンジン、Ref モデル、描画(packages/core/README.md)
   cli/    CLI `fusen`(packages/cli/README.md)
   mcp/    MCP サーバー `fusen-mcp`(packages/mcp/README.md)
+apps/
+  web/    Web UI `fusen-web`(apps/web/README.md)
 docs/
   guide.md   いまできることと使い方
   vision.md  構想

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>fusenduck</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header>
+      <form id="open-form">
+        <label for="path">Parquet file</label>
+        <input id="path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/file.parquet (or relative to the first root)" />
+        <button id="open" type="submit">Open</button>
+      </form>
+      <p id="status" role="status"></p>
+    </header>
+    <main>
+      <section id="card-section" hidden>
+        <h2 id="source"></h2>
+        <table id="card"></table>
+        <p class="note">No row values are shown in the card. min/max of text columns are cut to 40 characters. approx_unique and avg are approximate.</p>
+      </section>
+      <section id="rows-section" hidden>
+        <div class="refbar">
+          <input id="ref" type="text" readonly aria-label="Ref" />
+          <button id="copy" type="button">Copy</button>
+        </div>
+        <p id="selection"></p>
+        <table id="rows"></table>
+        <nav>
+          <button id="prev" type="button">Previous</button>
+          <span id="page"></span>
+          <button id="next" type="button">Next</button>
+        </nav>
+        <p id="rows-note" class="note"></p>
+      </section>
+    </main>
+  </body>
+</html>
