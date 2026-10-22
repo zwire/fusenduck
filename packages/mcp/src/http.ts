@@ -29,6 +29,8 @@ export interface HttpOptions {
   port?: number;
   maxConcurrent?: number;
   maxQueued?: number;
+  /** Show values that look like personal data (masked by default). */
+  unmask?: boolean;
 }
 
 export interface HttpHandle {
@@ -87,7 +89,7 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
     } catch (error) {
       return error instanceof BodyTooLarge ? reply(res, 413, "Request body too large") : reply(res, 400, "Invalid JSON");
     }
-    const server = createServer(options.roots, gate);
+    const server = createServer(options.roots, gate, { unmask: options.unmask });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     // A client that hangs up closes the transport, which cancels its tool call and stops the query.
     res.on("close", () => {

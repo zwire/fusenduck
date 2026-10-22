@@ -4,6 +4,7 @@ import { FusenError, planned } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
 import { baseQuery, checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
 import { buildCard } from "./card.ts";
+import { maskRows } from "./pii.ts";
 import { renderCard, renderChanged, renderRows, type Ambiguity } from "./render.ts";
 
 export const DEFAULT_LIMIT = 100;
@@ -75,7 +76,7 @@ export async function mintRefWith(engine: Engine, opts: MintOptions = {}): Promi
 
 export async function resolveRef(
   text: string,
-  opts: { limit?: number; maxBytes?: number; timeoutMs?: number; roots: string[]; signal?: AbortSignal },
+  opts: { limit?: number; maxBytes?: number; timeoutMs?: number; roots: string[]; signal?: AbortSignal; unmask?: boolean },
 ): Promise<string> {
   const ref = parseRef(text);
   // A Ref names its own file, so a pasted Ref must not be able to point anywhere on disk.
@@ -87,7 +88,11 @@ export async function resolveRef(
   }
 }
 
-async function resolveWith(engine: Engine, ref: Ref, opts: { limit?: number; maxBytes?: number; timeoutMs?: number }): Promise<string> {
+async function resolveWith(
+  engine: Engine,
+  ref: Ref,
+  opts: { limit?: number; maxBytes?: number; timeoutMs?: number; unmask?: boolean },
+): Promise<string> {
   if (ref.query) await checkQuery(engine, ref.query);
   if (ref.where) await checkPredicate(engine, engine.source, ref.where, ref.query);
   const now = await fingerprint(engine);
@@ -107,14 +112,19 @@ async function resolveWith(engine: Engine, ref: Ref, opts: { limit?: number; max
   if (bytes > maxBytes) throw new CostExceeded(`would scan ${bytes} bytes, over the limit of ${maxBytes}`);
 
   const selection = selectionSql(ref);
-  await planned("selection", () => engine.query(`DESCRIBE ${selection}`, { timeoutMs: DEFAULT_TIMEOUT_MS }));
+  const described = await planned("selection", () => engine.query(`DESCRIBE ${selection}`, { timeoutMs: DEFAULT_TIMEOUT_MS }));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
   const { rows, fit } = await readWithin(engine, selection, limit, timeoutMs);
   const budget = fit < Math.min(limit, total) ? MAX_FETCH_BYTES : undefined;
-  return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs), budget);
+  const ambiguous = await countCopies(engine, ref, selection, total, timeoutMs);
+  if (opts.unmask) return renderRows(ref, rows, total, ambiguous, budget);
+  // Personal data is hidden unless whoever runs fusenduck asked otherwise; the types say which values are text.
+  const types = new Map(described.map((c) => [String(c.column_name), String(c.column_type)]));
+  const masked = maskRows(rows, types);
+  return renderRows(ref, masked.rows, total, ambiguous, budget, masked.masked);
 }
 
 /**
@@ -172,22 +182,22 @@ async function countCopies(
  */
 export async function peek(
   source: string,
-  opts: { rows?: number; roots?: string[]; signal?: AbortSignal } = {},
+  opts: { rows?: number; roots?: string[]; signal?: AbortSignal; unmask?: boolean } = {},
 ): Promise<string> {
   const rows = opts.rows ?? DEFAULT_PEEK_ROWS;
   if (!Number.isInteger(rows) || rows < 0 || rows > MAX_PEEK_ROWS) {
     throw new FusenError(`rows must be an integer from 0 to ${MAX_PEEK_ROWS}`);
   }
-  const { signal } = opts;
+  const { signal, unmask } = opts;
   const engine = await openSource(source, { roots: opts.roots, signal });
   let card: string;
   let ref: string;
   try {
-    card = renderCard(await buildCard(engine), engine.source);
+    card = renderCard(await buildCard(engine, { unmask }), engine.source);
     ref = await mintRefWith(engine);
   } finally {
     engine.close();
   }
   // The Ref was just minted from this file, so resolving it may read this file's own directory.
-  return `${card}\n${await resolveRef(ref, { limit: rows, roots: opts.roots ?? [dirname(engine.source)], signal })}`;
+  return `${card}\n${await resolveRef(ref, { limit: rows, roots: opts.roots ?? [dirname(engine.source)], signal, unmask })}`;
 }

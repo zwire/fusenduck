@@ -5,13 +5,14 @@ import { parseArgs } from "node:util";
 import { buildCard, describeError, FusenError, MAX_PEEK_ROWS, mintRef, openSource, peek, renderCard, resolveRef } from "@fusenduck/core";
 
 const USAGE = `usage:
-  fusen card <file.parquet>
-  fusen peek <file.parquet> [--rows <n>]   (the card, the first rows and a Ref in one result)
+  fusen card <file.parquet> [--unmask]
+  fusen peek <file.parquet> [--rows <n>] [--unmask]   (the card, the first rows and a Ref in one result)
   fusen ref <file.parquet> [--query <select over data>] [--where <predicate>] [--columns a,b]
-  fusen resolve <ref> [--limit <n>] [--root <dir>]...   (roots default to the current directory)
+  fusen resolve <ref> [--limit <n>] [--root <dir>]... [--unmask]   (roots default to the current directory)
   fusen --help | --version
 
 exit status: 0 done (a DATA_CHANGED result included), 1 the command failed, 2 the command line is wrong.
+Values that look like personal data (emails, phone numbers, names, ...) are masked unless --unmask is given.
 FUSEN_DEBUG=1 shows engine errors, which can quote values from the file.`;
 
 /** A mistake in the command line: exit status 2, with the usage. */
@@ -35,6 +36,7 @@ async function main(argv: string[]): Promise<string> {
         root: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean" },
+        unmask: { type: "boolean" },
       },
     });
   } catch (error) {
@@ -57,21 +59,21 @@ async function main(argv: string[]): Promise<string> {
   };
   switch (command) {
     case "card": {
-      only();
+      only("unmask");
       const engine = await openSource(target);
       try {
-        return renderCard(await buildCard(engine), engine.source);
+        return renderCard(await buildCard(engine, { unmask: values.unmask }), engine.source);
       } finally {
         engine.close();
       }
     }
     case "peek": {
-      only("rows");
+      only("rows", "unmask");
       if (values.rows !== undefined && !(/^\d+$/.test(values.rows) && Number(values.rows) <= MAX_PEEK_ROWS)) {
         throw usage(`--rows must be an integer from 0 to ${MAX_PEEK_ROWS}`);
       }
       const rows = values.rows === undefined ? undefined : Number(values.rows);
-      return peek(target, rows === undefined ? {} : { rows });
+      return peek(target, { ...(rows === undefined ? {} : { rows }), unmask: values.unmask });
     }
     case "ref": {
       only("query", "where", "columns");
@@ -82,12 +84,12 @@ async function main(argv: string[]): Promise<string> {
       return `${await mintRef(target, { query: values.query, where: values.where, columns })}\n`;
     }
     case "resolve": {
-      only("limit", "root");
+      only("limit", "root", "unmask");
       if (values.limit !== undefined && !/^\d+$/.test(values.limit)) throw usage("--limit must be a non-negative integer");
       const limit = values.limit === undefined ? undefined : Number(values.limit);
       const roots = values.root ?? [process.cwd()];
       try {
-        return await resolveRef(target, { ...(limit === undefined ? {} : { limit }), roots });
+        return await resolveRef(target, { ...(limit === undefined ? {} : { limit }), roots, unmask: values.unmask });
       } catch (error) {
         // The person at the terminal set the roots, so naming them is safe, and it says what to change.
         if (error instanceof FusenError && error.message.includes("outside the allowed roots")) {

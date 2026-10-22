@@ -20,7 +20,9 @@ const failure = (error: unknown) => {
  * cancels it or goes away. With a `gate`, calls also wait for a free slot (shared by every server
  * that gets the same gate).
  */
-export function createServer(roots: string[], gate?: Gate): McpServer {
+export function createServer(roots: string[], gate?: Gate, opts: { unmask?: boolean } = {}): McpServer {
+  // Whether personal data is shown is the server's setting (fusen-mcp --unmask), never a tool argument.
+  const { unmask } = opts;
   const server = new McpServer({ name: "fusenduck", version: "0.0.0" });
   const guarded = (signal: AbortSignal, work: () => Promise<string>) =>
     (gate ? gate.run(signal, work) : work()).then(text, failure);
@@ -37,7 +39,7 @@ export function createServer(roots: string[], gate?: Gate): McpServer {
       guarded(signal, async () => {
         const engine = await openSource(path, { roots, signal });
         try {
-          return renderCard(await buildCard(engine), engine.source);
+          return renderCard(await buildCard(engine, { unmask }), engine.source);
         } finally {
           engine.close();
         }
@@ -56,7 +58,7 @@ export function createServer(roots: string[], gate?: Gate): McpServer {
       },
     },
     ({ path, rows }, { signal }) =>
-      guarded(signal, () => peek(path, { ...(rows === undefined ? {} : { rows }), roots, signal })),
+      guarded(signal, () => peek(path, { ...(rows === undefined ? {} : { rows }), roots, signal, unmask })),
   );
 
   server.registerTool(
@@ -92,7 +94,7 @@ export function createServer(roots: string[], gate?: Gate): McpServer {
       },
     },
     ({ ref, limit }, { signal }) =>
-      guarded(signal, () => resolveRef(ref, { ...(limit === undefined ? {} : { limit }), roots, signal })),
+      guarded(signal, () => resolveRef(ref, { ...(limit === undefined ? {} : { limit }), roots, signal, unmask })),
   );
 
   return server;
