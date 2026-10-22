@@ -27,6 +27,6 @@ node apps/web/src/index.ts [--root <dir>]... [--host <loopback>] [--port <n>]
 | `/api/session` | `{ code }` | `{ token }`。コードは 1 回だけ、60 秒まで |
 | `/api/open` | `{ path }` | `{ source, fingerprint, card, ref, selectable }` |
 | `/api/rows` | `{ source, fingerprint, offset, limit?, where? }` | `{ rows: [{ pos, cells }], next, cut, matched }`。limit は 1〜500(既定 100)。`where` があれば合う行だけで、`offset` と `next` は位置(位置で選べないファイルでは合う行の中の順番)、`matched` は合う行の数 |
-| `/api/ref` | `{ source, fingerprint, ranges: [[a, b], ...], where?, columns? }` | `{ ref }`。範囲は結合して 1,000 個まで。範囲が空なら `where` の行。`columns` はファイルの列の順に並べ直し、全部なら `cols=` を付けない |
+| `/api/ref` | `{ source, fingerprint, ranges: [[a, b], ...], where?, columns? }` | `{ ref }`。範囲は結合して 1,000 個まで。範囲と `where` の両方があれば両方に合う行、範囲が空なら `where` の行。`where` に表を読む関数と `*`・`COLUMNS(*)` は使えない。`columns` はファイルの列の順に並べ直し、全部なら `cols=` を付けない |
 
 ファイルが開いたときから変わっていれば `409` と `{ error, changed: true }` を返します。エラー文は core が組み立てたものだけで、エンジンのエラー文は伏せます。

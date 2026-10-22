@@ -126,9 +126,14 @@ describe("Web UI in Chromium", () => {
     expect(decodeURIComponent(filtered)).toContain("cols=id,amount,note&where=region = 'south' AND id <= 40");
     expect(await resolved(filtered)).toEqual(range(0, 9).map((i) => 1 + 4 * i));
 
-    // A row picked among the matches is named by its position.
+    // A row picked among the matches is named by its position; a Shift range keeps the filter, so
+    // the rows it spans that the table hides stay out.
     await row(8).click();
     expect(await resolved(await copy())).toEqual([9]);
+    await row(0).click();
+    await row(8).click({ modifiers: ["Shift"] });
+    expect(await page.textContent("#selection")).toMatch(/^The Ref covers the rows that match the filter within 9 selected positions/);
+    expect(await resolved(await copy())).toEqual([1, 5, 9]);
 
     // A bad filter says why and leaves the rows and the filter that was applied.
     await page.fill("#filter", "amont > 1");
@@ -144,6 +149,36 @@ describe("Web UI in Chromium", () => {
     await page.locator("#keep-all input").check();
     expect(await page.locator("#rows thead th").count()).toBe(6);
     expect(await resolved(await copy())).toHaveLength(1000);
+  });
+
+  it("a filter applied while another is still loading: the newest one wins and paging starts again", async () => {
+    // Another path, so open() waits for this file and not the one already on screen.
+    const path = join(dir, "paging.parquet");
+    copyFileSync(customers, path);
+    await open(path);
+    await page.click("#next");
+    await row(150).waitFor();
+    let first = true;
+    await page.route("**/api/rows", async (route) => {
+      const slow = first;
+      first = false;
+      if (slow) await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue();
+    });
+    try {
+      await page.fill("#filter", "id <= 300");
+      await page.press("#filter", "Enter");
+      await page.fill("#filter", "id <= 5");
+      await page.press("#filter", "Enter");
+      await page.waitForFunction(() => /5 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(await page.locator("#rows tbody tr").count()).toBe(5);
+      expect(await page.textContent("#page")).toBe("rows 1–5 of 5 matching the filter (1000 in the file)");
+      expect(await page.isDisabled("#prev")).toBe(true);
+      expect(await page.getAttribute("#filter", "aria-invalid")).toBeNull();
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+    }
   });
 
   it("6: a click followed at once by another click and Copy copies the newest selection", async () => {

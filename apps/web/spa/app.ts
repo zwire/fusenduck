@@ -180,8 +180,11 @@ function showSelection(): void {
 /** What the Ref covers, in words: which rows, which columns. */
 function covers(opened: Opened): string {
   const columns = kept();
+  const picked = `${count()} selected ${count() === 1 ? "position" : "positions"} (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"})`;
   const which = ranges.length
-    ? `${count()} selected ${count() === 1 ? "row" : "rows"} (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"})`
+    ? filter !== undefined
+      ? `the rows that match the filter within ${picked}`
+      : `${count()} selected ${count() === 1 ? "row" : "rows"} (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"})`
     : filter !== undefined
       ? "the rows that match the filter"
       : "every row";
@@ -196,7 +199,7 @@ function selection(): Selection | undefined {
   if (!ranges.length && filter === undefined && !columns) return undefined;
   return {
     ranges: ranges.map(([a, b]): Range => [a, b]),
-    ...(ranges.length || filter === undefined ? {} : { where: filter }),
+    ...(filter === undefined ? {} : { where: filter }),
     ...(columns ? { columns } : {}),
   };
 }
@@ -219,27 +222,40 @@ function selectionChanged(): void {
       return ref;
     },
     (error: unknown) => {
-      if (mine === seq) say(describe(error), true);
+      if (mine === seq) {
+        refInput.placeholder = "";
+        say(describe(error), true);
+      }
       return undefined;
     },
   );
 }
 
-/** Shows the page at `at` under `where`; false (with the reason said) when it could not be read. */
-async function loadPage(at: number, index: number, where: string | undefined): Promise<boolean> {
-  if (!api || !file) return false;
+/**
+ * Shows the page at `at` under `where`, then `walked` becomes the pages walked so far. "stale" means
+ * a newer load (another page, filter or file) took its place, so nothing changed.
+ */
+async function loadPage(
+  at: number,
+  index: number,
+  where: string | undefined,
+  walked: { at: number; index: number }[],
+): Promise<"shown" | "failed" | "stale"> {
+  if (!api || !file) return "stale";
   const mine = ++pageSeq;
   loading = true;
   try {
     const next = await api.rows(file, at, PAGE_ROWS, where);
-    if (mine !== pageSeq) return false;
+    if (mine !== pageSeq) return "stale";
     page = next;
     filter = where;
+    offsets = walked;
     showRows();
-    return true;
+    return "shown";
   } catch (error) {
-    if (mine === pageSeq) say(describe(error), true);
-    return false;
+    if (mine !== pageSeq) return "stale";
+    say(describe(error), true);
+    return "failed";
   } finally {
     if (mine === pageSeq) loading = false;
   }
@@ -249,10 +265,9 @@ async function applyFilter(text: string): Promise<void> {
   if (!file) return;
   const where = text.trim() || undefined;
   say(where === undefined ? "" : "Filtering…");
-  const walked = offsets;
-  offsets = [{ at: 0, index: 0 }];
-  if (!(await loadPage(0, 0, where))) {
-    offsets = walked;
+  const result = await loadPage(0, 0, where, [{ at: 0, index: 0 }]);
+  if (result === "stale") return;
+  if (result === "failed") {
     filterInput.setAttribute("aria-invalid", "true");
     return;
   }
@@ -278,7 +293,7 @@ async function open(path: string): Promise<void> {
   rowsTable.replaceChildren();
   ranges = [];
   anchor = undefined;
-  offsets = [{ at: 0, index: 0 }];
+  offsets = [];
   filter = undefined;
   hidden = new Set();
   filterInput.value = "";
@@ -287,7 +302,7 @@ async function open(path: string): Promise<void> {
   refInput.value = file.ref;
   latest = Promise.resolve(file.ref);
   showCard(file);
-  await loadPage(0, 0, undefined);
+  await loadPage(0, 0, undefined, [{ at: 0, index: 0 }]);
   showSelection();
   say(file.selectable ? "" : "Rows of this file cannot be selected: see below.");
 }
@@ -356,15 +371,15 @@ $("copy").addEventListener("click", async () => {
 $("next").addEventListener("click", () => {
   if (loading || page?.next == null) return;
   const { index } = offsets.at(-1) ?? { index: 0 };
-  offsets.push({ at: page.next, index: index + page.rows.length });
-  void loadPage(page.next, index + page.rows.length, filter);
+  const at = { at: page.next, index: index + page.rows.length };
+  void loadPage(at.at, at.index, filter, [...offsets, at]);
 });
 
 $("prev").addEventListener("click", () => {
   if (loading || offsets.length < 2) return;
-  offsets.pop();
-  const { at, index } = offsets.at(-1) ?? { at: 0, index: 0 };
-  void loadPage(at, index, filter);
+  const walked = offsets.slice(0, -1);
+  const { at, index } = walked.at(-1) ?? { at: 0, index: 0 };
+  void loadPage(at, index, filter, walked);
 });
 
 // The code in the URL fragment is traded once for the session token, which stays in this tab only.

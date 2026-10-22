@@ -251,11 +251,10 @@ describe("Web UI server: open, rows and ref", () => {
     expect(ids(out)).toEqual(Array.from({ length: 10 }, (_, i) => 1 + 4 * i));
     expect(out).not.toContain('"region"');
 
-    // Selected rows are named by position; the filter they were picked under is not added.
-    const picked = String((await api("/api/ref", { source: file, fingerprint, ranges: [[8, 8]], where, columns: ["id"] })).body.ref);
-    expect(decodeURIComponent(picked)).toContain("cols=id&where=file_row_number = 8");
-    expect(decodeURIComponent(picked)).not.toContain("region");
-    expect(ids(await resolveRef(picked, { roots: [dir] }))).toEqual([9]);
+    // Selected positions under a filter keep the filter: a range spans rows the table hides.
+    const picked = String((await api("/api/ref", { source: file, fingerprint, ranges: [[0, 9]], where, columns: ["id"] })).body.ref);
+    expect(decodeURIComponent(picked)).toContain("cols=id&where=(file_row_number BETWEEN 0 AND 9) AND (\nregion");
+    expect(ids(await resolveRef(picked, { roots: [dir] }))).toEqual([1, 5, 9]);
 
     // Columns alone, and every column (which leaves cols= out).
     const cols = String((await api("/api/ref", { source: file, fingerprint, ranges: [], columns: ["amount"] })).body.ref);
@@ -277,6 +276,11 @@ describe("Web UI server: open, rows and ref", () => {
     expect(typo.status).toBe(400);
     expect(String(typo.body.error)).toMatch(/^filter rejected: .*amont/);
     expect((await ref("amont > 1")).status).toBe(400);
+    // A table function would read the file's bytes while binding; * and COLUMNS(*) mean other columns in a Ref.
+    const table = await rows(`(SELECT count(*) FROM read_json('${file}', records=true, format='array')) = 1`);
+    expect(table.body.error).toBe("filter rejected: a filter may not read a table; use the file's columns");
+    expect((await rows("COLUMNS(*) IS NOT NULL")).body.error).toBe("filter rejected: name the columns instead of * or COLUMNS(*)");
+    expect((await rows("amount * 2 > 1")).status).toBe(200);
     for (const bad of ["id > 1; DROP TABLE t", "id > 1) UNION SELECT * FROM t WHERE (1=1", "id > 1 LIMIT 1", "count(*) > 1", 7, "x".repeat(5000)]) {
       expect((await rows(bad)).status, String(bad)).toBe(400);
       expect((await ref(bad)).status, String(bad)).toBe(400);

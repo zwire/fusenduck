@@ -136,9 +136,12 @@ export class View {
   }
 
   /**
-   * The filter the page sent, checked before it runs: undefined when there is none. The text is the
-   * person's own predicate, so the binder's message about it (a misspelled column, a wrong type) is
-   * shown. Binding reads the schema only, never a row, so that message cannot quote a value.
+   * The filter the page sent, checked before it runs: undefined when there is none. A filter is a
+   * condition on the file's own columns: it may not read a table (a table function such as read_csv
+   * would read the file's bytes while binding) or use * or COLUMNS(*), whose columns differ between
+   * the page and a Ref that names file_row_number. The text is the person's own, so a parser, binder
+   * or catalog error about it (a misspelled column, a wrong type) is shown; those come before any
+   * row is read. Any other error is withheld.
    */
   async #filter(where: unknown): Promise<string | undefined> {
     if (where === undefined || where === null) return undefined;
@@ -147,11 +150,17 @@ export class View {
     if (text === "") return undefined;
     if (text.length > MAX_FILTER_CHARS) throw new FusenError(`a filter may be at most ${MAX_FILTER_CHARS} characters`);
     await checkPredicate(this.#engine, this.#engine.source, text);
+    const parsed = String((await this.#engine.query(`SELECT json_serialize_sql(${lit(`SELECT 1 WHERE (\n${text}\n)`)}) AS j`))[0]?.j);
+    if (parsed.includes('"TABLE_FUNCTION"')) throw new FusenError("filter rejected: a filter may not read a table; use the file's columns");
+    if (parsed.includes('"STAR"')) throw new FusenError("filter rejected: name the columns instead of * or COLUMNS(*)");
     try {
-      await this.#engine.query(`DESCRIBE SELECT 1 FROM read_parquet(${lit(this.#engine.source)}) WHERE (\n${text}\n)`);
+      await this.#engine.query(`DESCRIBE SELECT 1 FROM read_parquet(${lit(this.#engine.source)}) WHERE (\n${text}\n)`, {
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+      });
     } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!.slice(0, 300);
-      throw new FusenError(`filter rejected: ${message}`);
+      const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+      if (!/^(Parser|Binder|Catalog) Error:/.test(message)) throw error;
+      throw new FusenError(`filter rejected: ${message.slice(0, 300)}`);
     }
     return text;
   }
@@ -235,9 +244,8 @@ export class View {
   }
 
   /**
-   * The Ref for what the page shows: the selected rows by position when there are any, else the rows
-   * that pass the filter; only the kept columns. The positions already single out the rows, so the
-   * filter is not added to them.
+   * The Ref for what the page shows: the selected positions, the rows that pass the filter, or both
+   * (a Shift range under a filter spans rows the table hides), and only the kept columns.
    */
   ref(expected: unknown, ranges: unknown, where?: unknown, columns?: unknown): Promise<string> {
     return this.#serial(async () => {
@@ -247,8 +255,10 @@ export class View {
         throw new FusenError("this file has its own column named file_row_number, so rows cannot be selected by position");
       }
       const kept = this.#keep(columns);
-      const filter = picked ? undefined : await this.#filter(where);
-      const predicate = picked || (filter === undefined && kept === undefined) ? rangesPredicate(mergeRanges(ranges, this.opened.card.rows)) : filter;
+      const filter = await this.#filter(where);
+      const positions = picked || (filter === undefined && kept === undefined) ? rangesPredicate(mergeRanges(ranges, this.opened.card.rows)) : undefined;
+      // The filter sits alone on its lines, so a "--" comment in it cannot swallow what follows.
+      const predicate = positions && filter ? `(${positions}) AND (\n${filter}\n)` : (positions ?? filter);
       // Minting compares the file's fingerprint with the one the page was shown.
       return mintRefWith(this.#engine, { where: predicate, columns: kept, expect: this.opened.fingerprint }).catch((error: unknown) => {
         throw error instanceof SourceChanged ? new SourceChanged(CHANGED) : error;
