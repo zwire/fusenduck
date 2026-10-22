@@ -68,11 +68,13 @@ HTTP/1.1 403 Forbidden
 -- B same-origin text/plain with token:
 {"error":"json only"}
 ```
+Note: the iframe line shows only that the evil page could not read the framed document (same-origin policy); it does not show that `frame-ancestors` blocked the frame. That is left to the first slice's acceptance test.
+
 Concluded: A cannot be called from any page as it stands: the Authorization header forces a CORS preflight, and
 the server answers OPTIONS with 401 and no CORS headers. Making it work means adding CORS to the MCP server (an
 allowed-origin list) and getting the token into the page by hand, which widens the agent-facing endpoint for the
 UI's sake. B works from its own origin and refuses every attacker case tried: no token, other origin (with or
-without the token), simple no-cors POST, DNS rebinding, framing, path outside the root.
+without the token), simple no-cors POST, DNS rebinding, path outside the root (framing: see the note above).
 
 ### 2. End to end in Chromium (e2e-B.mjs)
 
@@ -92,7 +94,7 @@ open->table ms: 66 | card header: /home/claude/fusenduck/.scratch/web-ui/data/or
 [page 2 row] where: file_row_number = 150
   resolved ids: [150]  expected: [150]  match: true
 ```
-(open->table over 3 runs: 199, 83, 66, 112 ms; the first includes engine warm-up.)
+(open->table over 4 runs: 199, 83, 66, 112 ms; the first includes engine warm-up.)
 
 Two failures on the way, both real UI hazards:
 - First run: Copy right after a click copied the *previous* Ref (each click mints on the server; the field still
