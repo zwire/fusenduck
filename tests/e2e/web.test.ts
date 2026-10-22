@@ -3,7 +3,7 @@
 // the Ref, and check that resolving it returns exactly the rows that were selected.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { copyFileSync } from "node:fs";
+import { copyFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -16,7 +16,8 @@ const ids = (out: string) => out.split("\n").filter((l) => l.startsWith("{")).ma
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 
 describe("Web UI in Chromium", () => {
-  const dir = tempDir();
+  // The page shows real paths (macOS puts temp files under a symlink).
+  const dir = realpathSync(tempDir());
   const customers = join(dir, "customers.parquet");
   let handle: WebHandle;
   let origin: string;
@@ -123,7 +124,8 @@ describe("Web UI in Chromium", () => {
         expect(await resolved(await copy())).toEqual([61 + i]);
       }
     } finally {
-      await page.unroute("**/api/ref");
+      // The slow mint of row 3 may still be waiting; let it finish before the route goes.
+      await page.unrouteAll({ behavior: "wait" });
     }
   });
 

@@ -68,6 +68,7 @@ let page: Page | undefined;
 // Each selection mints its Ref on the server. Only the newest mint may fill the field, and Copy
 // waits for it, so a click followed at once by Copy never copies the Ref of the selection before.
 let seq = 0;
+let loading = false;
 let latest: Promise<string | undefined> = Promise.resolve(undefined);
 
 function showCard(opened: Opened): void {
@@ -150,11 +151,14 @@ function selectionChanged(): void {
 
 async function loadPage(offset: number): Promise<void> {
   if (!api || !file) return;
+  loading = true;
   try {
     page = await api.rows(file, offset, PAGE_ROWS);
     showRows();
   } catch (error) {
     say(describe(error), true);
+  } finally {
+    loading = false;
   }
 }
 
@@ -167,6 +171,9 @@ async function open(path: string): Promise<void> {
     say(describe(error), true);
     return;
   }
+  // The rows of the previous file must not be clickable against this one.
+  page = undefined;
+  rowsTable.replaceChildren();
   ranges = [];
   anchor = undefined;
   offsets = [0];
@@ -215,13 +222,13 @@ $("copy").addEventListener("click", async () => {
 });
 
 $("next").addEventListener("click", () => {
-  if (page?.next == null) return;
+  if (loading || page?.next == null) return;
   offsets.push(page.next);
   void loadPage(page.next);
 });
 
 $("prev").addEventListener("click", () => {
-  if (offsets.length < 2) return;
+  if (loading || offsets.length < 2) return;
   offsets.pop();
   void loadPage(offsets.at(-1) ?? 0);
 });

@@ -46,6 +46,8 @@ export interface Page {
 
 export type Range = [number, number];
 
+const CHANGED = "the file changed since it was opened. Open it again.";
+
 /** Sorted, merged ranges of positions, checked against the row count. */
 export function mergeRanges(ranges: unknown, rows: number): Range[] {
   if (!Array.isArray(ranges) || ranges.length === 0) throw new FusenError("select at least one row");
@@ -122,7 +124,7 @@ export class View {
 
   async #check(expected: unknown): Promise<void> {
     if (expected !== this.opened.fingerprint || (await fingerprint(this.#engine)) !== this.opened.fingerprint) {
-      throw new SourceChanged("the file changed since it was opened. Open it again.");
+      throw new SourceChanged(CHANGED);
     }
   }
 
@@ -150,8 +152,9 @@ export class View {
         const values = this.#columns.map((_, i) => {
           const v = row[`c${i}`];
           if (v === null || v === undefined) return null;
-          const s = String(v);
-          return s.length > MAX_CELL_CHARS ? `${s.slice(0, MAX_CELL_CHARS)}…` : s;
+          // The engine cut by code points; count them the same way, so a pair is never split.
+          const chars = [...String(v)];
+          return chars.length > MAX_CELL_CHARS ? `${chars.slice(0, MAX_CELL_CHARS).join("")}…` : chars.join("");
         });
         chars += values.reduce((sum, v) => sum + (v?.length ?? 0), 0);
         if (chars > MAX_PAGE_CHARS && page.rows.length > 0) {
@@ -171,9 +174,12 @@ export class View {
       if (!this.opened.selectable) {
         throw new FusenError("this file has its own column named file_row_number, so rows cannot be selected by position");
       }
-      await this.#check(expected);
+      if (expected !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
       const where = rangesPredicate(mergeRanges(ranges, this.opened.card.rows));
-      return mintRefWith(this.#engine, { where, expect: this.opened.fingerprint });
+      // Minting compares the file's fingerprint with the one the page was shown.
+      return mintRefWith(this.#engine, { where, expect: this.opened.fingerprint }).catch((error: unknown) => {
+        throw error instanceof SourceChanged ? new SourceChanged(CHANGED) : error;
+      });
     });
   }
 
