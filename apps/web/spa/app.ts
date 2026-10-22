@@ -18,6 +18,8 @@ const rowsTable = $<HTMLTableElement>("rows");
 const filterInput = $<HTMLInputElement>("filter");
 const whereInput = $<HTMLInputElement>("where");
 const filesList = $<HTMLUListElement>("files");
+const whereError = $<HTMLParagraphElement>("where-error");
+const copyButton = $<HTMLButtonElement>("copy");
 
 function say(message: string, error = false): void {
   status.textContent = message;
@@ -26,24 +28,34 @@ function say(message: string, error = false): void {
 
 const sentence = (message: string) => message.charAt(0).toUpperCase() + message.slice(1);
 const describe = (error: unknown) => (error instanceof ApiError ? sentence(error.message) : "The server could not be reached.");
+/** A count with thousands separators: 200,000 reads at a glance, 200000 does not. */
+const n = (count: number) => count.toLocaleString("en-US");
+const plural = (count: number, one: string, many = `${one}s`) => `${n(count)} ${count === 1 ? one : many}`;
+const NUMERIC = /^(U?(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT)|FLOAT|DOUBLE|DECIMAL)\b/;
+/** Past this many columns the card starts folded, so the rows are in view without scrolling past it. */
+const CARD_OPEN_COLUMNS = 12;
 
 function cell(tag: "td" | "th", text: string | null, className?: string): HTMLElement {
   const el = document.createElement(tag);
   el.textContent = text ?? "NULL";
   if (text === null) el.classList.add("null");
   if (className) el.classList.add(className);
+  // A cell cut by the column width shows its whole text on hover.
+  if (text !== null && text.length > 30) el.title = text;
   return el;
 }
 
-function row(tag: "td" | "th", values: (string | null)[]): HTMLTableRowElement {
+function row(tag: "td" | "th", values: (string | null)[], classes: (string | undefined)[] = []): HTMLTableRowElement {
   const tr = document.createElement("tr");
-  for (const v of values) tr.append(cell(tag, v));
+  values.forEach((v, i) => tr.append(cell(tag, v, classes[i])));
   return tr;
 }
 
 // The selection: sorted ranges of positions that neither overlap nor touch.
 let ranges: Range[] = [];
 let anchor: number | undefined;
+// The row the keyboard is on, as an index into the page.
+let cursor: number | undefined;
 
 const selected = (pos: number) => ranges.some(([a, b]) => a <= pos && pos <= b);
 const count = () => ranges.reduce((n, [a, b]) => n + b - a + 1, 0);
@@ -99,7 +111,14 @@ function checkbox(label: string, checked: boolean, column?: string): HTMLInputEl
 }
 
 function showCard(opened: Opened): void {
-  $("source").textContent = `${opened.source} — ${opened.card.rows} rows`;
+  const slash = Math.max(opened.source.lastIndexOf("/"), opened.source.lastIndexOf("\\"));
+  const name = opened.source.slice(slash + 1);
+  const source = $("source");
+  source.textContent = `${name} — ${plural(opened.card.rows, "row")}`;
+  source.title = opened.source;
+  $("source-dir").textContent = `in ${opened.source.slice(0, slash + 1)}`;
+  document.title = `${name} — fusenduck`;
+  $<HTMLDetailsElement>("card-details").open = opened.card.columns.length <= CARD_OPEN_COLUMNS;
   const table = $<HTMLTableElement>("card");
   const head = row("th", ["column", "type", "min", "max", "null %", "approx_unique", "avg"]);
   const all = document.createElement("th");
@@ -127,42 +146,57 @@ function showColumns(): void {
   const all = $("keep-all").querySelector("input")!;
   all.checked = hidden.size === 0;
   all.indeterminate = hidden.size > 0;
+  showSummary();
+}
+
+function showSummary(): void {
+  if (!file) return;
+  const total = file.card.columns.length;
+  const keep = total - hidden.size;
+  $("card-summary").textContent = `Columns and statistics: ${keep === total ? `all ${plural(total, "column")}` : `${n(keep)} of ${n(total)} columns`} in the Ref`;
 }
 
 function showRows(): void {
   if (!file || !page) return;
   const columns = file.card.columns.map((c) => c.column);
   const shown = columns.map((c) => !hidden.has(c));
+  // Numbers line up on the right, as in a spreadsheet.
+  const classes = file.card.columns.filter((_, i) => shown[i]).map((c) => (NUMERIC.test(c.type) ? "num" : undefined));
   const head = document.createElement("thead");
   head.append(row("th", ["#", ...columns.filter((_, i) => shown[i])]));
   const body = document.createElement("tbody");
   const { at, index } = offsets.at(-1) ?? { at: 0, index: 0 };
   page.rows.forEach((r, i) => {
-    const tr = row("td", r.cells.filter((_, j) => shown[j]));
+    const tr = row("td", r.cells.filter((_, j) => shown[j]), classes);
     tr.prepend(cell("td", String(r.pos ?? at + i), "pos"));
     if (r.pos !== null) {
       tr.dataset.pos = String(r.pos);
       tr.classList.toggle("selected", selected(r.pos));
       tr.setAttribute("aria-selected", String(selected(r.pos)));
     }
+    tr.classList.toggle("cursor", i === cursor);
     body.append(tr);
   });
   rowsTable.replaceChildren(head, body);
   rowsTable.classList.toggle("locked", !file.selectable);
+  // The rows take the keyboard only when they can be selected.
+  if (file.selectable) rowsTable.tabIndex = 0;
+  else rowsTable.removeAttribute("tabindex");
+  rowsTable.setAttribute("aria-multiselectable", String(file.selectable));
   const last = index + page.rows.length;
-  const of = filter === undefined ? `of ${file.card.rows}` : `of ${page.matched} matching the filter (${file.card.rows} in the file)`;
+  const of = filter === undefined ? `of ${n(file.card.rows)}` : `of ${n(page.matched)} matching the filter (${n(file.card.rows)} in the file)`;
   $("page").textContent = page.rows.length
-    ? `rows ${index + 1}–${last} ${of}`
+    ? `rows ${n(index + 1)}–${n(last)} ${of}`
     : filter === undefined
-      ? `no rows (${file.card.rows} in the file)`
-      : `no rows match the filter (${file.card.rows} in the file)`;
+      ? `no rows (${n(file.card.rows)} in the file)`
+      : `no rows match the filter (${n(file.card.rows)} in the file)`;
   $<HTMLButtonElement>("prev").disabled = offsets.length < 2;
   $<HTMLButtonElement>("next").disabled = page.next === null;
   const hiddenNote = hidden.size ? ` ${hidden.size} ${hidden.size === 1 ? "column is" : "columns are"} left out of the Ref and not shown.` : "";
   $("rows-note").textContent =
     `# is the row's position in the file, from 0. Cells longer than ${MAX_CELL_CHARS} characters are cut (marked with …).` +
     hiddenNote +
-    (page.cut ? ` This page stopped at row ${last} because its cells are large; Next goes on from there.` : "");
+    (page.cut ? ` This page stopped at row ${n(last)} because its cells are large; Next goes on from there.` : "");
   $("rows-section").hidden = false;
 }
 
@@ -177,18 +211,52 @@ function showSelection(): void {
     ? " This file has its own column named file_row_number, so rows cannot be selected by position; use the filter instead."
     : ranges.length
       ? ""
-      : " Click a row to select it; Shift+click selects a range, Ctrl/⌘+click adds or removes a row.";
+      : " Click a row to select it; Shift+click selects a range, Ctrl/⌘+click adds or removes a row. In the rows, ↑↓, Shift+↑↓ and Space do the same.";
   $("selection").textContent = `The Ref covers ${covers(file)}.${how}`;
+  $("clear-selection").hidden = ranges.length === 0;
+}
+
+/** Moves the keyboard's row to `index` on the page, keeping it in view. */
+function moveCursor(index: number): void {
+  cursor = index;
+  rowsTable.querySelectorAll("tbody tr").forEach((tr, i) => {
+    tr.classList.toggle("cursor", i === index);
+    if (i === index) tr.scrollIntoView({ block: "nearest" });
+  });
+}
+
+/** Selects the row at `pos` the way a click with these keys would. */
+function pick(pos: number, keys: { shift: boolean; add: boolean }): void {
+  if (keys.shift && anchor !== undefined) {
+    const span: Range = [Math.min(anchor, pos), Math.max(anchor, pos)];
+    ranges = keys.add ? normalize([...ranges, span]) : [span];
+  } else if (keys.add) {
+    ranges = toggle(pos);
+    anchor = pos;
+  } else {
+    ranges = [[pos, pos]];
+    anchor = pos;
+  }
+  say("");
+  selectionChanged();
+}
+
+function clearSelection(): void {
+  if (!ranges.length) return;
+  ranges = [];
+  anchor = undefined;
+  say("");
+  selectionChanged();
 }
 
 /** What the Ref covers, in words: which rows, which columns. */
 function covers(opened: Opened): string {
   const columns = kept();
-  const picked = `${count()} selected ${count() === 1 ? "position" : "positions"} (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"})`;
+  const picked = `${plural(count(), "selected position")} (${plural(ranges.length, "range")})`;
   const which = ranges.length
     ? filter !== undefined
       ? `the rows that match the filter within ${picked}`
-      : `${count()} selected ${count() === 1 ? "row" : "rows"} (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"})`
+      : `${plural(count(), "selected row")} (${plural(ranges.length, "range")})`
     : filter !== undefined
       ? "the rows that match the filter"
       : "every row";
@@ -237,13 +305,15 @@ function selectionChanged(): void {
 
 /**
  * Shows the page at `at` under `where`, then `walked` becomes the pages walked so far. "stale" means
- * a newer load (another page, filter or file) took its place, so nothing changed.
+ * a newer load (another page, filter or file) took its place, so nothing changed. A failure is shown
+ * by `report`.
  */
 async function loadPage(
   at: number,
   index: number,
   where: string | undefined,
   walked: { at: number; index: number }[],
+  report: (error: unknown) => void = (error) => say(describe(error), true),
 ): Promise<"shown" | "failed" | "stale"> {
   if (!api || !file) return "stale";
   const mine = ++pageSeq;
@@ -254,11 +324,12 @@ async function loadPage(
     page = next;
     filter = where;
     offsets = walked;
+    if (cursor !== undefined) cursor = Math.min(cursor, Math.max(page.rows.length - 1, 0));
     showRows();
     return "shown";
   } catch (error) {
     if (mine !== pageSeq) return "stale";
-    say(describe(error), true);
+    report(error);
     return "failed";
   } finally {
     if (mine === pageSeq) loading = false;
@@ -269,17 +340,25 @@ async function applyFilter(text: string): Promise<void> {
   if (!file) return;
   const where = text.trim() || undefined;
   say(where === undefined ? "" : "Filtering…");
-  const result = await loadPage(0, 0, where, [{ at: 0, index: 0 }]);
+  // A mistake in the filter is shown under it, where the eyes are; a changed file goes to the status.
+  const result = await loadPage(0, 0, where, [{ at: 0, index: 0 }], (error) => {
+    if (error instanceof ApiError && !error.changed) {
+      say("");
+      whereError.textContent = describe(error);
+      whereInput.setAttribute("aria-invalid", "true");
+    } else say(describe(error), true);
+  });
   if (result === "stale") return;
-  if (result === "failed") {
-    whereInput.setAttribute("aria-invalid", "true");
-    return;
-  }
+  if (result === "failed") return;
+  whereError.textContent = "";
   whereInput.removeAttribute("aria-invalid");
   // Selected rows may not pass the new filter; start the selection again.
+  const dropped = ranges.length > 0;
   ranges = [];
   anchor = undefined;
-  say(where === undefined ? "" : `${page!.matched} of ${file.card.rows} rows match the filter.`);
+  cursor = undefined;
+  const cleared = dropped ? " The selection was cleared." : "";
+  say(where === undefined ? cleared.trim() : `${n(page!.matched)} of ${n(file.card.rows)} rows match the filter.${cleared}`);
   selectionChanged();
 }
 
@@ -291,10 +370,10 @@ let active = 0;
 
 function size(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
-  let n = bytes;
+  let value = bytes;
   let i = 0;
-  for (; n >= 1024 && i < units.length - 1; i++) n /= 1024;
-  return `${i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
+  for (; value >= 1024 && i < units.length - 1; i++) value /= 1024;
+  return `${i === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`;
 }
 
 function span(className: string, text: string): HTMLSpanElement {
@@ -307,7 +386,7 @@ function span(className: string, text: string): HTMLSpanElement {
 function showFiles(): void {
   if (!listed) return;
   const words = filterInput.value.toLowerCase().split(/\s+/).filter(Boolean);
-  const total = listed.roots.reduce((n, r) => n + r.files.length, 0);
+  const total = listed.roots.reduce((sum, r) => sum + r.files.length, 0);
   const items: HTMLLIElement[] = [];
   let matched = 0;
   shown = [];
@@ -385,13 +464,26 @@ async function loadFiles(): Promise<void> {
   }
 }
 
+/** Why a path did not open, with the folders it may be under when the list knows them. */
+function openFailed(path: string, error: unknown): string {
+  if (!(error instanceof ApiError) || !/^the source is not readable or is outside the allowed roots/.test(error.message)) return describe(error);
+  const roots = listed?.roots.map((r) => r.root);
+  const where = roots?.length ? `the ${roots.length === 1 ? "folder" : "folders"} fusen-web was started with (${roots.join(", ")})` : "the folders fusen-web may read";
+  return `Cannot open ${path}: there is no such file, it cannot be read, or it is outside ${where}.`;
+}
+
 async function open(path: string): Promise<void> {
   if (!api) return;
+  if (path === "") {
+    say("Type the path of a Parquet file, or pick one from the list.", true);
+    pathInput.focus();
+    return;
+  }
   say("Opening…");
   try {
     file = await api.open(path);
   } catch (error) {
-    say(describe(error), true);
+    say(openFailed(path, error), true);
     return;
   }
   // The rows of the previous file must not be clickable against this one.
@@ -399,20 +491,25 @@ async function open(path: string): Promise<void> {
   rowsTable.replaceChildren();
   ranges = [];
   anchor = undefined;
+  cursor = undefined;
   offsets = [];
   filter = undefined;
   hidden = new Set();
   whereInput.value = "";
+  whereError.textContent = "";
   whereInput.removeAttribute("aria-invalid");
   seq += 1;
   refInput.value = file.ref;
   latest = Promise.resolve(file.ref);
   pathInput.value = file.source;
+  $("hint").hidden = true;
+  $("ref-panel").hidden = false;
   showCard(file);
+  showSummary();
   showFiles();
   await loadPage(0, 0, undefined, [{ at: 0, index: 0 }]);
   showSelection();
-  say(file.selectable ? "" : "Rows of this file cannot be selected: see below.");
+  say(file.selectable ? "" : "Rows of this file cannot be selected: see the note above.");
 }
 
 $<HTMLFormElement>("open-form").addEventListener("submit", (event) => {
@@ -469,20 +566,50 @@ document.addEventListener("keydown", (event) => {
 rowsTable.addEventListener("click", (event) => {
   const tr = (event.target as Element).closest<HTMLTableRowElement>("tbody tr[data-pos]");
   if (!tr || !file?.selectable) return;
-  const pos = Number(tr.dataset.pos);
-  if (event.shiftKey && anchor !== undefined) {
-    const span: Range = [Math.min(anchor, pos), Math.max(anchor, pos)];
-    ranges = event.ctrlKey || event.metaKey ? normalize([...ranges, span]) : [span];
-  } else if (event.ctrlKey || event.metaKey) {
-    ranges = toggle(pos);
-    anchor = pos;
-  } else {
-    ranges = [[pos, pos]];
-    anchor = pos;
-  }
-  say("");
-  selectionChanged();
+  moveCursor(tr.sectionRowIndex);
+  pick(Number(tr.dataset.pos), { shift: event.shiftKey, add: event.ctrlKey || event.metaKey });
 });
+
+// The keyboard in the rows: ↑↓ (and Home/End) move and select a row, with Shift they extend the
+// range, with Ctrl/⌘ they only move; Space adds or removes the row, Esc selects none, PageDown and
+// PageUp turn the page, and Ctrl/⌘+C copies the Ref.
+rowsTable.addEventListener("keydown", (event) => {
+  if (!file?.selectable || !page?.rows.length) return;
+  const add = event.ctrlKey || event.metaKey;
+  const last = page.rows.length - 1;
+  const to = (index: number) => {
+    event.preventDefault();
+    moveCursor(index);
+    if (!add || event.shiftKey) pick(page!.rows[index]!.pos!, { shift: event.shiftKey, add });
+  };
+  const here = cursor ?? -1;
+  if (event.key === "ArrowDown") to(Math.min(here + 1, last));
+  else if (event.key === "ArrowUp") to(Math.max(here - 1, 0));
+  else if (event.key === "Home") to(0);
+  else if (event.key === "End") to(last);
+  else if (event.key === " " && cursor !== undefined) {
+    event.preventDefault();
+    pick(page.rows[cursor]!.pos!, { shift: false, add: true });
+  } else if (event.key === "Escape" && ranges.length) {
+    event.preventDefault();
+    clearSelection();
+  } else if (event.key === "PageDown" || event.key === "PageUp") {
+    event.preventDefault();
+    $(event.key === "PageDown" ? "next" : "prev").click();
+  } else if (add && event.key.toLowerCase() === "c" && !event.shiftKey && !event.altKey) {
+    event.preventDefault();
+    copyButton.click();
+  }
+});
+
+// Coming to the rows by Tab puts the keyboard on the first selected row of the page, or the first row.
+rowsTable.addEventListener("focus", () => {
+  if (cursor !== undefined || !page?.rows.length) return;
+  const at = page.rows.findIndex((r) => r.pos !== null && selected(r.pos));
+  moveCursor(Math.max(at, 0));
+});
+
+$("clear-selection").addEventListener("click", clearSelection);
 
 $<HTMLFormElement>("where-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -510,12 +637,22 @@ $("card").addEventListener("change", (event) => {
   selectionChanged();
 });
 
-$("copy").addEventListener("click", async () => {
+let copied: ReturnType<typeof setTimeout> | undefined;
+
+copyButton.addEventListener("click", async () => {
   const ref = await latest;
   if (ref === undefined) return;
   try {
     await (api?.copy ? api.copy(ref) : navigator.clipboard.writeText(ref));
     if (file) say(`Copied the Ref for ${covers(file)}.`);
+    // The button itself answers for a moment, where the click was.
+    copyButton.textContent = "Copied ✓";
+    copyButton.classList.add("done");
+    clearTimeout(copied);
+    copied = setTimeout(() => {
+      copyButton.textContent = "Copy";
+      copyButton.classList.remove("done");
+    }, 1500);
   } catch (error) {
     refInput.select();
     if (api?.copy) return say(`${describe(error).replace(/\.$/, "")}. The Ref is selected in the field, copy it from there.`, true);
@@ -527,6 +664,7 @@ $("next").addEventListener("click", () => {
   if (loading || page?.next == null) return;
   const { index } = offsets.at(-1) ?? { index: 0 };
   const at = { at: page.next, index: index + page.rows.length };
+  if (cursor !== undefined) cursor = 0;
   void loadPage(at.at, at.index, filter, [...offsets, at]);
 });
 
@@ -534,6 +672,7 @@ $("prev").addEventListener("click", () => {
   if (loading || offsets.length < 2) return;
   const walked = offsets.slice(0, -1);
   const { at, index } = walked.at(-1) ?? { at: 0, index: 0 };
+  if (cursor !== undefined) cursor = 0;
   void loadPage(at, index, filter, walked);
 });
 
@@ -558,6 +697,9 @@ async function start(): Promise<void> {
   }
   api = httpApi(token);
   await loadFiles();
+  $("hint").textContent = shown.length
+    ? "Pick a file on the left: type to narrow the list, ↑↓ and Enter to open, / to come back to the filter. Or type a path above."
+    : "Type the path of a Parquet file above and press Enter.";
   (shown.length ? filterInput : pathInput).focus();
 }
 

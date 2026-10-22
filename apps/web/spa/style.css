@@ -3,29 +3,41 @@
   font-family: system-ui, sans-serif;
   font-size: 14px;
 }
+/* The page fills the window: the header (the path, the Ref and Copy) stays in view, and the file
+   list and the main part scroll on their own. */
+html,
 body {
-  margin: 0 16px 24px;
+  height: 100%;
+}
+body {
+  margin: 0;
+  padding: 0 16px;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(14em, 22em) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas: "header header" "files main";
   column-gap: 16px;
+  overflow: hidden;
 }
 body > header {
   grid-area: header;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #8884;
 }
 body > main {
   grid-area: main;
   min-width: 0;
-  overflow-x: auto;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 24px;
 }
 #files-panel {
   grid-area: files;
-  position: sticky;
-  top: 0;
-  align-self: start;
-  max-height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  padding-bottom: 16px;
 }
 #files-panel[hidden] {
   display: none;
@@ -37,14 +49,15 @@ body:has(#files-panel[hidden]) {
 @media (max-width: 720px) {
   body {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr);
     grid-template-areas: "header" "files" "main";
   }
   body:has(#files-panel[hidden]) {
+    grid-template-rows: auto minmax(0, 1fr);
     grid-template-areas: "header" "main";
   }
   #files-panel {
-    position: static;
-    max-height: 40vh;
+    max-height: 30vh;
   }
 }
 .files-bar {
@@ -104,7 +117,7 @@ header form {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-top: 16px;
+  margin-top: 12px;
 }
 .bar {
   display: flex;
@@ -120,7 +133,17 @@ header form {
 .refbar {
   display: flex;
   gap: 8px;
-  margin: 12px 0 4px;
+  align-items: center;
+  margin: 8px 0 0;
+}
+#ref-panel .bar {
+  margin: 4px 0 0;
+}
+#selection {
+  margin: 0;
+}
+#copy.done {
+  color: #2e7d32;
 }
 #ref {
   flex: 1;
@@ -129,8 +152,26 @@ header form {
 #where[aria-invalid="true"] {
   outline: 2px solid #c62828;
 }
-#status.error {
+#status {
+  min-height: 1.2em;
+  margin: 4px 0 0;
+}
+#status.error,
+.error {
   color: #c62828;
+}
+#where-error:empty {
+  display: none;
+}
+#source {
+  margin: 12px 0 0;
+}
+#source-dir {
+  margin: 2px 0 8px;
+  overflow-wrap: anywhere;
+}
+summary {
+  cursor: pointer;
 }
 table {
   border-collapse: collapse;
@@ -147,9 +188,25 @@ td {
   text-overflow: ellipsis;
   font-family: ui-monospace, monospace;
 }
+#rows thead th {
+  position: sticky;
+  top: 0;
+  background: Canvas;
+  box-shadow: inset 0 -1px #8888;
+}
+td.num {
+  text-align: right;
+}
 #rows tbody tr {
   cursor: pointer;
   user-select: none;
+}
+#rows:focus {
+  outline: none;
+}
+#rows:focus tr.cursor {
+  outline: 2px solid #1e88e5;
+  outline-offset: -2px;
 }
 #rows.locked tbody tr {
   cursor: default;
@@ -169,6 +226,8 @@ td.pos {
   color: #888;
 }
 nav {
+  position: sticky;
+  left: 0;
   display: flex;
   gap: 8px;
   align-items: center;
