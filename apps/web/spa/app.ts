@@ -174,6 +174,7 @@ function showRows(): void {
       tr.classList.toggle("selected", selected(r.pos));
       tr.setAttribute("aria-selected", String(selected(r.pos)));
     }
+    tr.id = `row-${i}`;
     tr.classList.toggle("cursor", i === cursor);
     body.append(tr);
   });
@@ -183,6 +184,8 @@ function showRows(): void {
   if (file.selectable) rowsTable.tabIndex = 0;
   else rowsTable.removeAttribute("tabindex");
   rowsTable.setAttribute("aria-multiselectable", String(file.selectable));
+  if (cursor === undefined) rowsTable.removeAttribute("aria-activedescendant");
+  else rowsTable.setAttribute("aria-activedescendant", `row-${cursor}`);
   const last = index + page.rows.length;
   const of = filter === undefined ? `of ${n(file.card.rows)}` : `of ${n(page.matched)} matching the filter (${n(file.card.rows)} in the file)`;
   $("page").textContent = page.rows.length
@@ -223,6 +226,7 @@ function moveCursor(index: number): void {
     tr.classList.toggle("cursor", i === index);
     if (i === index) tr.scrollIntoView({ block: "nearest" });
   });
+  rowsTable.setAttribute("aria-activedescendant", `row-${index}`);
 }
 
 /** Selects the row at `pos` the way a click with these keys would. */
@@ -278,6 +282,7 @@ function selection(): Selection | undefined {
 
 function selectionChanged(): void {
   showSelection();
+  copyDone(false);
   if (!api || !file) return;
   const mine = ++seq;
   const wanted = selection();
@@ -346,7 +351,12 @@ async function applyFilter(text: string): Promise<void> {
       say("");
       whereError.textContent = describe(error);
       whereInput.setAttribute("aria-invalid", "true");
-    } else say(describe(error), true);
+    } else {
+      // Not about the filter: an older mistake shown under it no longer applies.
+      whereError.textContent = "";
+      whereInput.removeAttribute("aria-invalid");
+      say(describe(error), true);
+    }
   });
   if (result === "stale") return;
   if (result === "failed") return;
@@ -596,7 +606,8 @@ rowsTable.addEventListener("keydown", (event) => {
   } else if (event.key === "PageDown" || event.key === "PageUp") {
     event.preventDefault();
     $(event.key === "PageDown" ? "next" : "prev").click();
-  } else if (add && event.key.toLowerCase() === "c" && !event.shiftKey && !event.altKey) {
+  } else if (add && event.key.toLowerCase() === "c" && !event.shiftKey && !event.altKey && (getSelection()?.isCollapsed ?? true)) {
+    // Text selected by hand (a column name, say) copies as usual.
     event.preventDefault();
     copyButton.click();
   }
@@ -639,6 +650,14 @@ $("card").addEventListener("change", (event) => {
 
 let copied: ReturnType<typeof setTimeout> | undefined;
 
+/** "Copied ✓" on the button for a moment; it goes as soon as the Ref changes. */
+function copyDone(on: boolean): void {
+  clearTimeout(copied);
+  copyButton.textContent = on ? "Copied ✓" : "Copy";
+  copyButton.classList.toggle("done", on);
+  if (on) copied = setTimeout(() => copyDone(false), 1500);
+}
+
 copyButton.addEventListener("click", async () => {
   const ref = await latest;
   if (ref === undefined) return;
@@ -646,13 +665,7 @@ copyButton.addEventListener("click", async () => {
     await (api?.copy ? api.copy(ref) : navigator.clipboard.writeText(ref));
     if (file) say(`Copied the Ref for ${covers(file)}.`);
     // The button itself answers for a moment, where the click was.
-    copyButton.textContent = "Copied ✓";
-    copyButton.classList.add("done");
-    clearTimeout(copied);
-    copied = setTimeout(() => {
-      copyButton.textContent = "Copy";
-      copyButton.classList.remove("done");
-    }, 1500);
+    copyDone(true);
   } catch (error) {
     refInput.select();
     if (api?.copy) return say(`${describe(error).replace(/\.$/, "")}. The Ref is selected in the field, copy it from there.`, true);
@@ -664,16 +677,20 @@ $("next").addEventListener("click", () => {
   if (loading || page?.next == null) return;
   const { index } = offsets.at(-1) ?? { index: 0 };
   const at = { at: page.next, index: index + page.rows.length };
-  if (cursor !== undefined) cursor = 0;
-  void loadPage(at.at, at.index, filter, [...offsets, at]);
+  // The keyboard's row goes to the top of the new page, once it is shown.
+  void loadPage(at.at, at.index, filter, [...offsets, at]).then((result) => {
+    if (result === "shown" && cursor !== undefined) moveCursor(0);
+  });
 });
 
 $("prev").addEventListener("click", () => {
   if (loading || offsets.length < 2) return;
   const walked = offsets.slice(0, -1);
   const { at, index } = walked.at(-1) ?? { at: 0, index: 0 };
-  if (cursor !== undefined) cursor = 0;
-  void loadPage(at, index, filter, walked);
+  // Going back, the keyboard's row goes to the bottom of the page before.
+  void loadPage(at, index, filter, walked).then((result) => {
+    if (result === "shown" && cursor !== undefined && page) moveCursor(page.rows.length - 1);
+  });
 });
 
 // The code in the URL fragment is traded once for the session token, which stays in this tab only.

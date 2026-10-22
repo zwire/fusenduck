@@ -393,6 +393,29 @@ describe("Web UI in Chromium", () => {
     expect(await page.locator("#rows tbody tr").first().locator("td").nth(1).evaluate((td) => getComputedStyle(td).textAlign)).toBe("right");
   });
 
+  it("Ctrl/⌘+C with text selected by hand copies that text, not the Ref; PageUp lands on the last row", async () => {
+    await page.locator("#rows thead th").nth(1).dblclick();
+    await page.keyboard.press("ControlOrMeta+c");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("id");
+    await page.evaluate(() => getSelection()?.removeAllRanges());
+    await page.focus("#rows");
+    await page.keyboard.press("PageUp");
+    await row(99).waitFor();
+    await expect.poll(() => page.locator("#rows tr.cursor").getAttribute("data-pos")).toBe("99");
+    expect(await page.getAttribute("#rows", "aria-activedescendant")).toBe("row-99");
+  });
+
+  it("on a short window the whole page scrolls, so the rows are never a sliver", async () => {
+    const size = page.viewportSize()!;
+    await page.setViewportSize({ width: 600, height: 300 });
+    try {
+      expect((await page.locator("main").boundingBox())!.height).toBeGreaterThan(300);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight > innerHeight)).toBe(true);
+    } finally {
+      await page.setViewportSize(size);
+    }
+  });
+
   it("a wide file starts with its card folded, and a large count reads with separators", async () => {
     const path = join(dir, "wide.parquet");
     const connection = await (await DuckDBInstance.create(":memory:")).connect();

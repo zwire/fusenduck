@@ -55,5 +55,6 @@ td.pos {
   color: var(--vscode-errorForeground);
 }
 #copy.done {
-  color: var(--vscode-button-foreground);
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
 }
