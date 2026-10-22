@@ -3,7 +3,7 @@
 // the Ref, and check that resolving it returns exactly the rows that were selected.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { copyFileSync, realpathSync } from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -203,6 +203,45 @@ describe("Web UI in Chromium", () => {
     const ref = await copy();
     expect(decodeURIComponent(ref)).not.toContain("where=");
     expect(await resolved(ref)).toEqual(range(0, 19));
+  });
+
+  it("lists the Parquet files under the root; the filter, the arrow keys and Enter open one, and so does a click", async () => {
+    // Listed when the page started, before the other tests wrote their files.
+    expect(await page.locator("#files li[data-index]").allTextContents()).toEqual([expect.stringMatching(/^customers\.parquet\d/)]);
+
+    mkdirSync(join(dir, "sales/2026"), { recursive: true });
+    await writeCustomers(join(dir, "sales/2026/q1.parquet"), 30);
+    await writeCustomers(join(dir, "sales/2026/q2.parquet"), 40);
+    // A file name is untrusted too: it must show as text.
+    await writeCustomers(join(dir, `${HOSTILE_CELLS[0]!.replaceAll("/", "")}.parquet`), 5);
+    await page.click("#reload");
+    await page.waitForFunction(() => /q2\.parquet/.test(document.getElementById("files")?.textContent ?? ""));
+    expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+
+    // "/" jumps to the filter; every word typed must appear in the path.
+    await page.locator("#rows tbody tr").first().click();
+    await page.keyboard.press("/");
+    await page.keyboard.type("sales q");
+    expect(await page.locator("#files li[data-index] .name").allTextContents()).toEqual(["q1.parquet", "q2.parquet"]);
+    expect(await page.textContent("#files-note")).toMatch(/^2 of \d+ files\.$/);
+    // The extension is not matched: "q" alone narrows to the same two files.
+    await page.fill("#filter", "q");
+    expect(await page.locator("#files li[data-index] .name").allTextContents()).toEqual(["q1.parquet", "q2.parquet"]);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => / — 40 rows$/.test(document.getElementById("source")?.textContent ?? ""));
+    expect(await page.inputValue("#path")).toBe(join(dir, "sales/2026/q2.parquet"));
+    expect(await page.textContent("#files li.current .name")).toBe("q2.parquet");
+    await page.waitForSelector("#rows tbody tr");
+    expect(await resolved(await copy())).toEqual(range(1, 40));
+
+    await page.click("#files li[data-index]:first-child");
+    await page.waitForFunction(() => / — 30 rows$/.test(document.getElementById("source")?.textContent ?? ""));
+
+    await page.fill("#filter", "nothing-like-this");
+    expect(await page.textContent("#files-note")).toBe("No file matches the filter.");
+    await page.press("#filter", "Escape");
+    expect(await page.inputValue("#filter")).toBe("");
   });
 
   it("logged no CSP violation on its own page", () => {
