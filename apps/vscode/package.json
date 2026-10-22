@@ -1,0 +1,38 @@
+{
+  "name": "fusenduck",
+  "displayName": "fusenduck",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Open a Parquet file, select rows and copy a Ref an agent can resolve.",
+  "publisher": "fusenduck",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Data Science", "Other"],
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "fusenduck.parquet",
+        "displayName": "fusenduck",
+        "selector": [{ "filenamePattern": "*.parquet" }],
+        "priority": "default"
+      }
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p webview",
+    "build": "node build.ts"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "1.5.6-r.1"
+  },
+  "devDependencies": {
+    "@fusenduck/core": "workspace:*",
+    "@fusenduck/web": "workspace:*",
+    "@types/vscode": "~1.95.0",
+    "esbuild": "^0.25.0"
+  }
+}

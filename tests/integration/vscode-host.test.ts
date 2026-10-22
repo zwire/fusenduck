@@ -1,0 +1,144 @@
+import { copyFileSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveRef } from "@fusenduck/core";
+import { Host, type Reply } from "../../apps/vscode/src/host.ts";
+import { csp, webviewPage } from "../../apps/vscode/src/html.ts";
+import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
+import { writeOwnPositionColumn } from "../helpers/web.ts";
+
+const ids = (out: string) => out.split("\n").filter((l) => l.startsWith("{")).map((l) => Number((JSON.parse(l) as { id: string }).id));
+
+describe("VS Code extension host: the webview's messages (docs/adr/0002)", () => {
+  const dir = realpathSync(tempDir());
+  const file = join(dir, "customers.parquet");
+  const copied: string[] = [];
+  const logged: unknown[] = [];
+  let host: Host;
+  let id = 0;
+  const send = (method: string, params?: Record<string, unknown>) => host.handle({ id: ++id, method, params });
+  const result = async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
+    const reply = (await send(method, params)) as Reply;
+    if ("error" in reply) throw new Error(reply.error);
+    return reply.result as T;
+  };
+  const make = (path: string) =>
+    new Host({ path, roots: [dir], copy: async (text) => void copied.push(text), log: (error) => void logged.push(error) });
+
+  beforeAll(async () => {
+    await writeCustomers(file, 1000);
+    host = make(file);
+  });
+
+  afterAll(async () => {
+    await host.close();
+  });
+
+  it("tells the page its file, opens it, pages rows and mints a Ref that resolves to the selection", async () => {
+    expect(await result("init")).toEqual({ path: file });
+    const opened = await result<{ source: string; fingerprint: string; ref: string; selectable: boolean }>("open", { path: file });
+    expect(opened.source).toBe(file);
+    expect(opened.selectable).toBe(true);
+    const page = await result<{ rows: { pos: number }[]; next: number }>("rows", { source: file, fingerprint: opened.fingerprint, offset: 100, limit: 5 });
+    expect(page.rows.map((r) => r.pos)).toEqual([100, 101, 102, 103, 104]);
+    expect(page.next).toBe(105);
+    const ref = await result<string>("ref", { source: file, fingerprint: opened.fingerprint, ranges: [[7, 7], [10, 12]] });
+    expect(ids(await resolveRef(ref, { roots: [dir] }))).toEqual([8, 11, 12, 13]);
+    expect(await result("copy", { text: ref })).toBeNull();
+    expect(copied.at(-1)).toBe(ref);
+  });
+
+  it("opens only the file of its own editor", async () => {
+    const other = join(dir, "other.parquet");
+    copyFileSync(file, other);
+    expect(await send("open", { path: other })).toEqual({ id, error: "this editor shows one file only; open others from the explorer", changed: false });
+  });
+
+  it("puts only a Ref on the clipboard", async () => {
+    const before = copied.length;
+    expect(await send("copy", { text: "rm -rf /" })).toEqual({ id, error: "only a Ref can be copied", changed: false });
+    expect(copied).toHaveLength(before);
+  });
+
+  it("ignores messages that are not requests, and refuses malformed arguments with core's message", async () => {
+    for (const message of [null, "open", { id: "1", method: "init" }, { id: 1, method: "eval" }, { id: 1, method: "init", params: [] }]) {
+      expect(await host.handle(message)).toBeUndefined();
+    }
+    const { fingerprint } = await result<{ fingerprint: string }>("open", { path: file });
+    const reply = await send("ref", { source: file, fingerprint, ranges: [[5, 2000]] });
+    expect(reply).toEqual({ id, error: "a range must lie within positions 0 to 999", changed: false });
+  });
+
+  it("says the file changed instead of selecting other rows, and a reload reads it again", async () => {
+    const path = join(dir, "changing.parquet");
+    copyFileSync(file, path);
+    const changing = make(path);
+    try {
+      const first = await changing.handle({ id: 1, method: "open", params: { path } });
+      const { fingerprint } = (first as { result: { fingerprint: string } }).result;
+      await writeCustomers(path, 1001);
+      expect(await changing.handle({ id: 2, method: "ref", params: { source: path, fingerprint, ranges: [[7, 7]] } })).toEqual({
+        id: 2,
+        error: "the file changed since it was opened. Open it again.",
+        changed: true,
+      });
+      const again = (await changing.handle({ id: 3, method: "open", params: { path } })) as { result: { card: { rows: number } } };
+      expect(again.result.card.rows).toBe(1001);
+    } finally {
+      await changing.close();
+    }
+    expect(await changing.handle({ id: 4, method: "init" })).toEqual({ id: 4, error: "this editor was closed", changed: false });
+  });
+
+  it("a file with its own file_row_number column opens, but its rows cannot be selected", async () => {
+    const path = join(dir, "own.parquet");
+    await writeOwnPositionColumn(path);
+    const own = make(path);
+    try {
+      const opened = (await own.handle({ id: 1, method: "open", params: { path } })) as { result: { selectable: boolean; fingerprint: string } };
+      expect(opened.result.selectable).toBe(false);
+      const ref = await own.handle({ id: 2, method: "ref", params: { source: path, fingerprint: opened.result.fingerprint, ranges: [[1, 1]] } });
+      expect(ref).toMatchObject({ error: expect.stringMatching(/own column named file_row_number/) });
+    } finally {
+      await own.close();
+    }
+    expect(logged).toEqual([]);
+  });
+});
+
+describe("VS Code webview page: the Web UI's page with a webview CSP", () => {
+  const template = readFileSync(join(import.meta.dirname, "../../apps/web/spa/index.html"), "utf8");
+  const source = "https://file+.vscode-resource.vscode-cdn.net";
+  const html = webviewPage({
+    template,
+    cspSource: source,
+    nonce: "n0nce",
+    script: `${source}/ext/dist/webview.js`,
+    styles: [`${source}/ext/dist/style.css`, `${source}/ext/dist/vscode.css`],
+  });
+
+  it("loads scripts only with its nonce, files only from the extension, and fetches nothing", () => {
+    expect(csp(source, "n0nce")).toBe(
+      `default-src 'none'; script-src 'nonce-n0nce'; style-src ${source}; img-src ${source}; ` +
+        "connect-src 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'",
+    );
+    expect(html).toContain(`<meta http-equiv="Content-Security-Policy" content="${csp(source, "n0nce").replaceAll("&", "&amp;")}" />`);
+    // The CSP is the first thing in <head>, before any stylesheet or script.
+    expect(html.indexOf("Content-Security-Policy")).toBeLessThan(html.indexOf("<link"));
+    expect(html).toContain(`<script type="module" nonce="n0nce" src="${source}/ext/dist/webview.js"></script>`);
+    expect(html.match(/<script/g)).toHaveLength(1);
+    expect(html).not.toMatch(/src="app\.js"|href="style\.css"/);
+  });
+
+  it("marks the page as hosted, so the SPA waits for the webview's Api", () => {
+    expect(html).toContain('<html lang="en" data-host="vscode">');
+    // The Web UI's markup is reused as it is.
+    expect(html).toContain('<form id="open-form">');
+  });
+
+  it("fails loudly when the Web UI's page no longer has a tag it swaps", () => {
+    expect(() => webviewPage({ template: template.replace('src="app.js"', 'src="main.js"'), cspSource: source, nonce: "n", script: "s", styles: [] })).toThrow(
+      /index\.html/,
+    );
+  });
+});

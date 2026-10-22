@@ -184,6 +184,20 @@ fusen-web --root /path/to/data
 - 同じ利用者の権限で動く他のプロセス(ブラウザ拡張を含む)は守りの外です。
 - Web UI の API は内部用で、契約ではありません(予告なく変わります)。
 
+### VS Code 拡張
+
+同じ画面を VS Code の中で使えます(`apps/vscode`)。エクスプローラーで `.parquet` ファイルを開くと、カードと表のエディターが開き、選び方と Copy は Web UI と同じです。Copy した Ref は VS Code のクリップボードに入ります。
+
+```sh
+pnpm build                                              # 初回だけ(拡張を apps/vscode/dist に出す)
+code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を読み込んだ VS Code を開く
+```
+
+- ファイルが変わったら、上の Reload で読み直します。
+- 拡張はポートを開きません。画面(webview)は拡張のホストとメッセージでだけやり取りし、エンジンが読めるのは開いたファイルのフォルダーだけです。
+- webview の CSP は、スクリプトをページごとの nonce 付きのものだけ、スタイルと画像を拡張自身のファイルだけに絞り、通信(`connect-src`)をすべて止め、`require-trusted-types-for 'script'` を付けています。
+- Marketplace や Open VSX にはまだ出していません。
+
 ## 10. 読み取り専用の守り
 
 読み取り専用は SQL の文字列検査ではなく、DuckDB の設定で強制しています。ソースを開いた直後に、開くファイルだけを許す `allowed_paths`、外部アクセスの禁止、ディスクへの書き出し(スピル)の無効化、設定の固定(`lock_configuration`)を必ずかけます。DuckDB はスピル先のディレクトリ(既定は作業ディレクトリの `.tmp`)を外部アクセスの禁止中でも読み書きさせるため、スピルは使いません。開いたファイル以外の読み取り、`COPY TO`、`ATTACH`、設定の解除がどれも拒否されることを、セキュリティテスト(`pnpm test:security`)で毎回確かめています。
@@ -197,14 +211,14 @@ fusen-web --root /path/to/data
 | lint | `pnpm lint` | ESLint(typescript-eslint) |
 | Ref の凍結コーパス | `pnpm contract:check` | `tests/contract/refs/` の Ref が、同じ項目に読めて同じ文字列に戻ること。エージェントがすでに持っている Ref を壊す変更はここで落ちる |
 | bench | `pnpm bench` | 100 万行の Parquet で、カード作成 1 秒以内、カード描画と 11 行の描画が各 1,000 トークン以内。Web UI は開く 1 秒、100 行のページ 0.2 秒、Ref の作成 0.1 秒、SPA 50KB 以内(`bench/budgets.json`)。超えたら exit 1 |
-| ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる |
+| ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI と VS Code 拡張の webview を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる(webview は拡張のホストの処理につなぐが、VS Code 本体は起動しない) |
 | CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench とブラウザのテストは Linux で回し、bench の表をジョブのサマリーに出す |
 
 ## まだできないこと
 
 - Parquet 以外のソース(CSV、データベース、S3/HTTP)。
 - ファイルを移動したあとの Ref の解決。
-- npm への公開、`fusen` コマンドとしてのインストール、エディタ拡張。
+- npm への公開、`fusen` コマンドとしてのインストール、VS Code 拡張の公開(いまは開発用に読み込むだけ)。
 - Web UI での列の選択、述語の入力、クエリ付き Ref、ファイルの一覧(いまはパスの入力だけ)。
 - 契約(Ref の文法、MCP ツールの形)のリファレンスをスキーマから生成すること。いまはこのガイドが手書きの説明です。
 

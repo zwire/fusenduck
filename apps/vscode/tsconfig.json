@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // build.ts runs on Node by stripping types, which cannot handle parameter properties or enums.
+    "erasableSyntaxOnly": true,
+    "types": ["node", "vscode"]
+  },
+  "include": ["src", "build.ts"]
+}
