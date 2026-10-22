@@ -141,11 +141,14 @@ describe("hand-built Refs and limits", () => {
     expect(r.stdout).toContain("longer than 2000 characters are cut");
   });
 
-  it("a query that needs far more memory than the engine may hold fails without a crash", () => {
-    const ref = run("ref", file, "--query", "SELECT repeat('x', 900000000) AS s");
-    const r = ref.status === 0 ? run("resolve", ref.stdout.trim(), "--root", dir) : ref;
-    expect(r.status).toBe(1);
-    expect(r.stdout).toBe("");
+  it("a query that needs far more memory than the engine may hold does not crash: its row is not read", () => {
+    const ref = run("ref", file, "--query", "SELECT repeat('x', 600000000) AS s");
+    expect(ref.status, ref.stderr).toBe(0);
+    const r = run("resolve", ref.stdout.trim(), "--root", dir);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain("xxxx");
+    expect(r.stdout).toContain("OMITTED: 1 of 1 rows are not shown");
+    expect(r.stdout).toMatch(/rows past \d+ bytes are not read/);
   });
 });
 

@@ -22,6 +22,12 @@ export const MAX_PEEK_ROWS = 50;
  */
 export const MAX_AMBIGUITY_ROWS = 10_000;
 
+/**
+ * Rows are read from the engine only up to this many bytes (each row measured as text). Rendering
+ * cuts long cells, but only after the rows are in memory, and a query can make a cell of any size.
+ */
+export const MAX_FETCH_BYTES = 8 * 1024 * 1024;
+
 export class CostExceeded extends FusenError {}
 
 export async function mintRef(
@@ -72,8 +78,24 @@ export async function resolveRef(
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
   const total = Number((await engine.query(`SELECT count(*)::VARCHAR AS n FROM (${selection})`, { timeoutMs }))[0]?.n ?? 0);
-  const rows = await engine.query(`${selection} LIMIT ${limit}`, { timeoutMs });
-  return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs));
+  const fit = await rowsWithin(engine, selection, limit, timeoutMs);
+  const rows = await engine.query(`${selection} LIMIT ${fit}`, { timeoutMs });
+  const budget = fit < Math.min(limit, total) ? MAX_FETCH_BYTES : undefined;
+  return renderRows(ref, rows, total, await countCopies(engine, ref, selection, total, timeoutMs), budget);
+}
+
+/** How many of the first `limit` rows fit in MAX_FETCH_BYTES. The sizes are measured in the engine, under the clock. */
+async function rowsWithin(engine: Engine, selection: string, limit: number, timeoutMs: number): Promise<number> {
+  // One size per cell; a text cell's size is read without copying it.
+  const sizes = await engine.query(`SELECT strlen(CAST(COLUMNS(*) AS VARCHAR)) FROM (${selection} LIMIT ${limit})`, { timeoutMs });
+  let bytes = 0;
+  let fit = 0;
+  for (const row of sizes) {
+    bytes += Object.values(row).reduce<number>((sum, n) => sum + Number(n ?? 0), 0);
+    if (bytes > MAX_FETCH_BYTES) break;
+    fit += 1;
+  }
+  return fit;
 }
 
 /**
