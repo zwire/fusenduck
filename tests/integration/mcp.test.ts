@@ -48,7 +48,7 @@ describe("MCP adapter over stdio", () => {
   it("fusen_ref shows the agent its own misspelled column, but not an engine error from reading rows", async () => {
     const bad = await call("fusen_ref", { path: file, where: "regon = 'south'" });
     expect(bad.isError).toBe(true);
-    expect(bad.text).toBe('fusen error: selection rejected: Binder Error: Referenced column "regon" not found in FROM clause! A text value goes in single quotes, as in region = \'south\'.');
+    expect(bad.text).toBe('fusen error: selection rejected: Binder Error: Referenced column "regon" not found in FROM clause! If regon is a text value, put it in single quotes: \'regon\'.');
     const ref = (await call("fusen_ref", { path: file, where: "CAST(note AS INTEGER) = 1" })).text;
     const cast = await call("fusen_resolve", { ref });
     expect(cast.isError).toBe(true);

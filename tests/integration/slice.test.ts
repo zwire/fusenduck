@@ -163,11 +163,16 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toBe(
       'fusen: selection rejected: Binder Error: Referenced column "south" not found in FROM clause! ' +
-        "A text value goes in single quotes, as in region = 'south'.\n",
+        "If south is a text value, put it in single quotes: 'south'.\n",
     );
     expect(run("ref", file, "--query", "SELECT regoin FROM data").stderr).toContain('Referenced column "regoin" not found');
     // A failure while rows are read can quote a cell, so it stays withheld.
-    expect(run("ref", file, "--where", "CAST(note AS INTEGER) = 1").status).toBe(0);
+    const cast = run("ref", file, "--where", "CAST(note AS INTEGER) = 1");
+    expect(cast.status).toBe(0);
+    const read = resolve(dir, cast.stdout.trim());
+    expect(read.status).toBe(1);
+    expect(read.stderr).toContain("Details are withheld");
+    expect(read.stderr).not.toContain("note ");
   });
 
   it("says plainly that a file to open is missing", () => {

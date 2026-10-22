@@ -30,8 +30,9 @@ export async function planned<T>(what: string, plan: () => Promise<T>): Promise<
     if (error instanceof FusenError) throw error;
     const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
     if (!/^(Parser|Binder|Catalog) Error:/.test(message)) throw error;
-    // "region = south" names a column south; the fix is quoting the value.
-    const hint = /^Binder Error: Referenced column ".*" not found/.test(message) ? " A text value goes in single quotes, as in region = 'south'." : "";
+    // "region = south" names a column south; the fix may be quoting the value, or the name is misspelled.
+    const missing = /^Binder Error: Referenced column "(.*)" not found/.exec(message)?.[1];
+    const hint = missing === undefined ? "" : ` If ${missing} is a text value, put it in single quotes: '${missing.replaceAll("'", "''")}'.`;
     throw new FusenError(`${what} rejected: ${message.slice(0, 300)}${hint}`);
   }
 }

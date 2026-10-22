@@ -218,7 +218,7 @@ code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を�
 | lint | `pnpm lint` | ESLint(typescript-eslint) |
 | Ref の凍結コーパス | `pnpm contract:check` | `tests/contract/refs/` の Ref が、同じ項目に読めて同じ文字列に戻ること。エージェントがすでに持っている Ref を壊す変更はここで落ちる |
 | bench | `pnpm bench` | 100 万行の Parquet で、カード作成 1 秒以内、カード描画と 11 行の描画が各 1,000 トークン以内。Web UI は開く 1 秒、100 行のページ 0.2 秒、Ref の作成 0.1 秒、SPA 50KB 以内(`bench/budgets.json`)。超えたら exit 1 |
-| 再現性 | `pnpm repro:check` | HEAD のきれいな clone が lockfile から入り、ビルドでき、同じフィクスチャを同じバイトで書き、golden の Ref を同じ文字列に解決すること。結果の表は `.scratch/repro/report.md`(CI ではジョブのサマリー) |
+| 再現性 | `pnpm repro:check` | HEAD のきれいな clone が lockfile から入り、ビルドでき、同じフィクスチャを同じバイトで書き、ここで作った golden の Ref を同じ文字列に解決すること(同じマシンの上での比較で、マシン間の比較ではない)。結果の表は `.scratch/repro/report.md`(CI ではジョブのサマリー) |
 | 契約リファレンス | `pnpm docs:reference` | `docs/reference/mcp-tools.md` を MCP ツールのスキーマから作り直す。古いままだと `pnpm test` が落ちる |
 | ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI と VS Code 拡張の webview を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる(webview は拡張のホストの処理につなぐが、VS Code 本体は起動しない) |
 | CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench、ブラウザのテスト、repro:check は Linux で回し、bench と repro:check の表をジョブのサマリーに出す |

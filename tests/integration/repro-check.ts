@@ -1,7 +1,10 @@
 // Reproducibility check: a clean clone of HEAD installs from the lockfile, builds, writes the same
 // fixtures byte for byte, and the CLI mints and resolves the golden Refs to identical text.
 // Run: pnpm repro:check [--out <file>]   (the report also goes to stdout; default .scratch/repro/report.md)
-// The clone is of HEAD, so commit first: uncommitted changes are not in it.
+// The clone is of HEAD, so commit first: uncommitted changes are not in it. The clone resolves the
+// Refs minted here (not its own), so a Ref carried to a fresh install reads the same rows. Both
+// sides run on this machine, so this shows a clean install from the lockfile is deterministic; it
+// does not compare machines. The CLI runs from source; the build is checked because the Web UI needs it.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -17,8 +20,11 @@ interface Golden {
   outputs: { args: string[]; status: number | null; stdout: string; stderr: string }[];
 }
 
-/** Writes the fixtures into `dir` and runs the golden commands through this tree's CLI. */
-async function golden(dir: string): Promise<Golden> {
+/**
+ * Writes the fixtures into `dir` and runs the golden commands through this tree's CLI. With `refs`
+ * (the Refs another tree minted), it resolves those instead of its own.
+ */
+async function golden(dir: string, refs?: string[]): Promise<Golden> {
   const file = join(dir, "customers.parquet");
   await writeCustomers(file, 1000);
   const cli = join(root, "packages/cli/src/index.ts");
@@ -34,10 +40,10 @@ async function golden(dir: string): Promise<Golden> {
     ["--where", "file_row_number BETWEEN 3 AND 5"],
   ];
   const outputs = [run("card", file), run("peek", file, "--rows", "3")];
-  for (const selection of selections) {
+  selections.forEach((selection, i) => {
     const minted = run("ref", file, ...selection);
-    outputs.push(minted, run("resolve", minted.stdout.trim(), "--limit", "50"));
-  }
+    outputs.push(minted, run("resolve", refs?.[i] ?? minted.stdout.trim(), "--limit", "50"));
+  });
   const fixtures = { "customers.parquet": createHash("sha256").update(readFileSync(file)).digest("hex") };
   return { fixtures, outputs };
 }
@@ -48,11 +54,12 @@ function sh(command: string, args: string[], cwd: string): void {
   if (r.status !== 0) throw new Error(`${command} ${args.join(" ")} failed in ${cwd} (exit ${r.status}):\n${r.stderr || r.stdout}`);
 }
 
-const { values } = parseArgs({ options: { golden: { type: "string" }, out: { type: "string" } } });
+const { values } = parseArgs({ options: { golden: { type: "string" }, refs: { type: "string" }, out: { type: "string" } } });
 
 if (values.golden) {
   // The clone's own copy of this script, run by the check below.
-  process.stdout.write(JSON.stringify(await golden(values.golden)));
+  const refs = values.refs === undefined ? undefined : (JSON.parse(readFileSync(values.refs, "utf8")) as string[]);
+  process.stdout.write(JSON.stringify(await golden(values.golden, refs)));
 } else {
   const out = values.out ?? join(root, ".scratch/repro/report.md");
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout.trim();
@@ -80,7 +87,9 @@ if (values.golden) {
     sh("pnpm", ["build"], clone);
     steps.push(`pnpm build: ${Math.round(performance.now() - t)} ms`);
 
-    const r = spawnSync(process.execPath, [join(clone, "tests/integration/repro-check.ts"), "--golden", data], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const refsFile = join(work, "refs.json");
+    writeFileSync(refsFile, JSON.stringify(here.outputs.filter((o) => o.args[0] === "ref").map((o) => o.stdout.trim())));
+    const r = spawnSync(process.execPath, [join(clone, "tests/integration/repro-check.ts"), "--golden", data, "--refs", refsFile], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     if (r.status !== 0) throw new Error(`the clone's golden run failed (exit ${r.status}):\n${r.stderr}`);
     const there = JSON.parse(r.stdout) as Golden;
 
@@ -109,6 +118,8 @@ if (values.golden) {
       ...(dirty ? ["Note: the working tree has uncommitted changes; the clone has HEAD only.", ""] : []),
       ...steps.map((s) => `- ${s}`),
       `- fixture customers.parquet sha256: ${Object.values(here.fixtures)[0]?.slice(0, 16)} (${there.fixtures["customers.parquet"] === here.fixtures["customers.parquet"] ? "same" : "DIFFERENT"} in the clone)`,
+      "",
+      "The clone mints its own Refs (compared with these) and resolves the Refs minted here.",
       "",
       "| command | exit | sha256 of stdout | clean clone |",
       "|---|---|---|---|",

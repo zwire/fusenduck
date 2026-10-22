@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { startHttpServer } from "./http.ts";
+import { LOOPBACK_HOSTS, MIN_TOKEN_LENGTH, startHttpServer } from "./http.ts";
 import { createServer } from "./server.ts";
 
 const USAGE = `usage: fusen-mcp [--root <dir>]... [--http [--host <loopback>] [--port <n>]]
@@ -52,7 +52,13 @@ if (!values.http) {
   if (!/^\d+$/.test(values.port ?? "0") || port > 65535) {
     fail("--port must be an integer from 0 to 65535");
   }
+  if (values.host !== undefined && !(LOOPBACK_HOSTS as readonly string[]).includes(values.host)) {
+    fail(`--host must be a loopback address (${LOOPBACK_HOSTS.join(", ")}), got ${values.host}`);
+  }
   const given = process.env.FUSEN_MCP_TOKEN;
+  if (given !== undefined && given !== "" && given.length < MIN_TOKEN_LENGTH) {
+    fail(`FUSEN_MCP_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
+  }
   const token = given || randomBytes(24).toString("base64url");
   try {
     const { url } = await startHttpServer({ roots, token, port, ...(values.host === undefined ? {} : { host: values.host }) });
