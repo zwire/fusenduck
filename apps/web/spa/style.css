@@ -106,7 +106,14 @@ header form {
   align-items: center;
   margin-top: 16px;
 }
-#path {
+.bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 4px;
+}
+#path,
+#where {
   flex: 1;
   font-family: ui-monospace, monospace;
 }
@@ -118,6 +125,9 @@ header form {
 #ref {
   flex: 1;
   font-family: ui-monospace, monospace;
+}
+#where[aria-invalid="true"] {
+  outline: 2px solid #c62828;
 }
 #status.error {
   color: #c62828;

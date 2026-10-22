@@ -106,6 +106,81 @@ describe("Web UI in Chromium", () => {
     await expect.poll(() => page.locator("#rows tr.selected").count()).toBe(5);
   });
 
+  it("columns left out and a filter: the table shows what the Ref covers, and Copy gives exactly that", async () => {
+    await open(customers);
+    await page.locator('#card input[data-column="region"]').uncheck();
+    await page.locator('#card input[data-column="status"]').uncheck();
+    expect(await page.locator("#rows thead th").allTextContents()).toEqual(["#", "id", "amount", "note"]);
+    expect(await page.locator("#keep-all input").evaluate((box: HTMLInputElement) => box.indeterminate)).toBe(true);
+    const columnsOnly = await copy();
+    expect(columnsOnly).toContain("cols=id,amount,note");
+    expect(await resolved(columnsOnly)).toHaveLength(1000);
+
+    await page.fill("#where", "region = 'south' AND id <= 40");
+    await page.press("#where", "Enter");
+    await page.waitForFunction(() => /10 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
+    expect(await page.locator("#rows tbody tr").count()).toBe(10);
+    expect(await page.textContent("#page")).toBe("rows 1–10 of 10 matching the filter (1000 in the file)");
+    expect(await page.textContent("#selection")).toMatch(/^The Ref covers the rows that match the filter, 3 of 5 columns \(id, amount, note\)\./);
+    const filtered = await copy();
+    expect(decodeURIComponent(filtered)).toContain("cols=id,amount,note&where=region = 'south' AND id <= 40");
+    expect(await resolved(filtered)).toEqual(range(0, 9).map((i) => 1 + 4 * i));
+
+    // A row picked among the matches is named by its position; a Shift range keeps the filter, so
+    // the rows it spans that the table hides stay out.
+    await row(8).click();
+    expect(await resolved(await copy())).toEqual([9]);
+    await row(0).click();
+    await row(8).click({ modifiers: ["Shift"] });
+    expect(await page.textContent("#selection")).toMatch(/^The Ref covers the rows that match the filter within 9 selected positions/);
+    expect(await resolved(await copy())).toEqual([1, 5, 9]);
+
+    // A bad filter says why and leaves the rows and the filter that was applied.
+    await page.fill("#where", "amont > 1");
+    await page.click("#where-form button[type=submit]");
+    await page.waitForFunction(() => document.getElementById("status")?.classList.contains("error"));
+    expect(await page.textContent("#status")).toMatch(/^Filter rejected: .*amont/);
+    expect(await page.getAttribute("#where", "aria-invalid")).toBe("true");
+    expect(await page.locator("#rows tbody tr").count()).toBe(10);
+
+    // Clear goes back to every row; ticking "all" keeps every column again.
+    await page.click("#clear-where");
+    await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 100);
+    await page.locator("#keep-all input").check();
+    expect(await page.locator("#rows thead th").count()).toBe(6);
+    expect(await resolved(await copy())).toHaveLength(1000);
+  });
+
+  it("a filter applied while another is still loading: the newest one wins and paging starts again", async () => {
+    // Another path, so open() waits for this file and not the one already on screen.
+    const path = join(dir, "paging.parquet");
+    copyFileSync(customers, path);
+    await open(path);
+    await page.click("#next");
+    await row(150).waitFor();
+    let first = true;
+    await page.route("**/api/rows", async (route) => {
+      const slow = first;
+      first = false;
+      if (slow) await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue();
+    });
+    try {
+      await page.fill("#where", "id <= 300");
+      await page.press("#where", "Enter");
+      await page.fill("#where", "id <= 5");
+      await page.press("#where", "Enter");
+      await page.waitForFunction(() => /5 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(await page.locator("#rows tbody tr").count()).toBe(5);
+      expect(await page.textContent("#page")).toBe("rows 1–5 of 5 matching the filter (1000 in the file)");
+      expect(await page.isDisabled("#prev")).toBe(true);
+      expect(await page.getAttribute("#where", "aria-invalid")).toBeNull();
+    } finally {
+      await page.unrouteAll({ behavior: "wait" });
+    }
+  });
+
   it("6: a click followed at once by another click and Copy copies the newest selection", async () => {
     await open(customers);
     // Slow the mints down so Copy is pressed while they are still running; the first one is the slowest.
@@ -203,6 +278,12 @@ describe("Web UI in Chromium", () => {
     const ref = await copy();
     expect(decodeURIComponent(ref)).not.toContain("where=");
     expect(await resolved(ref)).toEqual(range(0, 19));
+
+    // The filter still picks rows here, through the file's own column.
+    await page.fill("#where", "file_row_number >= 150");
+    await page.press("#where", "Enter");
+    await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 5);
+    expect(await resolved(await copy())).toEqual(range(15, 19));
   });
 
   it("lists the Parquet files under the root; the filter, the arrow keys and Enter open one, and so does a click", async () => {

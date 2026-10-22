@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import {
   buildCard,
+  checkPredicate,
   DEFAULT_TIMEOUT_MS,
   fingerprint,
   FusenError,
@@ -24,6 +25,8 @@ export const MAX_RANGES = 1000;
 export const MAX_CELL_CHARS = 200;
 /** A page stops adding rows past this many characters of cells; the response says where to go on. */
 export const MAX_PAGE_CHARS = 2 * 1024 * 1024;
+/** Longest filter accepted; a filter is typed by hand. */
+export const MAX_FILTER_CHARS = 4096;
 
 export interface Opened {
   source: string;
@@ -42,6 +45,8 @@ export interface Page {
   next: number | null;
   /** True when rows were left for the next page because this one reached MAX_PAGE_CHARS. */
   cut: boolean;
+  /** Rows of the file that pass the filter (every row when there is none). */
+  matched: number;
 }
 
 export type Range = [number, number];
@@ -81,6 +86,8 @@ export class View {
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;
   #closing: Promise<void> | undefined;
+  /** The count of the last filter, so paging through its rows counts them once. */
+  #counted: { where: string; n: number } | undefined;
 
   readonly opened: Opened;
   readonly #engine: Engine;
@@ -128,27 +135,81 @@ export class View {
     }
   }
 
-  rows(expected: unknown, offset: unknown, limit: unknown = DEFAULT_PAGE_ROWS): Promise<Page> {
+  /**
+   * The filter the page sent, checked before it runs: undefined when there is none. A filter is a
+   * condition on the file's own columns: it may not read a table (a table function such as read_csv
+   * would read the file's bytes while binding) or use * or COLUMNS(*), whose columns differ between
+   * the page and a Ref that names file_row_number. The text is the person's own, so a parser, binder
+   * or catalog error about it (a misspelled column, a wrong type) is shown; those come before any
+   * row is read. Any other error is withheld.
+   */
+  async #filter(where: unknown): Promise<string | undefined> {
+    if (where === undefined || where === null) return undefined;
+    if (typeof where !== "string") throw new FusenError("the filter must be text");
+    const text = where.trim();
+    if (text === "") return undefined;
+    if (text.length > MAX_FILTER_CHARS) throw new FusenError(`a filter may be at most ${MAX_FILTER_CHARS} characters`);
+    await checkPredicate(this.#engine, this.#engine.source, text);
+    const parsed = String((await this.#engine.query(`SELECT json_serialize_sql(${lit(`SELECT 1 WHERE (\n${text}\n)`)}) AS j`))[0]?.j);
+    if (parsed.includes('"TABLE_FUNCTION"')) throw new FusenError("filter rejected: a filter may not read a table; use the file's columns");
+    if (parsed.includes('"STAR"')) throw new FusenError("filter rejected: name the columns instead of * or COLUMNS(*)");
+    try {
+      await this.#engine.query(`DESCRIBE SELECT 1 FROM read_parquet(${lit(this.#engine.source)}) WHERE (\n${text}\n)`, {
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+      });
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+      if (!/^(Parser|Binder|Catalog) Error:/.test(message)) throw error;
+      throw new FusenError(`filter rejected: ${message.slice(0, 300)}`);
+    }
+    return text;
+  }
+
+  /** The columns the page keeps, in the file's order: undefined when it keeps them all. */
+  #keep(columns: unknown): string[] | undefined {
+    if (columns === undefined || columns === null) return undefined;
+    if (!Array.isArray(columns) || !columns.every((c) => typeof c === "string")) {
+      throw new FusenError("columns must be a list of column names");
+    }
+    const wanted = new Set(columns);
+    const unknown = [...wanted].find((c) => !this.#columns.includes(c));
+    if (unknown !== undefined) throw new FusenError(`this file has no column named ${JSON.stringify(unknown)}`);
+    if (wanted.size === 0) throw new FusenError("keep at least one column");
+    return wanted.size === this.#columns.length ? undefined : this.#columns.filter((c) => wanted.has(c));
+  }
+
+  rows(expected: unknown, offset: unknown, limit: unknown = DEFAULT_PAGE_ROWS, where?: unknown): Promise<Page> {
     return this.#serial(async () => {
       await this.#check(expected);
-      const total = this.opened.card.rows;
       if (!Number.isSafeInteger(offset) || (offset as number) < 0) throw new FusenError("offset must be a non-negative integer");
       if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > MAX_PAGE_ROWS) {
         throw new FusenError(`limit must be an integer from 1 to ${MAX_PAGE_ROWS}`);
       }
+      const filter = await this.#filter(where);
       const from = offset as number;
       const n = limit as number;
       // Every cell arrives as text cut in the engine, so a huge cell is never read whole into the page.
       const cells = this.#columns.map((c, i) => `left(CAST(${ident(c)} AS VARCHAR), ${MAX_CELL_CHARS + 1}) AS c${i}`);
       const source = `read_parquet(${lit(this.#engine.source)})`;
-      const sql = this.opened.selectable
-        ? `SELECT file_row_number::VARCHAR AS pos, ${cells.join(", ")} FROM ${source}
-           WHERE file_row_number BETWEEN ${from} AND ${from + n - 1} ORDER BY file_row_number`
-        : `SELECT ${cells.join(", ")} FROM ${source} LIMIT ${n} OFFSET ${from}`;
-      const found = from < total ? await this.#engine.query(sql, { timeoutMs: DEFAULT_TIMEOUT_MS }) : [];
-      const page: Page = { rows: [], next: null, cut: false };
+      // The filter sits alone on its lines, as in a Ref, so a "--" comment cannot swallow what follows.
+      const matches = filter === undefined ? "" : `(\n${filter}\n)`;
+      const matched = filter === undefined ? this.opened.card.rows : await this.#count(filter, `SELECT count(*)::VARCHAR AS n FROM ${source} WHERE ${matches}`);
+      let sql: string;
+      if (!this.opened.selectable) {
+        sql = `SELECT ${cells.join(", ")} FROM ${source}${filter === undefined ? "" : ` WHERE ${matches}`} LIMIT ${n} OFFSET ${from}`;
+      } else if (filter === undefined) {
+        sql = `SELECT file_row_number::VARCHAR AS pos, ${cells.join(", ")} FROM ${source}
+           WHERE file_row_number BETWEEN ${from} AND ${from + n - 1} ORDER BY file_row_number`;
+      } else {
+        // With a filter, the offset is the position to go on from; one row more says where the next page starts.
+        sql = `SELECT file_row_number::VARCHAR AS pos, ${cells.join(", ")} FROM ${source}
+           WHERE ${matches} AND file_row_number >= ${from} ORDER BY file_row_number LIMIT ${n + 1}`;
+      }
+      const scan = this.opened.selectable || from < matched;
+      const found = scan ? await this.#engine.query(sql, { timeoutMs: DEFAULT_TIMEOUT_MS }) : [];
+      const page: Page = { rows: [], next: null, cut: false, matched };
       let chars = 0;
-      for (const row of found) {
+      for (const row of found.slice(0, n)) {
         const values = this.#columns.map((_, i) => {
           const v = row[`c${i}`];
           if (v === null || v === undefined) return null;
@@ -163,21 +224,43 @@ export class View {
         }
         page.rows.push({ pos: this.opened.selectable ? Number(row.pos) : null, cells: values });
       }
-      const end = from + page.rows.length;
-      page.next = end < total ? end : null;
+      if (this.opened.selectable && filter !== undefined) {
+        const after = found[page.rows.length];
+        page.next = after ? Number(after.pos) : null;
+      } else {
+        const end = from + page.rows.length;
+        page.next = end < (this.opened.selectable ? this.opened.card.rows : matched) ? end : null;
+      }
       return page;
     });
   }
 
-  ref(expected: unknown, ranges: unknown): Promise<string> {
+  async #count(where: string, sql: string): Promise<number> {
+    if (this.#counted?.where !== where) {
+      const n = Number((await this.#engine.query(sql, { timeoutMs: DEFAULT_TIMEOUT_MS }))[0]?.n ?? 0);
+      this.#counted = { where, n };
+    }
+    return this.#counted.n;
+  }
+
+  /**
+   * The Ref for what the page shows: the selected positions, the rows that pass the filter, or both
+   * (a Shift range under a filter spans rows the table hides), and only the kept columns.
+   */
+  ref(expected: unknown, ranges: unknown, where?: unknown, columns?: unknown): Promise<string> {
     return this.#serial(async () => {
-      if (!this.opened.selectable) {
+      if (expected !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
+      const picked = Array.isArray(ranges) && ranges.length > 0;
+      if (picked && !this.opened.selectable) {
         throw new FusenError("this file has its own column named file_row_number, so rows cannot be selected by position");
       }
-      if (expected !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
-      const where = rangesPredicate(mergeRanges(ranges, this.opened.card.rows));
+      const kept = this.#keep(columns);
+      const filter = await this.#filter(where);
+      const positions = picked || (filter === undefined && kept === undefined) ? rangesPredicate(mergeRanges(ranges, this.opened.card.rows)) : undefined;
+      // The filter sits alone on its lines, so a "--" comment in it cannot swallow what follows.
+      const predicate = positions && filter ? `(${positions}) AND (\n${filter}\n)` : (positions ?? filter);
       // Minting compares the file's fingerprint with the one the page was shown.
-      return mintRefWith(this.#engine, { where, expect: this.opened.fingerprint }).catch((error: unknown) => {
+      return mintRefWith(this.#engine, { where: predicate, columns: kept, expect: this.opened.fingerprint }).catch((error: unknown) => {
         throw error instanceof SourceChanged ? new SourceChanged(CHANGED) : error;
       });
     });

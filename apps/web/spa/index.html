@@ -28,13 +28,19 @@
       <section id="card-section" hidden>
         <h2 id="source"></h2>
         <table id="card"></table>
-        <p class="note">No row values are shown in the card. min/max of text columns are cut to 40 characters. approx_unique and avg are approximate.</p>
+        <p class="note">Untick a column to leave it out of the Ref. No row values are shown in the card. min/max of text columns are cut to 40 characters. approx_unique and avg are approximate.</p>
       </section>
       <section id="rows-section" hidden>
         <div class="refbar">
           <input id="ref" type="text" readonly aria-label="Ref" />
           <button id="copy" type="button">Copy</button>
         </div>
+        <form id="where-form" class="bar">
+          <label for="where">Filter rows</label>
+          <input id="where" name="where" type="text" autocomplete="off" spellcheck="false" placeholder="SQL condition on the columns, e.g. amount > 100 AND region = 'south'" />
+          <button type="submit">Apply</button>
+          <button id="clear-where" type="button">Clear</button>
+        </form>
         <p id="selection"></p>
         <table id="rows"></table>
         <nav>
