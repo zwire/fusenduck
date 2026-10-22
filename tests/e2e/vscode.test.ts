@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveRef } from "@fusenduck/core";
-import { Host } from "../../apps/vscode/src/host.ts";
+import { Host, rootFor } from "../../apps/vscode/src/host.ts";
 import { webviewPage } from "../../apps/vscode/src/html.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 import { HOSTILE_CELLS, writeHostileMarkup } from "../helpers/web.ts";
@@ -30,7 +30,7 @@ describe("VS Code webview in Chromium", () => {
   /** Opens `path` in a webview the way the extension's editor does. */
   async function editor(path: string): Promise<{ page: Page; copied: string[] }> {
     const copied: string[] = [];
-    const host = new Host({ path, roots: [dir], copy: async (text) => void copied.push(text) });
+    const host = new Host({ path, roots: [rootFor(path)], copy: async (text) => void copied.push(text) });
     const page = await browser.newPage();
     page.on("console", (m) => console.push(m.text()));
     const html = webviewPage({

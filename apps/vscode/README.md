@@ -19,3 +19,5 @@ code --extensionDevelopmentPath="$PWD/apps/vscode"  # 開発用に読み込む
 | `build.ts` | esbuild で `dist/extension.cjs`(ホスト。DuckDB はネイティブなので外に置く)と `dist/webview.js` を作り、`index.html` と `style.css` を写す |
 
 拡張のホストは TypeScript をそのまま動かせないので、ホスト側だけ esbuild でまとめます。SPA 自体(`apps/web/spa`)は変えずに再利用します。
+
+`dist/extension.cjs` は実行時に `@duckdb/node-api`(ネイティブ)を隣の `node_modules` から読みます。vsce で `.vsix` にまとめるときは、この依存を各 OS のバイナリごと含める手当てが要ります(公開の段階で決めます)。

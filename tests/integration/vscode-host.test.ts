@@ -1,8 +1,8 @@
-import { copyFileSync, readFileSync, realpathSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveRef } from "@fusenduck/core";
-import { Host, type Reply } from "../../apps/vscode/src/host.ts";
+import { Host, rootFor, type Reply } from "../../apps/vscode/src/host.ts";
 import { csp, webviewPage } from "../../apps/vscode/src/html.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 import { writeOwnPositionColumn } from "../helpers/web.ts";
@@ -57,6 +57,7 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
   it("puts only a Ref on the clipboard", async () => {
     const before = copied.length;
     expect(await send("copy", { text: "rm -rf /" })).toEqual({ id, error: "only a Ref can be copied", changed: false });
+    expect(await send("copy", { text: "fusen://file/x\nrm -rf /" })).toMatchObject({ error: "only a Ref can be copied" });
     expect(copied).toHaveLength(before);
   });
 
@@ -88,6 +89,27 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
       await changing.close();
     }
     expect(await changing.handle({ id: 4, method: "init" })).toEqual({ id: 4, error: "this editor was closed", changed: false });
+  });
+
+  it("closing the editor while its file is opening closes the engine that open made", async () => {
+    const closing = make(file);
+    const opening = closing.handle({ id: 1, method: "open", params: { path: file } });
+    await closing.close();
+    expect(await opening).toEqual({ id: 1, error: "this editor was closed", changed: false });
+  });
+
+  it("a file reached through a symlink opens: the root is the folder of the file it points to", async () => {
+    const links = join(dir, "links");
+    mkdirSync(links);
+    const link = join(links, "linked.parquet");
+    symlinkSync(file, link);
+    expect(rootFor(link)).toBe(dir);
+    const linked = new Host({ path: link, roots: [rootFor(link)], copy: async () => undefined });
+    try {
+      expect(await linked.handle({ id: 1, method: "open", params: { path: link } })).toMatchObject({ result: { selectable: true } });
+    } finally {
+      await linked.close();
+    }
   });
 
   it("a file with its own file_row_number column opens, but its rows cannot be selected", async () => {

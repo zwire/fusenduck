@@ -516,8 +516,9 @@ $("copy").addEventListener("click", async () => {
   try {
     await (api?.copy ? api.copy(ref) : navigator.clipboard.writeText(ref));
     if (file) say(`Copied the Ref for ${covers(file)}.`);
-  } catch {
+  } catch (error) {
     refInput.select();
+    if (api?.copy) return say(`${describe(error).replace(/\.$/, "")}. The Ref is selected in the field, copy it from there.`, true);
     say("The browser refused the clipboard: the Ref is selected in the field, copy it from there.", true);
   }
 });

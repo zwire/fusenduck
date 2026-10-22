@@ -7,7 +7,9 @@ declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
 const vscode = acquireVsCodeApi();
 const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
-let next = 0;
+// Ids start at a random point on each load, so a reply meant for the page before a webview reload
+// does not settle a request of this one.
+let next = crypto.getRandomValues(new Uint32Array(1))[0]! * 1024;
 
 window.addEventListener("message", (event: MessageEvent) => {
   const reply = event.data as { id?: unknown; result?: unknown; error?: unknown; changed?: unknown };

@@ -1,4 +1,6 @@
-import { describeError, FusenError, SourceChanged } from "@fusenduck/core";
+import { realpathSync } from "node:fs";
+import { dirname } from "node:path";
+import { describeError, FusenError, parseRef, SourceChanged } from "@fusenduck/core";
 import { View } from "@fusenduck/web/view";
 
 // The extension host's side of one webview (docs/adr/0002, the VS Code webview). The webview sends
@@ -28,6 +30,19 @@ export interface HostOptions {
   log?(error: unknown): void;
 }
 
+/**
+ * The folder the engine may read for `path`: the folder of the file it resolves to, since core checks
+ * the real path of a source against its roots (a symlink to a file elsewhere would be refused).
+ */
+export function rootFor(path: string): string {
+  try {
+    return dirname(realpathSync(path));
+  } catch {
+    // A missing file: opening it fails with core's own message.
+    return dirname(path);
+  }
+}
+
 /** A message from the webview, or undefined when it is not one. */
 export function parseRequest(message: unknown): Request | undefined {
   if (typeof message !== "object" || message === null) return undefined;
@@ -35,6 +50,15 @@ export function parseRequest(message: unknown): Request | undefined {
   if (!Number.isSafeInteger(id) || !(METHODS as readonly unknown[]).includes(method)) return undefined;
   if (params !== undefined && (typeof params !== "object" || params === null || Array.isArray(params))) return undefined;
   return { id: id as number, method: method as Method, params: (params ?? {}) as Record<string, unknown> };
+}
+
+function isRef(text: string): boolean {
+  try {
+    parseRef(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class Host {
@@ -67,6 +91,11 @@ export class Host {
       case "open": {
         if (params.path !== this.#options.path) throw new FusenError("this editor shows one file only; open others from the explorer");
         const next = await View.open(this.#options.path, this.#options.roots);
+        // The editor may have closed while the file was opening; its engine must not outlive it.
+        if (this.#closed) {
+          await next.close();
+          throw new FusenError("this editor was closed");
+        }
         const previous = this.#view;
         this.#view = next;
         await previous?.close();
@@ -77,16 +106,17 @@ export class Host {
       case "ref":
         return this.#current(params).ref(params.fingerprint, params.ranges);
       case "copy":
-        if (typeof params.text !== "string" || !params.text.startsWith("fusen://")) throw new FusenError("only a Ref can be copied");
+        if (typeof params.text !== "string" || !isRef(params.text)) throw new FusenError("only a Ref can be copied");
         await this.#options.copy(params.text);
         return null;
     }
   }
 
-  // A reload replaces the view; a page still holding the old one is told to read the file again.
+  // Every open is of the same file, so source only tells a request from before any open; a request
+  // from before a reload reaches the new view, where the fingerprint check guards it.
   #current(params: Record<string, unknown>): View {
     if (!this.#view) throw new FusenError("open the file first");
-    if (params.source !== this.#view.opened.source) throw new SourceChanged("the file was opened again since. Reload it.");
+    if (params.source !== this.#view.opened.source) throw new FusenError("open the file first");
     return this.#view;
   }
 

@@ -3,9 +3,8 @@
 // on a port.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname } from "node:path";
 import * as vscode from "vscode";
-import { Host } from "./host.ts";
+import { Host, rootFor } from "./host.ts";
 import { webviewPage } from "./html.ts";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -26,7 +25,7 @@ export function activate(context: vscode.ExtensionContext): void {
       // The engine may read the file's own folder only (docs/adr/0001: roots).
       const host = new Host({
         path,
-        roots: [dirname(path)],
+        roots: [rootFor(path)],
         copy: async (text) => {
           await vscode.env.clipboard.writeText(text);
         },
@@ -41,11 +40,14 @@ export function activate(context: vscode.ExtensionContext): void {
         script: uri("webview.js"),
         styles: [uri("style.css"), uri("vscode.css")],
       });
+      let disposed = false;
       const listener = webview.onDidReceiveMessage(async (message: unknown) => {
         const reply = await host.handle(message);
-        if (reply) await webview.postMessage(reply);
+        // The panel may have closed while the host was working.
+        if (reply && !disposed) await webview.postMessage(reply).then(undefined, () => undefined);
       });
       panel.onDidDispose(() => {
+        disposed = true;
         listener.dispose();
         void host.close();
       });
