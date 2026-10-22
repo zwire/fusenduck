@@ -1,8 +1,9 @@
 // Values that look like personal data are hidden from what fusenduck shows, unless whoever runs it
-// asks otherwise (docs/vision.md, section 6). Two signals: a column whose name says what it holds
-// (email, phone, name, ...), whose every value is hidden, and text that is shaped like an email
-// address, a phone number or a card number, which is hidden where it appears. It is best effort: a
-// query can reshape a value past both signals, and a predicate still reads the real values.
+// asks otherwise (docs/vision.md, section 6). Two signals: a column (or a field of a nested value)
+// whose name says what it holds (email, phone, name, ...), whose every value is hidden, and text
+// that is shaped like an email address, a phone number or a card number, which is hidden where it
+// appears. It is best effort: a query can reshape a value past both signals, and a predicate still
+// reads the real values.
 
 /** One column that had something hidden, and why. */
 export interface Masked {
@@ -13,39 +14,66 @@ export interface Masked {
 
 export const mask = (kind: string): string => `«masked:${kind}»`;
 
-// Column names are split into lowercase words: "birthDate", "BIRTH_DATE" and "birth date" all give birth, date.
+// Column names are split into lowercase words: "birthDate", "BIRTH_DATE" and "birth date" all give
+// birth, date, and "SSNNumber" gives ssn, number.
 const words = (name: string): string[] =>
   name
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
 
-const PERSON = new Set(["first", "last", "full", "given", "family", "middle", "customer", "user", "person", "contact", "member", "employee", "patient"]);
+const PERSON = new Set([
+  "first", "last", "full", "given", "family", "middle", "customer", "user", "person", "contact", "member", "employee",
+  "patient", "owner", "author", "student", "holder", "display", "account", "buyer", "seller", "recipient", "sender",
+  "driver", "guest", "client", "applicant", "real", "legal",
+]);
+// A word that makes the column about the data, not the data itself: is_mobile, phone_count, email_verified, address_id.
+const ABOUT = new Set(["is", "has", "count", "verified", "rate", "version", "file", "mac", "contract", "id", "type", "status", "flag", "enabled", "opt", "format", "domain"]);
+// Japanese column names, matched anywhere in the name.
+const JA: [RegExp, string][] = [
+  [/メール/, "email"],
+  [/電話|携帯|ＦＡＸ/, "phone"],
+  [/氏名|名前|姓名|フリガナ|ふりがな/, "name"],
+  [/生年月日|誕生日/, "birth"],
+  [/住所|郵便番号|所在地/, "address"],
+  [/マイナンバー|個人番号|口座番号|カード番号|旅券/, "id_number"],
+];
 
 /** The kind of personal data a column's name says it holds, if any. A bare "name" is not one: products have names. */
 export function nameKind(column: string): string | undefined {
+  for (const [re, kind] of JA) if (re.test(column)) return kind;
   const w = words(column);
   const has = (...any: string[]) => any.some((x) => w.includes(x));
   const pair = (a: string, b: string) => w.some((x, i) => x === a && w[i + 1] === b);
-  if (has("email", "mail") || pair("e", "mail")) return "email";
-  if (has("phone", "telephone", "tel", "mobile", "fax")) return "phone";
-  if (has("firstname", "lastname", "fullname", "surname", "username") || w.some((x, i) => x === "name" && PERSON.has(w[i - 1] ?? ""))) {
-    return "name";
-  }
-  if (has("birth", "birthday", "birthdate", "dob")) return "birth";
-  if (has("address", "addr", "street", "zip", "zipcode", "postal", "postcode")) return "address";
-  if (has("ssn", "passport", "iban", "cvv", "mynumber") || pair("card", "number") || pair("credit", "card") || pair("national", "id") || pair("tax", "id")) {
+  if (
+    has("ssn", "passport", "iban", "cvv", "mynumber", "cardnumber", "creditcard") ||
+    pair("card", "number") || pair("card", "no") || pair("credit", "card") || pair("national", "id") || pair("tax", "id") || pair("my", "number")
+  ) {
     return "id_number";
   }
+  if (w.some((x) => ABOUT.has(x))) return undefined;
+  if (has("email", "mail", "emailaddress") || pair("e", "mail")) return "email";
+  if (has("phone", "telephone", "tel", "mobile", "fax", "phonenumber", "mobilephone", "telno", "cellphone")) return "phone";
+  if (
+    has("firstname", "lastname", "fullname", "surname", "username") ||
+    w.some((x, i) => x === "name" && (PERSON.has(w[i - 1] ?? "") || PERSON.has(w[i + 1] ?? "")))
+  ) {
+    return "name";
+  }
+  if (has("birth", "birthday", "birthdate", "dob", "dateofbirth")) return "birth";
+  if (has("address", "addr", "street", "zip", "zipcode", "postal", "postcode", "postalcode", "streetaddress")) return "address";
   return undefined;
 }
 
 // An email address is found from its "@" outward, so a long run of letters without one costs one pass
 // (a plain regex would retry it from every position, which a cell of megabytes turns into minutes).
-const LOCAL = /[A-Za-z0-9._%+-]/;
-const DOMAIN = /[A-Za-z0-9.-]/;
-const TLD = /\.[A-Za-z]{2,}$/;
+const LOCAL = /[\p{L}\p{N}._%+-]/u;
+const DOMAIN = /[\p{L}\p{N}.-]/u;
+const TLD = /\.\p{L}{2,}$/u;
+// "icon@2x.png" names an image size, not a mailbox.
+const SCALE = /^\d+(\.\d+)?x\./;
 
 function maskEmails(text: string, found: Set<string>): string {
   let out = "";
@@ -57,7 +85,8 @@ function maskEmails(text: string, found: Set<string>): string {
     while (end < text.length && DOMAIN.test(text[end]!)) end++;
     // A sentence can end right after the address.
     while (end > at + 1 && text[end - 1] === ".") end--;
-    if (start === at || !TLD.test(text.slice(at + 1, end))) continue;
+    const domain = text.slice(at + 1, end);
+    if (start === at || !TLD.test(domain) || SCALE.test(domain)) continue;
     out += text.slice(from, start) + mask("email");
     found.add("email");
     from = end;
@@ -66,10 +95,16 @@ function maskEmails(text: string, found: Set<string>): string {
   return out + text.slice(from);
 }
 
-// An international number (+81 90-1234-5678), or three groups split by a hyphen, space or dot
-// (03-1234-5678, (555) 123-4567). A date (2026-10-22) has a last group too short to match.
-const PHONE = /(?<![\w+])(?:\+\d{1,3}[\s.-]?(?:\(\d{1,4}\)[\s.-]?)?\d{1,4}(?:[\s.-]\d{2,4}){1,3}|(?:\(\d{2,4}\)\s?|\d{2,4}[\s.-])\d{2,4}[\s.-]\d{4})(?![\w])/g;
-const CARD = /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g;
+// An international number (+81 90-1234-5678, +819012345678), a Japanese number written without
+// separators (09012345678), or three groups split by hyphens or dots ((555) 123-4567, 03-1234-5678,
+// 555.123.4567). Groups split by spaces only are not read as one: those are lists of numbers and
+// coordinates far more often. A date (2026-10-22) has a last group too short to match, and a code
+// that continues with a hyphen (SKU-123-456-7890) is not a number on its own.
+const PHONE =
+  /(?<![\w+\-.])(?:\+\d{1,3}[\s.-]?(?:\(\d{1,4}\)[\s.-]?)?\d{1,4}(?:[\s.-]?\d{2,4}){1,3}|0\d{9,10}|(?:\(\d{2,4}\)\s?|\d{2,4}-)\d{2,4}-\d{4}|\d{3}\.\d{3}\.\d{4})(?![\w-]|\.\d)/g;
+// Separated in groups (4111 1111 1111 1111, 3782-822463-10005), or 15 to 16 digits in a row that
+// start like a card does. A long run of digits is more often an id or a time in milliseconds.
+const CARD = /(?<![\d-])(?:\d{4}(?:[ -]\d{4}){3}(?:[ -]\d{1,3})?|\d{4}[ -]\d{6}[ -]\d{4,5}|[3-6]\d{14,15})(?![\d-])/g;
 
 function luhn(digits: string): boolean {
   let sum = 0;
@@ -81,8 +116,7 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-/** Hides the parts of a text that are shaped like personal data; `found` collects their kinds. */
-export function maskText(text: string, found: Set<string>): string {
+function maskShapes(text: string, found: Set<string>): string {
   let out = maskEmails(text, found);
   // Card numbers before phones, so a spaced card number is not read as phone groups.
   out = out.replace(CARD, (m) => (luhn(m.replace(/\D/g, "")) ? (found.add("card"), mask("card")) : m));
@@ -90,15 +124,57 @@ export function maskText(text: string, found: Set<string>): string {
   return out;
 }
 
-const ORDER = ["email", "phone", "card"];
-const sorted = (kinds: Set<string>) => ORDER.filter((k) => kinds.has(k));
+/**
+ * Hides the parts of a text that are shaped like personal data; `found` collects their kinds.
+ * Full-width digits and "＠" are read as their ASCII forms; a text in which that finds more is
+ * shown in those forms.
+ */
+export function maskText(text: string, found: Set<string>): string {
+  const plain = new Set<string>();
+  const out = maskShapes(text, plain);
+  const hidden = (s: string) => s.split("«masked:").length;
+  if (/[^ -~\s]/.test(text)) {
+    const wide = new Set<string>();
+    const folded = maskShapes(text.normalize("NFKC"), wide);
+    if (hidden(folded) > hidden(out)) {
+      for (const k of wide) found.add(k);
+      return folded;
+    }
+  }
+  for (const k of plain) found.add(k);
+  return out;
+}
 
-/** Whether a column's values are text, so their shape means something (a timestamp or a BIGINT arrives as a string too). */
-export const isText = (type: string): boolean => /^(VARCHAR|TEXT|STRING)/i.test(type);
+const ORDER = ["email", "phone", "card"];
+// Shapes first in a fixed order, then the kinds that nested field names gave.
+const sorted = (kinds: Set<string>) => [...ORDER.filter((k) => kinds.has(k)), ...[...kinds].filter((k) => !ORDER.includes(k)).sort()];
+
+/** Whether a column's values can hold text, so their shape means something (a timestamp or a BIGINT arrives as a string too). */
+export const holdsText = (type: string): boolean =>
+  !/^(BOOLEAN|U?(TINY|SMALL|BIG|HUGE)?INT(EGER)?|INT\d*|FLOAT|DOUBLE|REAL|DECIMAL|NUMERIC|DATE|TIME|TIMESTAMP|INTERVAL|UUID)\b/i.test(type);
+
+// A nested value (LIST, STRUCT, MAP, JSON) is walked: a field named like personal data is hidden whole.
+function maskValue(value: unknown, found: Set<string>): unknown {
+  if (typeof value === "string") return maskText(value, found);
+  if (Array.isArray(value)) return value.map((v) => maskValue(v, found));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, v]) => {
+        const kind = nameKind(key);
+        if (kind && v !== null && v !== undefined) {
+          found.add(kind);
+          return [key, mask(kind)];
+        }
+        return [key, maskValue(v, found)];
+      }),
+    );
+  }
+  return value;
+}
 
 /**
  * Masks rows for display. `types` maps a column to its SQL type; values are read for their shape
- * only in text columns. Returns the rows and, in column order, what was hidden.
+ * only in columns that can hold text. Returns the rows and, in column order, what was hidden.
  */
 export function maskRows(rows: Record<string, unknown>[], types: Map<string, string>): { rows: Record<string, unknown>[]; masked: Masked[] } {
   const byName = new Map<string, string>();
@@ -106,30 +182,36 @@ export function maskRows(rows: Record<string, unknown>[], types: Map<string, str
     const kind = nameKind(column);
     if (kind) byName.set(column, kind);
   }
+  const hiddenByName = new Set<string>();
   const byValue = new Map<string, Set<string>>();
   const masked = rows.map((row) =>
     Object.fromEntries(
       Object.entries(row).map(([column, value]) => {
         if (value === null || value === undefined) return [column, value];
         const kind = byName.get(column);
-        if (kind) return [column, mask(kind)];
-        if (typeof value !== "string" || !isText(types.get(column) ?? "")) return [column, value];
+        if (kind) {
+          hiddenByName.add(column);
+          return [column, mask(kind)];
+        }
+        if (!holdsText(types.get(column) ?? "")) return [column, value];
         const found = byValue.get(column) ?? new Set<string>();
-        const text = maskText(value, found);
+        const shown = maskValue(value, found);
         if (found.size) byValue.set(column, found);
-        return [column, text];
+        return [column, shown];
       }),
     ),
   );
-  const seen = rows.length ? [...types.keys()] : [];
+  const columns = [...types.keys()];
   return {
     rows: masked,
     masked: [
-      ...seen.filter((c) => byName.has(c)).map((c): Masked => ({ column: c, kinds: [byName.get(c)!], by: "name" })),
-      ...seen.filter((c) => byValue.has(c)).map((c): Masked => ({ column: c, kinds: sorted(byValue.get(c)!), by: "value" })),
+      ...columns.filter((c) => hiddenByName.has(c)).map((c): Masked => ({ column: c, kinds: [byName.get(c)!], by: "name" })),
+      ...columns.filter((c) => byValue.has(c)).map((c): Masked => ({ column: c, kinds: sorted(byValue.get(c)!), by: "value" })),
     ],
   };
 }
+
+export { sorted as orderKinds };
 
 /** The note that says what was hidden: `what` names the hidden things ("values", "min, max and avg values"). */
 export function maskedNote(masked: Masked[], what: string): string[] {

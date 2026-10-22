@@ -116,8 +116,8 @@ OMITTED: 47 of 50 rows are not shown (the first 3 in file order are). ...
 
 個人情報らしい値は、既定で `«masked:<種類>»` に置き換えて見せます。対象は resolve と peek の行、カードの min・max・avg です。
 
-- **列名で**: 名前が個人情報を示す列(`email`、`phone`・`tel`、`first_name`・`customer_name` などの人名、`birth_date`・`dob`、`address`・`zip`、`ssn`・`passport`・`card_number` など)は、値をすべて伏せます。単なる `name` や `product_name` は対象外です。
-- **値の形で**: 文字列の列の中にあるメールアドレス、電話番号、カード番号(Luhn で確かめたもの)は、その部分だけ伏せます。日時や数値の列は形を見ません。
+- **列名で**: 名前が個人情報を示す列(`email`、`phone`・`tel`・`mobile`、`first_name`・`customer_name`・`owner_name` などの人名、`birth_date`・`dob`、`address`・`zip`・`postal_code`、`ssn`・`passport`・`card_number` など。`氏名`・`住所`・`電話番号`・`メールアドレス`・`生年月日` のような日本語の列名も)は、値をすべて伏せます。単なる `name` や `product_name`、データについての列(`is_mobile`、`phone_count`、`email_verified`、`address_id` など)は対象外です。
+- **値の形で**: 文字を持ちうる列(文字列、JSON、LIST・STRUCT・MAP の中も)にあるメールアドレス、電話番号、カード番号(Luhn で確かめたもの)は、その部分だけ伏せます。入れ子の値では、名前が個人情報を示すフィールド(`{"email": ...}`)を丸ごと伏せます。全角の数字や「＠」も読みます。日時や数値の列は形を見ません。電話番号は国際形式、ハイフンかドットで区切った形、`0` で始まる 10〜11 桁で、空白だけで区切った数字の並び(座標や数の一覧)は電話とみなしません。
 - 伏せたものは `MASKED:` の一行に、列と種類と理由(列名か値か)を書きます。
 
 ```

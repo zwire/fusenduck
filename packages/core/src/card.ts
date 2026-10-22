@@ -1,6 +1,6 @@
 import { lit, type Engine } from "./engine.ts";
 import { FusenError } from "./errors.ts";
-import { isText, mask, maskText, nameKind, type Masked } from "./pii.ts";
+import { holdsText, mask, maskText, nameKind, orderKinds, type Masked } from "./pii.ts";
 
 export interface CardColumn {
   column: string;
@@ -40,15 +40,16 @@ const clip = (value: string): string => (value.length > MAX_NAME ? `${value.slic
 function maskBounds(column: CardColumn, masked: Masked[]): CardColumn {
   const kind = nameKind(column.column);
   if (kind) {
+    if (column.min === null && column.max === null && column.avg === null) return column;
     masked.push({ column: column.column, kinds: [kind], by: "name" });
     const hide = (value: string | null) => (value === null ? null : mask(kind));
     return { ...column, min: hide(column.min), max: hide(column.max), avg: hide(column.avg) };
   }
-  if (!isText(column.type)) return column;
+  if (!holdsText(column.type)) return column;
   const found = new Set<string>();
   const min = column.min === null ? null : maskText(column.min, found);
   const max = column.max === null ? null : maskText(column.max, found);
-  if (found.size) masked.push({ column: column.column, kinds: ["email", "phone", "card"].filter((k) => found.has(k)), by: "value" });
+  if (found.size) masked.push({ column: column.column, kinds: orderKinds(found), by: "value" });
   return { ...column, min, max };
 }
 

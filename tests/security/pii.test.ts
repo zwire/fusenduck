@@ -148,3 +148,37 @@ describe("personal data is masked by default", () => {
     }
   });
 });
+
+describe("personal data inside nested values", () => {
+  const dir = tempDir();
+  const file = join(dir, "events.parquet");
+
+  beforeAll(async () => {
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(`COPY (
+      SELECT i AS id,
+             ('{"email":"j' || i || '@example.com"}')::JSON AS payload,
+             {'email': 'b' || i || '@example.com', 'plan': 'pro'} AS info,
+             ['a' || i || '@example.com', 'plain'] AS contacts,
+             NULL::VARCHAR AS phone
+      FROM range(1, 4) t(i)
+    ) TO '${file}' (FORMAT parquet)`);
+  });
+
+  it("walks JSON, STRUCT and LIST values in rows, and hides a field named like personal data", async () => {
+    const out = await resolveRef(await mintRef(file), { roots: [dir] });
+    expect(out).not.toContain("example.com");
+    const row = dataLines(out)[0]!;
+    expect(row.info).toEqual({ email: "«masked:email»", plan: "pro" });
+    expect(row.contacts).toEqual(["«masked:email»", "plain"]);
+    expect(String(row.payload)).toContain("«masked:email»");
+    // A column whose every value is null hid nothing, so the note does not name it.
+    expect(out).toMatch(/MASKED: values that look like personal data are hidden: payload \(email, by value\), info \(email, by value\), contacts \(email, by value\)\./);
+  });
+
+  it("hides the card's min and max of nested columns by their shape", async () => {
+    const text = renderCard(await buildCard(await openSource(file)), file);
+    expect(text).not.toContain("example.com");
+    expect(text).not.toContain("phone (");
+  });
+});
