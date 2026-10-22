@@ -3,5 +3,5 @@
   "compilerOptions": {
     "paths": { "@fusenduck/core": ["./packages/core/src/index.ts"] }
   },
-  "include": ["tests", "vitest.config.ts"]
+  "include": ["tests", "vitest.config.ts", "vitest.e2e.config.ts"]
 }

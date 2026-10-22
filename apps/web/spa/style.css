@@ -1,0 +1,71 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+body {
+  margin: 0 16px 24px;
+}
+header form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 16px;
+}
+#path {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}
+.refbar {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+#ref {
+  flex: 1;
+  font-family: ui-monospace, monospace;
+}
+#status.error {
+  color: #c62828;
+}
+table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+th,
+td {
+  border: 1px solid #8884;
+  padding: 2px 6px;
+  text-align: left;
+  white-space: pre;
+  max-width: 24em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, monospace;
+}
+#rows tbody tr {
+  cursor: pointer;
+  user-select: none;
+}
+#rows.locked tbody tr {
+  cursor: default;
+}
+#rows tr.selected {
+  background: #1e88e533;
+}
+td.null {
+  color: #888;
+  font-style: italic;
+}
+td.pos {
+  color: #888;
+  text-align: right;
+}
+.note {
+  color: #888;
+}
+nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

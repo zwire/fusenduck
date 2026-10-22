@@ -1,0 +1,14 @@
+{
+  "name": "@fusenduck/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "fusenduck Web UI: a local server that serves the SPA and a small same-origin API.",
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p spa",
+    "build": "tsc -p spa"
+  },
+  "dependencies": {
+    "@fusenduck/core": "workspace:*"
+  }
+}
