@@ -1,6 +1,6 @@
 // The webview's entry: the Web UI's page (apps/web/spa) on an Api that sends messages to the
 // extension host instead of calling the local server. Answers come back as message events.
-import { ApiError, type Api, type Opened, type Page, type Range } from "../../web/spa/api.js";
+import { ApiError, type Api, type Listed, type Opened, type Page, type Range } from "../../web/spa/api.js";
 import { mount } from "../../web/spa/app.js";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -29,6 +29,8 @@ function call<T>(method: string, params: Record<string, unknown> = {}): Promise<
 }
 
 const api: Api = {
+  // An editor shows one file; other files open from VS Code's explorer, so the page lists none.
+  files: () => Promise.resolve<Listed>({ roots: [], truncated: false }),
   open: (path) => call<Opened>("open", { path }),
   rows: (file, offset, limit) => call<Page>("rows", { source: file.source, fingerprint: file.fingerprint, offset, limit }),
   ref: (file, ranges: Range[]) => call<string>("ref", { source: file.source, fingerprint: file.fingerprint, ranges }),
