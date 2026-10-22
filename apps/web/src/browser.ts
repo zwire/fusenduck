@@ -28,9 +28,14 @@ export interface OpenOptions {
   env?: NodeJS.ProcessEnv;
   /** Starts the opener; tests replace it. */
   spawn?: (command: string, args: string[]) => ChildProcess;
+  /** The clock, in milliseconds; tests move it. */
+  now?: () => number;
   /** Called once if the browser could not be opened, with the reason. */
   onFail: (reason: string) => void;
 }
+
+/** How long an opener's failing exit still counts as a failure to open. */
+export const OPEN_WINDOW_MS = 10_000;
 
 const detached = (command: string, args: string[]) => nodeSpawn(command, args, { stdio: "ignore", detached: true, windowsHide: true });
 
@@ -51,9 +56,12 @@ export function openBrowser(url: string, options: OpenOptions): void {
     options.onFail(reason);
   };
   child.once("error", (error) => fail(`${opener.command}: ${error.message}`));
-  // rundll32's exit code says nothing about the browser, so only the others are read.
+  // rundll32's exit code says nothing about the browser, so only the others are read. xdg-open can
+  // run a browser that was not running yet in the foreground; its exit much later is not about opening.
+  const started = (options.now ?? Date.now)();
   child.once("exit", (code) => {
-    if (opener.command !== "rundll32" && code !== null && code !== 0) fail(`${opener.command} exited with ${code}`);
+    const late = (options.now ?? Date.now)() - started > OPEN_WINDOW_MS;
+    if (opener.command !== "rundll32" && !late && code !== null && code !== 0) fail(`${opener.command} exited with ${code}`);
   });
   child.unref();
 }

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, expect, it } from "vitest";
-import { openBrowser, openerFor } from "../../apps/web/src/browser.ts";
+import { OPEN_WINDOW_MS, openBrowser, openerFor } from "../../apps/web/src/browser.ts";
 
 const url = "http://127.0.0.1:4000/#c=AbC-_123";
 
@@ -28,17 +28,34 @@ describe("Web UI: opening the browser", () => {
   });
 
   it("reports a missing opener or a failed one once, and stays quiet when it works", () => {
-    const run = (act: (child: ChildProcess) => void, platform: NodeJS.Platform = "linux") => {
+    const run = (act: (child: ChildProcess) => void) => {
       const reasons: string[] = [];
       const child = fakeChild();
-      openBrowser(url, { platform, env: { DISPLAY: ":0" }, spawn: () => child, onFail: (r) => reasons.push(r) });
+      openBrowser(url, { platform: "linux", env: { DISPLAY: ":0" }, spawn: () => child, onFail: (r) => reasons.push(r) });
       act(child);
       return reasons;
     };
     expect(run((c) => (c.emit("error", new Error("spawn xdg-open ENOENT")), c.emit("exit", null)))).toEqual(["xdg-open: spawn xdg-open ENOENT"]);
     expect(run((c) => c.emit("exit", 3))).toEqual(["xdg-open exited with 3"]);
     expect(run((c) => c.emit("exit", 0))).toEqual([]);
+  });
+
+  it("does not blame the opener for a browser it started in the foreground exiting much later", () => {
+    const reasons: string[] = [];
+    let clock = 0;
+    const child = fakeChild();
+    openBrowser(url, { platform: "linux", env: { DISPLAY: ":0" }, now: () => clock, spawn: () => child, onFail: (r) => reasons.push(r) });
+    clock = OPEN_WINDOW_MS + 1;
+    child.emit("exit", 1);
+    expect(reasons).toEqual([]);
+  });
+
+  it("ignores rundll32's exit code", () => {
+    const reasons: string[] = [];
+    const child = fakeChild();
+    openBrowser(url, { platform: "win32", spawn: () => child, onFail: (r) => reasons.push(r) });
     // rundll32's exit code is not about the browser.
-    expect(run((c) => c.emit("exit", 1), "win32")).toEqual([]);
+    child.emit("exit", 1);
+    expect(reasons).toEqual([]);
   });
 });

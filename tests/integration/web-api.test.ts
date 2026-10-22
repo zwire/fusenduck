@@ -370,9 +370,9 @@ describe.skipIf(process.platform === "win32")("Web UI entry point: opening the b
 
   it("--no-open prints the URL and starts no opener", async () => {
     writeFileSync(argv, "");
-    const printed = Date.now();
-    // Long enough for an opener started right after the URL to have written its arguments.
-    await run(recording, ["--no-open"], () => Date.now() - printed > 1000);
+    let printed: number | undefined;
+    // Long enough, from when the URL appears, for an opener started right after it to have written its arguments.
+    await run(recording, ["--no-open"], () => Date.now() - (printed ??= Date.now()) > 1000);
     expect(recorded()).toBe("");
   });
 
