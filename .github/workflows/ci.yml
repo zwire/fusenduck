@@ -7,7 +7,7 @@ on:
 
 jobs:
   check:
-    # The supported platforms: package.json engines (Node >= 22) on the three OSes that
+    # The supported platforms: package.json engines (Node >= 22.18) on the three OSes that
     # @duckdb/node-api ships native binaries for. Each job installs and loads that binary.
     name: check (${{ matrix.os }}, Node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}

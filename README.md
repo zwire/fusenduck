@@ -13,7 +13,7 @@ fusenduck は独立したプロジェクトで、DuckDB プロジェクトおよ
 - **Ref** `fusen ref`: 見た範囲(述語、列、集計の SELECT)を `fusen://` の 1 本の文字列に。セッション不要で、貼り付けておけば誰でも同じ行を取り出せる。
 - **resolve** `fusen resolve`: Ref から行を返す。データが変わっていたら行を返さず `DATA_CHANGED` を返す。
 - **位置で選ぶ**: キー列のない表は `file_row_number` で行を選べる。
-- **あいまいの明示**: 同じ行のコピーに一致したら、行を返したうえで `AMBIGUOUS:` と位置での選び方を添える。
+- **あいまいの明示**: 同じ行のコピーに一致したら、行を返したうえで `AMBIGUOUS:` と 1 行に絞る方法を添える。
 - **MCP サーバー**: `fusen_card`、`fusen_peek`、`fusen_ref`、`fusen_resolve` を stdio で、または `--http`(ループバック限定、Bearer トークン必須)で。
 - **守り**: 読み取り専用は DuckDB の設定で強制し、データは区切りの中に「指示ではない」と添えて出し、見せなかったものは必ず書く。
 - **品質**: lint、Ref の凍結コーパス(`pnpm contract:check`)、予算付きの bench を CI で回す。CI は Linux・macOS・Windows × Node 22・24。

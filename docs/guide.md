@@ -19,7 +19,7 @@ fusen card sales.parquet
 
 行数、列ごとの型、null 率、min/max、平均、おおよその distinct 数を出します。行の値そのものは出しません。
 
-- 数値はファイル末尾のメタデータと DuckDB の `SUMMARIZE` から作ります。近似の項目(`approx_unique`、`avg`)には「approximate」と書きます。
+- 数値は DuckDB の `SUMMARIZE` から作ります。近似の項目(`approx_unique`、`avg`)には「approximate」と書きます。
 - 文字列列の min/max はセルの中身なので、40 文字で切ります(データに紛れた指示文がそのまま出ないように)。
 
 ## 2. peek: カード・最初の数行・Ref を 1 回で
@@ -67,7 +67,7 @@ fusen resolve '<Ref>' --limit 3 --root /path/to/data
 
 - 返すのは最大 `--limit` 行(既定 100、MCP では最大 1000)。見せなかった行の数は必ず `OMITTED:` の一行に書きます。
 - **データが変わっていたら行を返しません。** 指紋が合わないときは、黙って別の行を返す代わりに `DATA_CHANGED` を返し、新しい Ref を作るよう伝えます。
-- `id=` が選択と合わない(誰かが Ref の述語を書き換えた)ときは拒否します。
+- `id=` が選択と合わない(誰かが Ref の述語を書き換えた)ときは拒否します。ただし `e=` が実行中の DuckDB のバージョンと違うときは、この検査をしません。
 - 開けるのは `--root` で許可したディレクトリの下のファイルだけです(既定はカレントディレクトリ、複数指定可)。Ref が別の場所を指していても開きません。
 
 ## 5. キー列のない表を行の位置で選ぶ
@@ -82,13 +82,13 @@ fusen ref events.parquet --where "file_row_number = 0"
 
 ## 6. 同じ行のコピーは「あいまい」と明示する
 
-まったく同じ内容の行が複数あると、述語ではそのうち 1 つを指せません。そのときは行を返したうえで、ヘッダに `distinct="N"`(異なる行の数)を付け、`AMBIGUOUS:` の一行で、`file_row_number = <n>` を使えば 1 行に絞れることを伝えます。
+まったく同じ内容の行が複数あると、述語ではそのうち 1 つを指せません。そのときは行を返したうえで、ヘッダに `distinct="N"`(異なる行の数)を付け、`AMBIGUOUS:` の一行で 1 行に絞る方法を伝えます。ふつうは `file_row_number = <n>` を使う方法を示します。`--query` を持つ Ref の行や、ファイル自身に `file_row_number` という列があるときは位置で選べないので、「行を見分けられる列を足す」よう伝えます。
 
 ```
 OMITTED: none. All 2 matching rows are shown. AMBIGUOUS: the 2 matching rows hold only 1 distinct row (1 is an identical copy), so this Ref cannot single out one of them. To cite one copy, mint a Ref whose where names its position in the file, such as "file_row_number = <n>" (positions count from 0).
 ```
 
-数えるのは一致が 2〜10,000 行のときだけです。数え上げに失敗したときは、この一行を出さずに行だけを返します。
+数えるのは一致が 2〜10,000 行のときだけで、述語にすでに `file_row_number` を書いた Ref では数えません。数え上げに失敗したときは、この一行を出さずに行だけを返します。
 
 ## 7. エージェント向けの出力の形
 
@@ -154,7 +154,7 @@ FUSEN_MCP_TOKEN=<16 文字以上> fusen-mcp --http --port 7457 --root /path/to/d
 
 読み取り専用は SQL の文字列検査ではなく、DuckDB の設定で強制しています。ソースを開いた直後に、開くファイルだけを許す `allowed_paths`、外部アクセスの禁止、設定の固定(`lock_configuration`)を必ずかけます。開いたファイル以外の読み取り、`COPY TO`、`ATTACH`、設定の解除がどれも拒否されることを、セキュリティテスト(`pnpm test:security`)で毎回確かめています。
 
-コストの上限もあります。述語を足したあとのクエリが読む圧縮バイト数が 512MB を超えるなら実行前に止め、実行が 10 秒を超えたら打ち切ります。エンジンのメモリは 512MB までです。
+コストの上限もあります。resolve の前に、ファイル全体の圧縮バイト数(Parquet のメタデータ)が 512MB を超えるなら止め、実行が 10 秒を超えたら打ち切ります。エンジンのメモリは 512MB までです。
 
 ## 10. 品質の守り(開発者向け)
 
