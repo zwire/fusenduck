@@ -2,9 +2,11 @@
 // rows, copy the Ref.
 // Values from the file are untrusted: they reach the DOM through textContent only, never as markup
 // (the CSP also makes the browser refuse strings assigned to innerHTML). See docs/adr/0002.
-import { ApiError, exchange, httpApi, type Api, type Opened, type Page, type Range, type Selection } from "./api.js";
+import { ApiError, exchange, httpApi, type Api, type Listed, type ListedFile, type Opened, type Page, type Range, type Selection } from "./api.js";
 
 const PAGE_ROWS = 100;
+/** Files shown in the list at once; the filter narrows the rest. */
+const MAX_SHOWN = 300;
 const MAX_CELL_CHARS = 200;
 const TOKEN_KEY = "fusenduck-token";
 
@@ -14,6 +16,8 @@ const pathInput = $<HTMLInputElement>("path");
 const refInput = $<HTMLInputElement>("ref");
 const rowsTable = $<HTMLTableElement>("rows");
 const filterInput = $<HTMLInputElement>("filter");
+const whereInput = $<HTMLInputElement>("where");
+const filesList = $<HTMLUListElement>("files");
 
 function say(message: string, error = false): void {
   status.textContent = message;
@@ -268,15 +272,117 @@ async function applyFilter(text: string): Promise<void> {
   const result = await loadPage(0, 0, where, [{ at: 0, index: 0 }]);
   if (result === "stale") return;
   if (result === "failed") {
-    filterInput.setAttribute("aria-invalid", "true");
+    whereInput.setAttribute("aria-invalid", "true");
     return;
   }
-  filterInput.removeAttribute("aria-invalid");
+  whereInput.removeAttribute("aria-invalid");
   // Selected rows may not pass the new filter; start the selection again.
   ranges = [];
   anchor = undefined;
   say(where === undefined ? "" : `${page!.matched} of ${file.card.rows} rows match the filter.`);
   selectionChanged();
+}
+
+// The files under the roots. The filter keeps the files whose path holds every word typed; the
+// arrow keys move through the list and Enter opens the file, so the mouse is never needed.
+let listed: Listed | undefined;
+let shown: ListedFile[] = [];
+let active = 0;
+
+function size(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let i = 0;
+  for (; n >= 1024 && i < units.length - 1; i++) n /= 1024;
+  return `${i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+function span(className: string, text: string): HTMLSpanElement {
+  const el = document.createElement("span");
+  el.className = className;
+  el.textContent = text;
+  return el;
+}
+
+function showFiles(): void {
+  if (!listed) return;
+  const words = filterInput.value.toLowerCase().split(/\s+/).filter(Boolean);
+  const total = listed.roots.reduce((n, r) => n + r.files.length, 0);
+  const items: HTMLLIElement[] = [];
+  let matched = 0;
+  shown = [];
+  for (const { root, files } of listed.roots) {
+    // Every listed name ends in .parquet, so the extension would match a "q" or a "p" in every file.
+    const hits = files.filter((f) => words.every((w) => f.name.toLowerCase().replace(/\.parquet$/, "").includes(w)));
+    matched += hits.length;
+    const room = hits.slice(0, MAX_SHOWN - shown.length);
+    // With several roots, each one's files come under its name.
+    if (listed.roots.length > 1 && room.length) {
+      const li = document.createElement("li");
+      li.className = "root";
+      li.setAttribute("role", "presentation");
+      li.textContent = root;
+      items.push(li);
+    }
+    for (const f of room) {
+      const li = document.createElement("li");
+      li.id = `file-${shown.length}`;
+      li.dataset.index = String(shown.length);
+      li.setAttribute("role", "option");
+      li.title = f.path;
+      const slash = f.name.lastIndexOf("/");
+      li.append(span("name", f.name.slice(slash + 1)), span("dir", f.name.slice(0, slash + 1)), span("size", size(f.size)));
+      li.classList.toggle("current", f.path === file?.source);
+      shown.push(f);
+      items.push(li);
+    }
+  }
+  filesList.replaceChildren(...items);
+  active = Math.min(active, Math.max(shown.length - 1, 0));
+  highlight();
+  const roots = listed.roots.map((r) => r.root).join(", ");
+  $("files-note").textContent =
+    total === 0
+      ? `No Parquet files under ${roots}. Type a path above instead.`
+      : matched === 0
+        ? "No file matches the filter."
+        : (matched === total ? `${total} ${total === 1 ? "file" : "files"}` : `${matched} of ${total} files`) +
+          (matched > shown.length ? `; the first ${shown.length} are shown, type to narrow.` : ".") +
+          (listed.truncated
+            ? ` Too many files to list whole under ${listed.roots.filter((r) => r.truncated).map((r) => r.root).join(", ")}: some are missing, type a path above to open them.`
+            : "");
+}
+
+function highlight(scroll = false): void {
+  for (const li of filesList.querySelectorAll<HTMLLIElement>("li[data-index]")) {
+    const on = Number(li.dataset.index) === active;
+    li.classList.toggle("active", on);
+    li.setAttribute("aria-selected", String(on));
+    if (on && scroll) li.scrollIntoView({ block: "nearest" });
+  }
+  if (shown.length) filterInput.setAttribute("aria-activedescendant", `file-${active}`);
+  else filterInput.removeAttribute("aria-activedescendant");
+}
+
+// Only the newest listing may fill the list, so a slow older one never replaces it.
+let listing = 0;
+
+async function loadFiles(): Promise<void> {
+  if (!api) return;
+  const mine = ++listing;
+  const reload = $<HTMLButtonElement>("reload");
+  $("files-panel").hidden = false;
+  reload.disabled = true;
+  try {
+    const result = await api.files();
+    if (mine !== listing) return;
+    listed = result;
+    showFiles();
+  } catch (error) {
+    if (mine === listing) $("files-note").textContent = describe(error);
+  } finally {
+    if (mine === listing) reload.disabled = false;
+  }
 }
 
 async function open(path: string): Promise<void> {
@@ -296,12 +402,14 @@ async function open(path: string): Promise<void> {
   offsets = [];
   filter = undefined;
   hidden = new Set();
-  filterInput.value = "";
-  filterInput.removeAttribute("aria-invalid");
+  whereInput.value = "";
+  whereInput.removeAttribute("aria-invalid");
   seq += 1;
   refInput.value = file.ref;
   latest = Promise.resolve(file.ref);
+  pathInput.value = file.source;
   showCard(file);
+  showFiles();
   await loadPage(0, 0, undefined, [{ at: 0, index: 0 }]);
   showSelection();
   say(file.selectable ? "" : "Rows of this file cannot be selected: see below.");
@@ -310,6 +418,52 @@ async function open(path: string): Promise<void> {
 $<HTMLFormElement>("open-form").addEventListener("submit", (event) => {
   event.preventDefault();
   void open(pathInput.value.trim());
+});
+
+filterInput.addEventListener("input", () => {
+  active = 0;
+  showFiles();
+});
+
+filterInput.addEventListener("keydown", (event) => {
+  // Enter and the arrows belong to the input method while it is composing (a Japanese name, say).
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!shown.length) return;
+    active = (active + (event.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length;
+    highlight(true);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    const f = shown[active];
+    if (f) void open(f.path);
+  } else if (event.key === "Escape" && filterInput.value) {
+    event.preventDefault();
+    filterInput.value = "";
+    active = 0;
+    showFiles();
+  }
+});
+
+filesList.addEventListener("click", (event) => {
+  const li = (event.target as Element).closest<HTMLLIElement>("li[data-index]");
+  if (!li) return;
+  active = Number(li.dataset.index);
+  highlight();
+  const f = shown[active];
+  if (f) void open(f.path);
+});
+
+$("reload").addEventListener("click", () => void loadFiles());
+
+// "/" goes to the filter from anywhere but a text field, as in many file pickers.
+document.addEventListener("keydown", (event) => {
+  const target = event.target as HTMLElement;
+  if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey || target.closest("input, textarea")) return;
+  if ($("files-panel").hidden) return;
+  event.preventDefault();
+  filterInput.focus();
+  filterInput.select();
 });
 
 rowsTable.addEventListener("click", (event) => {
@@ -330,13 +484,13 @@ rowsTable.addEventListener("click", (event) => {
   selectionChanged();
 });
 
-$<HTMLFormElement>("filter-form").addEventListener("submit", (event) => {
+$<HTMLFormElement>("where-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  void applyFilter(filterInput.value);
+  void applyFilter(whereInput.value);
 });
 
-$("clear-filter").addEventListener("click", () => {
-  filterInput.value = "";
+$("clear-where").addEventListener("click", () => {
+  whereInput.value = "";
   void applyFilter("");
 });
 
@@ -402,7 +556,8 @@ async function start(): Promise<void> {
     return;
   }
   api = httpApi(token);
-  pathInput.focus();
+  await loadFiles();
+  (shown.length ? filterInput : pathInput).focus();
 }
 
 void start();

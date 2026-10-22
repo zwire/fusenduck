@@ -16,6 +16,14 @@
       </form>
       <p id="status" role="status"></p>
     </header>
+    <aside id="files-panel" hidden>
+      <div class="files-bar">
+        <input id="filter" type="search" autocomplete="off" spellcheck="false" placeholder="Filter files" aria-label="Filter files" aria-controls="files" />
+        <button id="reload" type="button" title="List the files again">Reload</button>
+      </div>
+      <p id="files-note" class="note"></p>
+      <ul id="files" role="listbox" aria-label="Parquet files under the roots"></ul>
+    </aside>
     <main>
       <section id="card-section" hidden>
         <h2 id="source"></h2>
@@ -27,11 +35,11 @@
           <input id="ref" type="text" readonly aria-label="Ref" />
           <button id="copy" type="button">Copy</button>
         </div>
-        <form id="filter-form" class="bar">
-          <label for="filter">Filter</label>
-          <input id="filter" name="filter" type="text" autocomplete="off" spellcheck="false" placeholder="SQL condition on the columns, e.g. amount > 100 AND region = 'south'" />
+        <form id="where-form" class="bar">
+          <label for="where">Filter rows</label>
+          <input id="where" name="where" type="text" autocomplete="off" spellcheck="false" placeholder="SQL condition on the columns, e.g. amount > 100 AND region = 'south'" />
           <button type="submit">Apply</button>
-          <button id="clear-filter" type="button">Clear</button>
+          <button id="clear-where" type="button">Clear</button>
         </form>
         <p id="selection"></p>
         <table id="rows"></table>

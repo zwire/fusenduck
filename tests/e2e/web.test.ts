@@ -3,7 +3,7 @@
 // the Ref, and check that resolving it returns exactly the rows that were selected.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { copyFileSync, realpathSync } from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -116,8 +116,8 @@ describe("Web UI in Chromium", () => {
     expect(columnsOnly).toContain("cols=id,amount,note");
     expect(await resolved(columnsOnly)).toHaveLength(1000);
 
-    await page.fill("#filter", "region = 'south' AND id <= 40");
-    await page.press("#filter", "Enter");
+    await page.fill("#where", "region = 'south' AND id <= 40");
+    await page.press("#where", "Enter");
     await page.waitForFunction(() => /10 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
     expect(await page.locator("#rows tbody tr").count()).toBe(10);
     expect(await page.textContent("#page")).toBe("rows 1–10 of 10 matching the filter (1000 in the file)");
@@ -136,15 +136,15 @@ describe("Web UI in Chromium", () => {
     expect(await resolved(await copy())).toEqual([1, 5, 9]);
 
     // A bad filter says why and leaves the rows and the filter that was applied.
-    await page.fill("#filter", "amont > 1");
-    await page.click("#filter-form button[type=submit]");
+    await page.fill("#where", "amont > 1");
+    await page.click("#where-form button[type=submit]");
     await page.waitForFunction(() => document.getElementById("status")?.classList.contains("error"));
     expect(await page.textContent("#status")).toMatch(/^Filter rejected: .*amont/);
-    expect(await page.getAttribute("#filter", "aria-invalid")).toBe("true");
+    expect(await page.getAttribute("#where", "aria-invalid")).toBe("true");
     expect(await page.locator("#rows tbody tr").count()).toBe(10);
 
     // Clear goes back to every row; ticking "all" keeps every column again.
-    await page.click("#clear-filter");
+    await page.click("#clear-where");
     await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 100);
     await page.locator("#keep-all input").check();
     expect(await page.locator("#rows thead th").count()).toBe(6);
@@ -166,16 +166,16 @@ describe("Web UI in Chromium", () => {
       await route.continue();
     });
     try {
-      await page.fill("#filter", "id <= 300");
-      await page.press("#filter", "Enter");
-      await page.fill("#filter", "id <= 5");
-      await page.press("#filter", "Enter");
+      await page.fill("#where", "id <= 300");
+      await page.press("#where", "Enter");
+      await page.fill("#where", "id <= 5");
+      await page.press("#where", "Enter");
       await page.waitForFunction(() => /5 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
       await new Promise((resolve) => setTimeout(resolve, 800));
       expect(await page.locator("#rows tbody tr").count()).toBe(5);
       expect(await page.textContent("#page")).toBe("rows 1–5 of 5 matching the filter (1000 in the file)");
       expect(await page.isDisabled("#prev")).toBe(true);
-      expect(await page.getAttribute("#filter", "aria-invalid")).toBeNull();
+      expect(await page.getAttribute("#where", "aria-invalid")).toBeNull();
     } finally {
       await page.unrouteAll({ behavior: "wait" });
     }
@@ -280,10 +280,49 @@ describe("Web UI in Chromium", () => {
     expect(await resolved(ref)).toEqual(range(0, 19));
 
     // The filter still picks rows here, through the file's own column.
-    await page.fill("#filter", "file_row_number >= 150");
-    await page.press("#filter", "Enter");
+    await page.fill("#where", "file_row_number >= 150");
+    await page.press("#where", "Enter");
     await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 5);
     expect(await resolved(await copy())).toEqual(range(15, 19));
+  });
+
+  it("lists the Parquet files under the root; the filter, the arrow keys and Enter open one, and so does a click", async () => {
+    // Listed when the page started, before the other tests wrote their files.
+    expect(await page.locator("#files li[data-index]").allTextContents()).toEqual([expect.stringMatching(/^customers\.parquet\d/)]);
+
+    mkdirSync(join(dir, "sales/2026"), { recursive: true });
+    await writeCustomers(join(dir, "sales/2026/q1.parquet"), 30);
+    await writeCustomers(join(dir, "sales/2026/q2.parquet"), 40);
+    // A file name is untrusted too: it must show as text.
+    await writeCustomers(join(dir, `${HOSTILE_CELLS[0]!.replaceAll("/", "")}.parquet`), 5);
+    await page.click("#reload");
+    await page.waitForFunction(() => /q2\.parquet/.test(document.getElementById("files")?.textContent ?? ""));
+    expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+
+    // "/" jumps to the filter; every word typed must appear in the path.
+    await page.locator("#rows tbody tr").first().click();
+    await page.keyboard.press("/");
+    await page.keyboard.type("sales q");
+    expect(await page.locator("#files li[data-index] .name").allTextContents()).toEqual(["q1.parquet", "q2.parquet"]);
+    expect(await page.textContent("#files-note")).toMatch(/^2 of \d+ files\.$/);
+    // The extension is not matched: "q" alone narrows to the same two files.
+    await page.fill("#filter", "q");
+    expect(await page.locator("#files li[data-index] .name").allTextContents()).toEqual(["q1.parquet", "q2.parquet"]);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => / — 40 rows$/.test(document.getElementById("source")?.textContent ?? ""));
+    expect(await page.inputValue("#path")).toBe(join(dir, "sales/2026/q2.parquet"));
+    expect(await page.textContent("#files li.current .name")).toBe("q2.parquet");
+    await page.waitForSelector("#rows tbody tr");
+    expect(await resolved(await copy())).toEqual(range(1, 40));
+
+    await page.click("#files li[data-index]:first-child");
+    await page.waitForFunction(() => / — 30 rows$/.test(document.getElementById("source")?.textContent ?? ""));
+
+    await page.fill("#filter", "nothing-like-this");
+    expect(await page.textContent("#files-note")).toBe("No file matches the filter.");
+    await page.press("#filter", "Escape");
+    expect(await page.inputValue("#filter")).toBe("");
   });
 
   it("logged no CSP violation on its own page", () => {
