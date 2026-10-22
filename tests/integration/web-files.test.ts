@@ -57,12 +57,15 @@ describe("Web UI: the list of files under the roots (docs/adr/0002)", () => {
     expect(listed.roots[2]!.files).toEqual([]);
   });
 
-  it(`stops at ${MAX_FILES} files and says the list was cut`, async () => {
+  it(`stops at ${MAX_FILES} files under a root and says so; the next root keeps its own limit`, async () => {
     const many = tempDir();
     for (let i = 0; i <= MAX_FILES; i++) writeFileSync(join(many, `f${String(i).padStart(5, "0")}.parquet`), "");
-    const listed = await listFiles([many]);
+    const listed = await listFiles([many, join(dir, "sales")]);
     expect(listed.truncated).toBe(true);
+    expect(listed.roots[0]!.truncated).toBe(true);
     expect(listed.roots[0]!.files).toHaveLength(MAX_FILES);
+    expect(listed.roots[1]!.truncated).toBe(false);
+    expect(names(listed, 1)).toEqual(["2026/q1.PARQUET", "a.parquet"]);
   });
 
   describe("through the server", () => {

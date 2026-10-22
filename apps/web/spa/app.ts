@@ -231,7 +231,9 @@ function showFiles(): void {
         ? "No file matches the filter."
         : (matched === total ? `${total} ${total === 1 ? "file" : "files"}` : `${matched} of ${total} files`) +
           (matched > shown.length ? `; the first ${shown.length} are shown, type to narrow.` : ".") +
-          (listed.truncated ? " The folders are too large to list whole: some files are missing, type a path above to open them." : "");
+          (listed.truncated
+            ? ` Too many files to list whole under ${listed.roots.filter((r) => r.truncated).map((r) => r.root).join(", ")}: some are missing, type a path above to open them.`
+            : "");
 }
 
 function highlight(scroll = false): void {
@@ -245,16 +247,25 @@ function highlight(scroll = false): void {
   else filterInput.removeAttribute("aria-activedescendant");
 }
 
+// Only the newest listing may fill the list, so a slow older one never replaces it.
+let listing = 0;
+
 async function loadFiles(): Promise<void> {
   if (!api) return;
+  const mine = ++listing;
+  const reload = $<HTMLButtonElement>("reload");
   $("files-panel").hidden = false;
+  reload.disabled = true;
   try {
-    listed = await api.files();
+    const result = await api.files();
+    if (mine !== listing) return;
+    listed = result;
+    showFiles();
   } catch (error) {
-    $("files-note").textContent = describe(error);
-    return;
+    if (mine === listing) $("files-note").textContent = describe(error);
+  } finally {
+    if (mine === listing) reload.disabled = false;
   }
-  showFiles();
 }
 
 async function open(path: string): Promise<void> {
@@ -294,6 +305,8 @@ filterInput.addEventListener("input", () => {
 });
 
 filterInput.addEventListener("keydown", (event) => {
+  // Enter and the arrows belong to the input method while it is composing (a Japanese name, say).
+  if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
     event.preventDefault();
     if (!shown.length) return;

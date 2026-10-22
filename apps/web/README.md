@@ -26,7 +26,7 @@ node apps/web/src/index.ts [--root <dir>]... [--host <loopback>] [--port <n>]
 | パス | 本文 | 返すもの |
 | --- | --- | --- |
 | `/api/session` | `{ code }` | `{ token }`。コードは 1 回だけ、60 秒まで |
-| `/api/files` | `{}` | `{ roots: [{ root, files: [{ path, name, size, modified }] }], truncated }`。name はルートからの `/` 区切りのパス、path は開くときに渡すパス |
+| `/api/files` | `{}` | `{ roots: [{ root, files: [{ path, name, size, modified }], truncated }], truncated }`。name はルートからの `/` 区切りのパス、path は開くときに渡すパス |
 | `/api/open` | `{ path }` | `{ source, fingerprint, card, ref, selectable }` |
 | `/api/rows` | `{ source, fingerprint, offset, limit? }` | `{ rows: [{ pos, cells }], next, cut }`。limit は 1〜500(既定 100) |
 | `/api/ref` | `{ source, fingerprint, ranges: [[a, b], ...] }` | `{ ref }`。範囲は結合して 1,000 個まで |

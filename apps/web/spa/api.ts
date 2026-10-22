@@ -36,7 +36,7 @@ export interface ListedFile {
 }
 
 export interface Listed {
-  roots: { root: string; files: ListedFile[] }[];
+  roots: { root: string; files: ListedFile[]; truncated: boolean }[];
   truncated: boolean;
 }
 
