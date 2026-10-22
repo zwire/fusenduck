@@ -28,7 +28,20 @@ export interface Page {
 
 export type Range = [number, number];
 
+export interface ListedFile {
+  path: string;
+  name: string;
+  size: number;
+  modified: number;
+}
+
+export interface Listed {
+  roots: { root: string; files: ListedFile[] }[];
+  truncated: boolean;
+}
+
 export interface Api {
+  files(): Promise<Listed>;
   open(path: string): Promise<Opened>;
   rows(file: Opened, offset: number, limit: number): Promise<Page>;
   ref(file: Opened, ranges: Range[]): Promise<string>;
@@ -61,6 +74,7 @@ export async function exchange(code: string): Promise<string> {
 /** The local server's API, on the page's own origin. */
 export function httpApi(token: string): Api {
   return {
+    files: () => post<Listed>("/api/files", {}, token),
     open: (path) => post<Opened>("/api/open", { path }, token),
     rows: (file, offset, limit) => post<Page>("/api/rows", { source: file.source, fingerprint: file.fingerprint, offset, limit }, token),
     ref: async (file, ranges) =>

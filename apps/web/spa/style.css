@@ -5,6 +5,100 @@
 }
 body {
   margin: 0 16px 24px;
+  display: grid;
+  grid-template-columns: minmax(14em, 22em) minmax(0, 1fr);
+  grid-template-areas: "header header" "files main";
+  column-gap: 16px;
+}
+body > header {
+  grid-area: header;
+}
+body > main {
+  grid-area: main;
+  min-width: 0;
+  overflow-x: auto;
+}
+#files-panel {
+  grid-area: files;
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+#files-panel[hidden] {
+  display: none;
+}
+/* Without the panel, or on a narrow window, the main part takes the whole width. */
+body:has(#files-panel[hidden]) {
+  grid-template-areas: "header header" "main main";
+}
+@media (max-width: 720px) {
+  body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "header" "files" "main";
+  }
+  body:has(#files-panel[hidden]) {
+    grid-template-areas: "header" "main";
+  }
+  #files-panel {
+    position: static;
+    max-height: 40vh;
+  }
+}
+.files-bar {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+#filter {
+  flex: 1;
+  min-width: 0;
+}
+#files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid #8884;
+}
+#files li {
+  display: flex;
+  gap: 8px;
+  padding: 3px 6px;
+  cursor: pointer;
+  font-family: ui-monospace, monospace;
+}
+#files li .name {
+  white-space: nowrap;
+}
+#files li .dir {
+  flex: 1;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#files li .size {
+  color: #888;
+  white-space: nowrap;
+}
+#files li.root {
+  cursor: default;
+  color: #888;
+  font-family: inherit;
+  font-size: 12px;
+  padding-top: 6px;
+}
+#files li.active {
+  background: #8883;
+}
+#files li.current {
+  font-weight: bold;
+}
+#files li.current::before {
+  content: "▸";
 }
 header form {
   display: flex;

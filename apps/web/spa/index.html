@@ -16,6 +16,14 @@
       </form>
       <p id="status" role="status"></p>
     </header>
+    <aside id="files-panel" hidden>
+      <div class="files-bar">
+        <input id="filter" type="search" autocomplete="off" spellcheck="false" placeholder="Filter files" aria-label="Filter files" aria-controls="files" />
+        <button id="reload" type="button" title="List the files again">Reload</button>
+      </div>
+      <p id="files-note" class="note"></p>
+      <ul id="files" role="listbox" aria-label="Parquet files under the roots"></ul>
+    </aside>
     <main>
       <section id="card-section" hidden>
         <h2 id="source"></h2>

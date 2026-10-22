@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { describeError, FusenError, SourceChanged } from "@fusenduck/core";
+import { listFiles } from "./files.ts";
 import { View } from "./view.ts";
 
 // The local server of the Web UI (docs/adr/0002): it serves the SPA and a small JSON API on one
@@ -129,6 +130,8 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
     if (!same(bearer, tokenDigest)) throw new HttpError(401, "unauthorized");
     const body = await readJson(req);
     switch (path) {
+      case "/api/files":
+        return listFiles(options.roots);
       case "/api/open": {
         const next = await View.open(body.path as string, options.roots);
         const previous = view;
