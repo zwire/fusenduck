@@ -15,7 +15,9 @@
     "test:e2e": "pnpm --filter @fusenduck/web build && vitest run --config vitest.e2e.config.ts",
     "bench": "node tests/bench/card.bench.ts",
     "lint": "eslint .",
-    "contract:check": "vitest run tests/contract"
+    "contract:check": "vitest run tests/contract",
+    "repro:check": "node tests/integration/repro-check.ts",
+    "docs:reference": "node packages/mcp/src/reference.ts --write"
   },
   "devDependencies": {
     "@duckdb/node-api": "1.5.6-r.1",

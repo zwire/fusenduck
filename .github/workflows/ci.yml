@@ -64,3 +64,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright-core install --with-deps chromium
       - run: pnpm test:e2e
+
+  repro:
+    # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs
+    # to the same text as this checkout (pnpm repro:check). The report goes to the job summary.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm -s repro:check --out "$GITHUB_STEP_SUMMARY"

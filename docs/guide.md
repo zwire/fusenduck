@@ -109,6 +109,8 @@ OMITTED: 47 of 50 rows are not shown (the first 3 in file order are). ...
 - 見せなかったもの(省いた行、切った文字列、近似の項目)を `OMITTED:` に必ず書きます。
 - 文字列のセルは 2000 文字、1 回の結果は約 256KB で切ります。
 - DuckDB のエラー文にはセルの値が入りうるので、エージェントには固定の文言だけを返します。詳細は CLI なら `FUSEN_DEBUG=1` で、MCP サーバーなら標準エラーで見られます。
+- ただし、自分で書いた述語やクエリの書き間違い(構文、存在しない列、型の合わない関数)は、行を読む前の計画の段階で見つかり、セルの値を含まないので、そのまま見せます。`--where "region = south"` なら `Referenced column "south" not found` と、文字列は `'south'` のように引用符で囲むことを返します。
+- CLI の終了コードは、0 が成功(`DATA_CHANGED` の結果も含む)、1 がコマンドの失敗(ファイルが読めない、Ref が壊れている、エンジンのエラーなど)、2 がコマンドラインの誤り(知らないコマンドやオプション、値の形)です。`fusen --help` で使い方、`fusen --version` で版が出ます。
 
 ## 8. MCP サーバー
 
@@ -120,6 +122,8 @@ OMITTED: 47 of 50 rows are not shown (the first 3 in file order are). ...
 | `fusen_peek` | `path`, `rows?`(0〜50) | カード・最初の行・Ref |
 | `fusen_ref` | `path`, `query?`, `where?`, `columns?` | Ref を作る |
 | `fusen_resolve` | `ref`, `limit?`(0〜1000) | Ref の行を返す |
+
+引数の型と範囲は、ツールのスキーマから生成した [MCP ツールのリファレンス](reference/mcp-tools.md) にあります。
 
 標準入出力(stdio)で動かすのが基本です。
 
@@ -214,8 +218,10 @@ code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を�
 | lint | `pnpm lint` | ESLint(typescript-eslint) |
 | Ref の凍結コーパス | `pnpm contract:check` | `tests/contract/refs/` の Ref が、同じ項目に読めて同じ文字列に戻ること。エージェントがすでに持っている Ref を壊す変更はここで落ちる |
 | bench | `pnpm bench` | 100 万行の Parquet で、カード作成 1 秒以内、カード描画と 11 行の描画が各 1,000 トークン以内。Web UI は開く 1 秒、100 行のページ 0.2 秒、Ref の作成 0.1 秒、SPA 50KB 以内(`bench/budgets.json`)。超えたら exit 1 |
+| 再現性 | `pnpm repro:check` | HEAD のきれいな clone が lockfile から入り、ビルドでき、同じフィクスチャを同じバイトで書き、golden の Ref を同じ文字列に解決すること。結果の表は `.scratch/repro/report.md`(CI ではジョブのサマリー) |
+| 契約リファレンス | `pnpm docs:reference` | `docs/reference/mcp-tools.md` を MCP ツールのスキーマから作り直す。古いままだと `pnpm test` が落ちる |
 | ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI と VS Code 拡張の webview を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる(webview は拡張のホストの処理につなぐが、VS Code 本体は起動しない) |
-| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench とブラウザのテストは Linux で回し、bench の表をジョブのサマリーに出す |
+| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench、ブラウザのテスト、repro:check は Linux で回し、bench と repro:check の表をジョブのサマリーに出す |
 
 ## まだできないこと
 
@@ -223,6 +229,6 @@ code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を�
 - ファイルを移動したあとの Ref の解決。
 - npm への公開、`fusen` コマンドとしてのインストール、VS Code 拡張の公開(いまは開発用に読み込むだけ)。
 - Web UI での列の選択、述語の入力、クエリ付き Ref、ファイルの一覧(いまはパスの入力だけ)。
-- 契約(Ref の文法、MCP ツールの形)のリファレンスをスキーマから生成すること。いまはこのガイドが手書きの説明です。
+- Ref の文法のリファレンスの生成(MCP ツールの形は生成済み。Ref の文法はこのガイドと `tests/contract/refs` の凍結コーパスが拠り所です)。
 
 設計の経緯は [ADR 0001](adr/0001-engine-ref-rendering.md)、構想は [vision.md](vision.md) にあります。

@@ -16,3 +16,22 @@ export function describeError(error: unknown, opts: { debug?: boolean } = {}): s
   if (opts.debug) return error instanceof Error ? error.message : String(error);
   return WITHHELD;
 }
+
+/**
+ * Runs the planning of a selection the caller wrote (`DESCRIBE`, which reads no rows). A parser,
+ * binder or catalog error is about the caller's own text and the schema, never a cell, so its first
+ * line is shown: a misspelled column or an unquoted text value is then something the caller can fix.
+ * Any other error stays withheld.
+ */
+export async function planned<T>(what: string, plan: () => Promise<T>): Promise<T> {
+  try {
+    return await plan();
+  } catch (error) {
+    if (error instanceof FusenError) throw error;
+    const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+    if (!/^(Parser|Binder|Catalog) Error:/.test(message)) throw error;
+    // "region = south" names a column south; the fix is quoting the value.
+    const hint = /^Binder Error: Referenced column ".*" not found/.test(message) ? " A text value goes in single quotes, as in region = 'south'." : "";
+    throw new FusenError(`${what} rejected: ${message.slice(0, 300)}${hint}`);
+  }
+}

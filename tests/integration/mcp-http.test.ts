@@ -106,8 +106,9 @@ describe("MCP adapter over HTTP", () => {
       let stderr = "";
       child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
       const code = await new Promise((resolve) => child.on("exit", resolve));
-      expect(code).toBe(1);
+      expect(code).toBe(2);
       expect(stderr).toMatch(/^fusen-mcp: /);
+      expect(stderr).toContain("usage: fusen-mcp");
       expect(stderr).not.toContain("    at ");
     }
   });

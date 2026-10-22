@@ -37,7 +37,9 @@ const inside = (root: string, path: string): boolean => {
  * outside the roots give one message, so the error does not tell a caller what exists elsewhere.
  */
 function resolveWithin(source: string, roots: string[] | undefined): string {
-  const denied = new FusenError(`the source is not readable or is outside the allowed roots: ${source}`);
+  const denied = new FusenError(
+    roots ? `the source is not readable or is outside the allowed roots: ${source}` : `cannot read ${source}: there is no such file, or it is not readable`,
+  );
   let path: string;
   try {
     path = realpathSync(source);
