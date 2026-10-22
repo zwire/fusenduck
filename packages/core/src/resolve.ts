@@ -44,8 +44,8 @@ export interface MintOptions {
   expect?: string;
 }
 
-export async function mintRef(source: string, opts: MintOptions & { roots?: string[] } = {}): Promise<string> {
-  const engine = await openSource(source, { roots: opts.roots });
+export async function mintRef(source: string, opts: MintOptions & { roots?: string[]; signal?: AbortSignal } = {}): Promise<string> {
+  const engine = await openSource(source, { roots: opts.roots, signal: opts.signal });
   try {
     return await mintRefWith(engine, opts);
   } finally {
@@ -74,11 +74,11 @@ export async function mintRefWith(engine: Engine, opts: MintOptions = {}): Promi
 
 export async function resolveRef(
   text: string,
-  opts: { limit?: number; maxBytes?: number; timeoutMs?: number; roots: string[] },
+  opts: { limit?: number; maxBytes?: number; timeoutMs?: number; roots: string[]; signal?: AbortSignal },
 ): Promise<string> {
   const ref = parseRef(text);
   // A Ref names its own file, so a pasted Ref must not be able to point anywhere on disk.
-  const engine = await openSource(ref.source, { roots: opts.roots });
+  const engine = await openSource(ref.source, { roots: opts.roots, signal: opts.signal });
   if (ref.query) await checkQuery(engine, ref.query);
   if (ref.where) await checkPredicate(engine, engine.source, ref.where, ref.query);
   const now = await fingerprint(engine);
@@ -162,15 +162,16 @@ async function countCopies(
  */
 export async function peek(
   source: string,
-  opts: { rows?: number; roots?: string[] } = {},
+  opts: { rows?: number; roots?: string[]; signal?: AbortSignal } = {},
 ): Promise<string> {
   const rows = opts.rows ?? DEFAULT_PEEK_ROWS;
   if (!Number.isInteger(rows) || rows < 0 || rows > MAX_PEEK_ROWS) {
     throw new FusenError(`rows must be an integer from 0 to ${MAX_PEEK_ROWS}`);
   }
-  const engine = await openSource(source, { roots: opts.roots });
+  const { signal } = opts;
+  const engine = await openSource(source, { roots: opts.roots, signal });
   const card = renderCard(await buildCard(engine), engine.source);
-  const ref = await mintRef(source, { roots: opts.roots });
+  const ref = await mintRef(source, { roots: opts.roots, signal });
   // The Ref was just minted from this file, so resolving it may read this file's own directory.
-  return `${card}\n${await resolveRef(ref, { limit: rows, roots: opts.roots ?? [dirname(engine.source)] })}`;
+  return `${card}\n${await resolveRef(ref, { limit: rows, roots: opts.roots ?? [dirname(engine.source)], signal })}`;
 }

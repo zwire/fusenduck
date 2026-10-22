@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { buildCard, describeError, MAX_PEEK_ROWS, mintRef, openSource, peek, renderCard, resolveRef } from "@fusenduck/core";
+import type { Gate } from "./gate.ts";
 
 // Tool descriptions are fixed text. Data read from a source appears only in tool results, inside
 // the delimited data block that core renders. Engine errors can quote cell values, so they are
@@ -12,9 +13,15 @@ const failure = (error: unknown) => {
   return { isError: true, ...text(`fusen error: ${describeError(error)}`) };
 };
 
-/** An MCP server over core. Files are readable only under `roots`. */
-export function createServer(roots: string[]): McpServer {
+/**
+ * An MCP server over core. Files are readable only under `roots`. A call stops when its client
+ * cancels it or goes away. With a `gate`, calls also wait for a free slot (shared by every server
+ * that gets the same gate).
+ */
+export function createServer(roots: string[], gate?: Gate): McpServer {
   const server = new McpServer({ name: "fusenduck", version: "0.0.0" });
+  const guarded = (signal: AbortSignal, work: () => Promise<string>) =>
+    (gate ? gate.run(signal, work) : work()).then(text, failure);
 
   server.registerTool(
     "fusen_card",
@@ -24,14 +31,11 @@ export function createServer(roots: string[]): McpServer {
         "min/max and approximate distinct counts. No row values are returned.",
       inputSchema: { path: z.string().describe("Path of a Parquet file under an allowed root") },
     },
-    async ({ path }) => {
-      try {
-        const engine = await openSource(path, { roots });
-        return text(renderCard(await buildCard(engine), engine.source));
-      } catch (error) {
-        return failure(error);
-      }
-    },
+    ({ path }, { signal }) =>
+      guarded(signal, async () => {
+        const engine = await openSource(path, { roots, signal });
+        return renderCard(await buildCard(engine), engine.source);
+      }),
   );
 
   server.registerTool(
@@ -45,13 +49,8 @@ export function createServer(roots: string[]): McpServer {
         rows: z.number().int().min(0).max(MAX_PEEK_ROWS).optional().describe("Rows to show (default 5)"),
       },
     },
-    async ({ path, rows }) => {
-      try {
-        return text(await peek(path, { ...(rows === undefined ? {} : { rows }), roots }));
-      } catch (error) {
-        return failure(error);
-      }
-    },
+    ({ path, rows }, { signal }) =>
+      guarded(signal, () => peek(path, { ...(rows === undefined ? {} : { rows }), roots, signal })),
   );
 
   server.registerTool(
@@ -71,13 +70,8 @@ export function createServer(roots: string[]): McpServer {
         columns: z.array(z.string().min(1)).min(1).optional().describe("Column names to keep"),
       },
     },
-    async ({ path, query, where, columns }) => {
-      try {
-        return text(await mintRef(path, { query, where, columns, roots }));
-      } catch (error) {
-        return failure(error);
-      }
-    },
+    ({ path, query, where, columns }, { signal }) =>
+      guarded(signal, () => mintRef(path, { query, where, columns, roots, signal })),
   );
 
   server.registerTool(
@@ -91,13 +85,8 @@ export function createServer(roots: string[]): McpServer {
         limit: z.number().int().min(0).max(1000).optional().describe("Maximum rows to return (default 100)"),
       },
     },
-    async ({ ref, limit }) => {
-      try {
-        return text(await resolveRef(ref, { ...(limit === undefined ? {} : { limit }), roots }));
-      } catch (error) {
-        return failure(error);
-      }
-    },
+    ({ ref, limit }, { signal }) =>
+      guarded(signal, () => resolveRef(ref, { ...(limit === undefined ? {} : { limit }), roots, signal })),
   );
 
   return server;

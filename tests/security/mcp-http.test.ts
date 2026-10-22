@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startHttpServer, type HttpHandle } from "../../packages/mcp/src/http.ts";
+import { fingerprint, formatRef, openSource } from "@fusenduck/core";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 
 const entry = join(import.meta.dirname, "../../packages/mcp/src/index.ts");
@@ -110,5 +111,57 @@ describe("a canary token never leaves the process", () => {
     } finally {
       child.kill();
     }
+  });
+});
+
+/** Sends one tools/call as a raw POST, so the test can hang up on it. */
+function callRaw(url: string, name: string, args: Record<string, unknown>) {
+  const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } });
+  let req!: ReturnType<typeof request>;
+  const done = new Promise<string>((resolve, reject) => {
+    req = request(
+      url,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${TOKEN}` },
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk: Buffer) => (text += chunk.toString()));
+        res.on("end", () => resolve(text));
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+  return { req, done };
+}
+
+describe("MCP over HTTP: how much work runs at once", () => {
+  const dir = tempDir();
+  const file = join(dir, "customers.parquet");
+  let handle: HttpHandle;
+
+  beforeAll(async () => {
+    await writeCustomers(file, 100);
+    handle = await startHttpServer({ roots: [dir], token: TOKEN, maxConcurrent: 1, maxQueued: 1 });
+  });
+  afterAll(() => handle.close());
+
+  it("queues work past the limit, refuses work past the queue, and frees a slot when a client hangs up", async () => {
+    const fp = await fingerprint(await openSource(file));
+    const slow = formatRef({ source: file, where: "id IN (SELECT i FROM range(3000000000) t(i) WHERE i % 7 = -1)", fingerprint: fp });
+    const first = callRaw(handle.url, "fusen_resolve", { ref: slow });
+    first.done.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 300));
+    const queued = callRaw(handle.url, "fusen_card", { path: file });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(await callRaw(handle.url, "fusen_card", { path: file }).done).toMatch(/busy/);
+
+    // The first client goes away: its query stops, and the queued call runs long before the 10 s clock.
+    const started = Date.now();
+    first.req.destroy();
+    expect(await queued.done).toContain("rows");
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 });

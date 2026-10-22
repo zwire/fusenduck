@@ -1,4 +1,5 @@
 import { lit, type Engine } from "./engine.ts";
+import { FusenError } from "./errors.ts";
 
 export interface CardColumn {
   column: string;
@@ -17,6 +18,9 @@ export interface DataCard {
   approximate: string[];
 }
 
+/** A card reads every row of the file; past this it is stopped, so a huge file cannot hold a caller forever. */
+export const CARD_TIMEOUT_MS = 30_000;
+
 const MAX_TEXT = 40;
 const MAX_NAME = 80;
 
@@ -29,8 +33,17 @@ function shorten(value: string | null, type: string): string | null {
 // Column names are source text too.
 const clip = (value: string): string => (value.length > MAX_NAME ? `${value.slice(0, MAX_NAME)}…` : value);
 
-export async function buildCard(engine: Engine): Promise<DataCard> {
-  const summary = await engine.query(`SUMMARIZE SELECT * FROM read_parquet(${lit(engine.source)})`);
+export async function buildCard(engine: Engine, opts: { timeoutMs?: number } = {}): Promise<DataCard> {
+  const timeoutMs = opts.timeoutMs ?? CARD_TIMEOUT_MS;
+  let summary;
+  try {
+    summary = await engine.query(`SUMMARIZE SELECT * FROM read_parquet(${lit(engine.source)})`, { timeoutMs });
+  } catch (error) {
+    if (error instanceof FusenError && /stopped after/.test(error.message)) {
+      throw new FusenError(`data card stopped after ${timeoutMs} ms: the file is too large to summarize in time`);
+    }
+    throw error;
+  }
   const rows = Number(summary[0]?.count ?? 0);
   const columns = summary.map((c): CardColumn => {
     const type = String(c.column_type);
