@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { request } from "node:http";
-import { copyFileSync, realpathSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveRef } from "@fusenduck/core";
@@ -321,5 +321,63 @@ describe("Web UI server: open, rows and ref", () => {
     expect(filtered.next).toBeNull();
     const minted = await api("/api/ref", { source: own, fingerprint: opened.fingerprint, ranges: [], where });
     expect(ids(await resolveRef(String(minted.body.ref), { roots: [dir] }))).toEqual([15, 16, 17, 18, 19]);
+  });
+});
+
+// A stand-in for the platform's opener on PATH records the arguments it was given.
+describe.skipIf(process.platform === "win32")("Web UI entry point: opening the browser", () => {
+  const dir = tempDir();
+  const argv = join(tempDir(), "argv");
+  const opener = process.platform === "darwin" ? "open" : "xdg-open";
+  /** A directory holding an opener that runs `body`. */
+  const binWith = (body: string) => {
+    const bin = tempDir();
+    writeFileSync(join(bin, opener), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(bin, opener), 0o755);
+    return bin;
+  };
+  const recording = binWith(`printf '%s\\n' "$@" > '${argv}'`);
+  const failing = binWith("exit 1");
+
+  /** Starts fusen-web, waits until `done(stderr)` holds, and stops it. */
+  async function run(bin: string, args: string[], done: (stderr: string) => boolean): Promise<{ url: string; stderr: string }> {
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, DISPLAY: ":0" };
+    const child = spawn("node", [entry, "--root", dir, ...args], { env, stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!(/#c=\S+/.test(stderr) && done(stderr))) {
+        if (Date.now() > deadline || child.exitCode !== null) throw new Error(`fusen-web did not get there: ${stderr}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      return { url: /(http:\S+#c=\S+)/.exec(stderr)![1]!, stderr };
+    } finally {
+      child.kill("SIGTERM");
+      await new Promise((resolve) => child.once("exit", resolve));
+    }
+  }
+  const recorded = () => (existsSync(argv) ? readFileSync(argv, "utf8") : "");
+
+  beforeAll(() => buildSpa());
+
+  it("opens the printed URL, which carries the one-time code and not the session token", async () => {
+    const { url, stderr } = await run(recording, [], () => recorded() !== "");
+    expect(recorded()).toBe(`${url}\n`);
+    expect(codeOf(url)).toMatch(/^[\w-]{43}$/);
+    expect(stderr).not.toContain("could not open");
+  });
+
+  it("--no-open prints the URL and starts no opener", async () => {
+    writeFileSync(argv, "");
+    let printed: number | undefined;
+    // Long enough, from when the URL appears, for an opener started right after it to have written its arguments.
+    await run(recording, ["--no-open"], () => Date.now() - (printed ??= Date.now()) > 1000);
+    expect(recorded()).toBe("");
+  });
+
+  it("says so, and keeps the URL, when the browser cannot be opened", async () => {
+    const { stderr } = await run(failing, [], (err) => err.includes("could not open"));
+    expect(stderr).toMatch(/could not open a browser \(\S*open exited with 1\); open the URL above yourself within 60 seconds/);
   });
 });
