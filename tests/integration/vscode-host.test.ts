@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveRef } from "@fusenduck/core";
 import { Host, rootFor, type Reply } from "../../apps/vscode/src/host.ts";
-import { csp, webviewPage } from "../../apps/vscode/src/html.ts";
+import { csp, messagePage, webviewPage } from "../../apps/vscode/src/html.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 import { writeOwnPositionColumn } from "../helpers/web.ts";
 
@@ -79,6 +79,29 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
     const { fingerprint } = await result<{ fingerprint: string }>("open", { path: file });
     const reply = await send("ref", { source: file, fingerprint, ranges: [[5, 2000]] });
     expect(reply).toEqual({ id, error: "a range must lie within positions 0 to 999", changed: false });
+  });
+
+  it("withholds an engine message from the page, logs it, and says where the details are", async () => {
+    const seen: string[] = [];
+    const withheld = new Host({ path: file, roots: [dir], copy: async () => undefined, log: (line) => void seen.push(line), withheld: "See the log." });
+    try {
+      const opened = (await withheld.handle({ id: 1, method: "open", params: { path: file } })) as { result: { source: string; fingerprint: string } };
+      // A filter that fails only while it reads rows: DuckDB's message quotes the cell.
+      const reply = (await withheld.handle({
+        id: 2,
+        method: "rows",
+        params: { ...opened.result, offset: 0, limit: 5, where: "CAST(note AS INTEGER) > 0" },
+      })) as { error: string };
+      expect(reply.error).toMatch(/withheld because they can contain values from the source\. See the log\.$/);
+      expect(reply.error).not.toContain("note 1");
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).not.toContain("note 1");
+      expect(seen[0]).toContain("Conversion Error");
+      // core's own messages are shown as they are.
+      expect(await withheld.handle({ id: 3, method: "copy", params: { text: "x" } })).toMatchObject({ error: "only a Ref can be copied" });
+    } finally {
+      await withheld.close();
+    }
   });
 
   it("says the file changed instead of selecting other rows, and a reload reads it again", async () => {
@@ -167,6 +190,14 @@ describe("VS Code webview page: the Web UI's page with a webview CSP", () => {
     expect(html).toContain('<html lang="en" data-host="vscode">');
     // The Web UI's markup is reused as it is.
     expect(html).toContain('<form id="open-form">');
+  });
+
+  it("shows a message page that runs and loads nothing, with its text escaped", () => {
+    const page = messagePage("cannot open <b>", 'a "file" & <script>x</script>');
+    expect(page).toContain(`content="default-src 'none'"`);
+    expect(page).toContain("cannot open &lt;b&gt;");
+    expect(page).toContain("&lt;script&gt;x&lt;/script&gt;");
+    expect(page).not.toMatch(/<script|<link|<img/);
   });
 
   it("fails loudly when the Web UI's page no longer has a tag it swaps", () => {

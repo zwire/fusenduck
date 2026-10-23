@@ -7,32 +7,67 @@
   "description": "Open a Parquet file, select rows and copy a Ref an agent can resolve.",
   "publisher": "fusenduck",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zwire/fusenduck",
+    "directory": "apps/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/zwire/fusenduck/issues"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
-  "categories": ["Data Science", "Other"],
+  "categories": [
+    "Data Science",
+    "Other"
+  ],
+  "keywords": [
+    "parquet",
+    "duckdb",
+    "data",
+    "agent",
+    "mcp"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
   "main": "./dist/extension.cjs",
   "contributes": {
     "customEditors": [
       {
         "viewType": "fusenduck.parquet",
         "displayName": "fusenduck",
-        "selector": [{ "filenamePattern": "*.parquet" }],
+        "selector": [
+          {
+            "filenamePattern": "*.parquet"
+          }
+        ],
         "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "fusenduck.showLog",
+        "title": "Show Log",
+        "category": "fusenduck"
       }
     ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p webview",
-    "build": "node build.ts"
-  },
-  "dependencies": {
-    "@duckdb/node-api": "1.5.6-r.1"
+    "build": "node build.ts",
+    "package": "node package.ts"
   },
   "devDependencies": {
+    "@duckdb/node-api": "1.5.6-r.1",
     "@fusenduck/core": "workspace:*",
     "@fusenduck/web": "workspace:*",
     "@types/vscode": "~1.95.0",
+    "@vscode/vsce": "3.9.2",
     "esbuild": "^0.25.0"
   }
 }

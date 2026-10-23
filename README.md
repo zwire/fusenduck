@@ -16,7 +16,7 @@ fusenduck は独立したプロジェクトで、DuckDB プロジェクトおよ
 - **あいまいの明示**: 同じ行のコピーに一致したら、行を返したうえで `AMBIGUOUS:` と 1 行に絞る方法を添える。
 - **MCP サーバー**: `fusen_card`、`fusen_peek`、`fusen_ref`、`fusen_resolve` を stdio で、または `--http`(ループバック限定、Bearer トークン必須)で。
 - **Web UI** `fusen-web`: ブラウザで表を見て行や範囲を選び、選んだ行だけを返す Ref をコピー。ループバック限定、1 回限りの引き換えコード、厳しい CSP。
-- **VS Code 拡張**: `.parquet` を開くと同じ画面のエディターになり、選んだ行の Ref をコピー。ポートを開かず、webview は拡張のホストとメッセージでだけ話す(開発用に読み込む段階)。
+- **VS Code 拡張**: `.parquet` を開くと同じ画面のエディターになり、選んだ行の Ref をコピー。ポートを開かず、webview は拡張のホストとメッセージでだけ話す。プラットフォームごとの `.vsix` を CI で作る(Marketplace には未公開)。
 - **守り**: 読み取り専用は DuckDB の設定で強制し、データは区切りの中に「指示ではない」と添えて出し、見せなかったものは必ず書く。
 - **品質**: lint、Ref の凍結コーパス(`pnpm contract:check`)、予算付きの bench を CI で回す。CI は Linux・macOS・Windows × Node 22・24。
 

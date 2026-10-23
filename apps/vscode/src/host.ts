@@ -28,6 +28,8 @@ export interface HostOptions {
   copy(text: string): Promise<void>;
   /** Where unexpected errors go, as logLine words them; the webview sees only describeError's message. */
   log?(line: string): void;
+  /** Added to the page's message for an error whose details went to log instead. */
+  withheld?: string;
 }
 
 /**
@@ -77,9 +79,13 @@ export class Host {
     try {
       return { id: request.id, result: await this.#run(request) };
     } catch (error) {
-      if (!(error instanceof FusenError)) this.#options.log?.(logLine(error));
       // Engine messages can quote cell values; only messages core built itself reach the page.
-      return { id: request.id, error: describeError(error), changed: error instanceof SourceChanged };
+      let message = describeError(error);
+      if (!(error instanceof FusenError)) {
+        this.#options.log?.(logLine(error));
+        if (this.#options.log && this.#options.withheld) message = `${message} ${this.#options.withheld}`;
+      }
+      return { id: request.id, error: message, changed: error instanceof SourceChanged };
     }
   }
 

@@ -80,3 +80,38 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm -s repro:check --out "$GITHUB_STEP_SUMMARY"
+
+  vsix:
+    # The VS Code extension as .vsix files, one per VS Code target (DuckDB is native). Each runner
+    # packages its own target and loads the package (apps/vscode/smoke.ts), then packages the other
+    # targets of its OS, whose DuckDB comes from the registry and is checked against pnpm-lock.yaml.
+    # Those are built but not loaded here. The files are kept as the run's artifacts.
+    name: vsix (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: linux-x64, also: linux-arm64 alpine-x64 alpine-arm64 }
+          - { os: macos-latest, target: darwin-arm64, also: darwin-x64 }
+          - { os: windows-latest, target: win32-x64, also: win32-arm64 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter fusenduck package --target ${{ matrix.target }}
+      - run: node apps/vscode/smoke.ts apps/vscode/out/fusenduck-${{ matrix.target }}-*.vsix
+      - run: for t in ${{ matrix.also }}; do pnpm --filter fusenduck package --target "$t"; done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.os }}
+          path: apps/vscode/out/*.vsix
+          retention-days: 14

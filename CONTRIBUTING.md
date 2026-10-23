@@ -18,9 +18,10 @@ pnpm contract:check   # Ref の凍結コーパス
 pnpm bench            # 100 万行の Parquet で予算を確かめる。超えたら exit 1
 pnpm repro:check      # HEAD のきれいな clone で、lockfile から入れてビルドし、golden の Ref を同じ文字列に解決できるか(先にコミットする)
 pnpm docs:reference   # MCP ツールのスキーマから docs/reference/mcp-tools.md を作り直す
+pnpm --filter fusenduck package && node apps/vscode/smoke.ts apps/vscode/out/fusenduck-<target>-0.0.0.vsix  # VS Code 拡張の .vsix を作って読み込む
 ```
 
-CI は pull request ごとに、Linux・macOS・Windows × Node 22・24 で lint、typecheck、test、contract:check を回し、Linux で bench、Web UI のブラウザのテスト、repro:check を回します。
+CI は pull request ごとに、Linux・macOS・Windows × Node 22・24 で lint、typecheck、test、contract:check を回し、Linux で bench、Web UI のブラウザのテスト、repro:check を回します。VS Code 拡張の `.vsix` はプラットフォームごとに作り、Linux・macOS・Windows でその OS 向けのものを読み込んで確かめ、run の artifacts に残します。
 
 ## 守ってほしいこと
 
