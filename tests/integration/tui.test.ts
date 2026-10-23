@@ -255,7 +255,8 @@ describe("TUI: pick a file from the roots", () => {
     await t.press(KEY.enter);
     await t.until((s) => s.includes("\n> 0"), "the first table");
     await t.press("b");
-    await t.until((s) => s.includes("pick a file"), "the list again");
+    // Wait for the files, not just the heading: keys sent while the list is still loading are lost.
+    await t.until((s) => s.includes("pick a file") && s.includes("sub/b.parquet"), "the list again");
     await t.press("j", "j", KEY.enter);
     await t.until((s) => s.includes("\n> 0") && s.includes("5 rows, 5 columns"), "the second table");
     expect(t.tracked).toHaveLength(2);
