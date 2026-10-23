@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
-import { describeError, FusenError, parseRef, SourceChanged } from "@fusenduck/core";
+import { describeError, FusenError, logLine, parseRef, SourceChanged } from "@fusenduck/core";
 import { View } from "@fusenduck/web/view";
 
 // The extension host's side of one webview (docs/adr/0002, the VS Code webview). The webview sends
@@ -26,8 +26,8 @@ export interface HostOptions {
   roots: string[];
   /** Puts text on the clipboard (vscode.env.clipboard in the extension). */
   copy(text: string): Promise<void>;
-  /** Where unexpected errors go; the webview sees only describeError's message. */
-  log?(error: unknown): void;
+  /** Where unexpected errors go, as logLine words them; the webview sees only describeError's message. */
+  log?(line: string): void;
 }
 
 /**
@@ -77,7 +77,7 @@ export class Host {
     try {
       return { id: request.id, result: await this.#run(request) };
     } catch (error) {
-      if (!(error instanceof FusenError)) this.#options.log?.(error);
+      if (!(error instanceof FusenError)) this.#options.log?.(logLine(error));
       // Engine messages can quote cell values; only messages core built itself reach the page.
       return { id: request.id, error: describeError(error), changed: error instanceof SourceChanged };
     }

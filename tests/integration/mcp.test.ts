@@ -145,11 +145,14 @@ describe("MCP adapter over stdio", () => {
       expect(r.text).toContain("not readable or is outside the allowed roots");
     });
 
-    it.each([
-      ["a directory", () => sub],
-      ["a file that is not Parquet", () => text],
-    ])("%s is a tool error that does not echo engine details", async (_name, path) => {
-      const r = await call("fusen_card", { path: path() });
+    it("a directory is refused like a missing file, before the engine sees it", async () => {
+      const r = await call("fusen_card", { path: sub });
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("not readable or is outside the allowed roots");
+    });
+
+    it("a file that is not Parquet is a tool error that does not echo engine details", async () => {
+      const r = await call("fusen_card", { path: text });
       expect(r.isError).toBe(true);
       expect(r.text).toContain("withheld");
       expect(r.text).not.toContain("magic bytes");

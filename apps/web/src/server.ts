@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { describeError, FusenError, SourceChanged } from "@fusenduck/core";
+import { describeError, FusenError, logLine, SourceChanged } from "@fusenduck/core";
 import { listFiles } from "./files.ts";
 import { View } from "./view.ts";
 
@@ -173,7 +173,7 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
       if (error instanceof HttpError) {
         return send(res, error.status, { error: error.message }, error.status === 401 ? { "www-authenticate": "Bearer" } : {});
       }
-      if (!(error instanceof FusenError)) console.error(error);
+      if (!(error instanceof FusenError)) console.error(logLine(error));
       // Engine messages can quote cell values; only messages core built itself reach the page.
       const changed = error instanceof SourceChanged;
       send(res, changed ? 409 : error instanceof FusenError ? 400 : 500, { error: describeError(error), changed });

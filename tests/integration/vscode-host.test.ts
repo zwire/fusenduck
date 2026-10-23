@@ -13,7 +13,7 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
   const dir = realpathSync(tempDir());
   const file = join(dir, "customers.parquet");
   const copied: string[] = [];
-  const logged: unknown[] = [];
+  const logged: string[] = [];
   let host: Host;
   let id = 0;
   const send = (method: string, params?: Record<string, unknown>) => host.handle({ id: ++id, method, params });
@@ -23,7 +23,7 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
     return reply.result as T;
   };
   const make = (path: string) =>
-    new Host({ path, roots: [dir], copy: async (text) => void copied.push(text), log: (error) => void logged.push(error) });
+    new Host({ path, roots: [dir], copy: async (text) => void copied.push(text), log: (line) => void logged.push(line) });
 
   beforeAll(async () => {
     await writeCustomers(file, 1000);
