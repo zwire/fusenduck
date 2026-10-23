@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Node runs these files by stripping types, which cannot handle parameter properties or enums.
+    "erasableSyntaxOnly": true
+  },
+  "include": ["src"]
+}
