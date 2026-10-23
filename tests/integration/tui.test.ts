@@ -218,8 +218,8 @@ describe("TUI: pick a file from the roots", () => {
     await writeCustomers(join(outside, "secret.parquet"), 5);
     symlinkSync(join(outside, "secret.parquet"), join(dir, "link.parquet"));
     writeFileSync(join(dir, "broken.parquet"), "not parquet");
-    // A name that carries a terminal escape.
-    await writeCustomers(join(dir, `esc${String.fromCharCode(27)}[2Jx.parquet`), 5);
+    // A name that carries a bidi override (a control character cannot be in a Windows file name).
+    await writeCustomers(join(dir, `esc${String.fromCharCode(0x202e)}x.parquet`), 5);
   });
   afterEach(async () => {
     stop();
@@ -271,13 +271,13 @@ describe("TUI: pick a file from the roots", () => {
     expect(screen).toContain("broken.parquet");
   });
 
-  it("prints a file name that carries an escape as a placeholder", async () => {
+  it("prints a file name that carries a bidi override as a placeholder", async () => {
     const t = await startList();
     await t.until((s) => s.includes("esc"), "the escape name");
     const screen = t.chunks.join("");
     // eslint-disable-next-line no-control-regex -- the test looks for control characters
-    expect(screen.replace(/\u001b\[[0-9;]*m/g, "")).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
-    expect(screen).toContain("esc�[2Jx.parquet");
+    expect(screen.replace(/\u001b\[[0-9;]*m/g, "")).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f‮]/);
+    expect(screen).toContain("esc�x.parquet");
   });
 
   it("quits from the list with nothing to print", async () => {
