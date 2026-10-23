@@ -83,7 +83,8 @@ describe("TUI: pick rows and copy a Ref (docs/adr/0003)", () => {
     await t.press(" ");
     await t.until((s) => s.includes("1 picked"), "one pick");
     await t.press("/", "id > 90", KEY.enter);
-    await t.until((s) => s.includes("0 picked") && s.includes("were cleared"), "the picks cleared");
+    // Wait for the filtered page itself: a pick made before it loads lands on the old page's row.
+    await t.until((s) => s.includes("0 picked") && s.includes("were cleared") && s.includes("910 rows match") && s.includes("\n> 90 "), "the picks cleared and the filtered page");
     await t.press(" ", "y");
     await t.until(() => t.copied.length === 1, "a copy");
     expect(ids(await resolveRef(t.copied[0]!, { roots: [dir] }))).toEqual([91]);
