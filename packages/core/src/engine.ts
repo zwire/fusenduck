@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import { FusenError } from "./errors.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
@@ -35,6 +35,8 @@ const inside = (root: string, path: string): boolean => {
  * The real path of `source`, checked against the roots once. The engine is opened on this same
  * path, so a symlink swapped after the check cannot redirect it. A missing file and a file
  * outside the roots give one message, so the error does not tell a caller what exists elsewhere.
+ * Only a regular file is a source: opening a FIFO blocks inside DuckDB until something writes to
+ * it, where neither the clock nor an interrupt can stop it.
  */
 function resolveWithin(source: string, roots: string[] | undefined): string {
   const denied = new FusenError(
@@ -43,6 +45,7 @@ function resolveWithin(source: string, roots: string[] | undefined): string {
   let path: string;
   try {
     path = realpathSync(source);
+    if (!statSync(path).isFile()) throw denied;
   } catch {
     throw denied;
   }

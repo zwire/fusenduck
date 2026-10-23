@@ -1,16 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { buildCard, describeError, FusenError, MAX_PEEK_ROWS, mintRef, openSource, peek, renderCard, resolveRef } from "@fusenduck/core";
+import { buildCard, describeError, FusenError, logLine, MAX_PEEK_ROWS, mintRef, openSource, peek, renderCard, resolveRef } from "@fusenduck/core";
 import type { Gate } from "./gate.ts";
 
 // Tool descriptions are fixed text. Data read from a source appears only in tool results, inside
 // the delimited data block that core renders. Engine errors can quote cell values, so they are
-// withheld (describeError); the detail goes to stderr for whoever runs the server.
+// withheld (describeError). stderr gets the kind of error only (logLine), since MCP hosts keep it in
+// log files; FUSEN_DEBUG=1 writes the whole error there.
 
 const text = (value: string) => ({ content: [{ type: "text" as const, text: value }] });
 const failure = (error: unknown) => {
   // A refusal core worded itself (busy, cancelled, a bad Ref) is the caller's to read, not the log's.
-  if (!(error instanceof FusenError)) console.error(error);
+  if (!(error instanceof FusenError)) console.error(logLine(error));
   return { isError: true, ...text(`fusen error: ${describeError(error)}`) };
 };
 

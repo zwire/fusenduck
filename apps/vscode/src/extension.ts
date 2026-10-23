@@ -29,7 +29,7 @@ export function activate(context: vscode.ExtensionContext): void {
         copy: async (text) => {
           await vscode.env.clipboard.writeText(text);
         },
-        log: (error) => output.appendLine(error instanceof Error ? (error.stack ?? error.message) : String(error)),
+        log: (line) => output.appendLine(line),
       });
       webview.options = { enableScripts: true, localResourceRoots: [dist] };
       const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(dist, file)).toString();

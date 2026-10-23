@@ -18,6 +18,26 @@ export function describeError(error: unknown, opts: { debug?: boolean } = {}): s
 }
 
 /**
+ * The line a server writes to its own log for an error it did not expect. The log is kept (an MCP
+ * host saves the server's stderr to files, VS Code shows the Output panel), so an engine message,
+ * which can quote cell values, is cut to its kind ("Conversion Error"), with the JavaScript frames
+ * it was thrown from (DuckDB's own errors carry none).
+ * FUSEN_DEBUG=1 logs the whole error, as the CLI shows it.
+ */
+export function logLine(error: unknown, opts: { debug?: boolean } = {}): string {
+  const debug = opts.debug ?? process.env.FUSEN_DEBUG === "1";
+  if (!(error instanceof Error)) return debug ? String(error) : `${typeof error} thrown (FUSEN_DEBUG=1 shows it)`;
+  if (debug) return error.stack ?? `${error.name}: ${error.message}`;
+  const kind = /^([A-Za-z][A-Za-z ]{0,40} Error):/.exec(error.message)?.[1] ?? "message withheld";
+  // The stack starts with the message, which can span lines that look like frames (a cell with
+  // "\n    at ..."), so frames are read only after it; when it is not there, none are.
+  const header = `${error.name}: ${error.message}`;
+  const stack = error.stack ?? "";
+  const frames = stack.startsWith(header) ? stack.slice(header.length).split("\n").filter((line) => /^\s+at /.test(line)) : [];
+  return [`${error.name}: ${kind} (FUSEN_DEBUG=1 shows the message, which can quote values from the source)`, ...frames].join("\n");
+}
+
+/**
  * Runs the planning of a selection the caller wrote (`DESCRIBE`, which reads no rows). A parser,
  * binder or catalog error is about the caller's own text and the schema, never a cell, so its first
  * line is shown: a misspelled column or an unquoted text value is then something the caller can fix.

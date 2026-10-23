@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { logLine } from "@fusenduck/core";
 import { Gate } from "./gate.ts";
 import { createServer } from "./server.ts";
 
@@ -97,7 +98,7 @@ export async function startHttpServer(options: HttpOptions): Promise<HttpHandle>
       await server.connect(transport);
       await transport.handleRequest(req, res, body);
     } catch (error) {
-      console.error(error);
+      console.error(logLine(error));
       if (!res.headersSent) reply(res, 500, "Internal server error");
     }
   });
