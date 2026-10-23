@@ -1,35 +1,35 @@
 # @fusenduck/web
 
-Web UI `fusen-web`。ループバックで待ち受けるローカルサーバーが、SPA と小さな JSON API を同じオリジンで配ります。設計は [ADR 0002](../../docs/adr/0002-web-ui-transport.md)、使い方は [docs/guide.md](../../docs/guide.md) の 9 章にあります。
+The Web UI `fusen-web`. A local server that listens on loopback serves the SPA and a small JSON API from the same origin. The design is in [ADR 0002](../../docs/adr/0002-web-ui-transport.md), and usage is in chapter 9 of [docs/guide.md](../../docs/guide.md).
 
 ```sh
-pnpm build   # SPA(spa/*.ts)を tsc で dist/ に出す
+pnpm build   # compile the SPA (spa/*.ts) into dist/ with tsc
 node apps/web/src/index.ts [--root <dir>]... [--host <loopback>] [--port <n>] [--no-open]
 # → fusen-web: opening http://127.0.0.1:<port>/#c=<code> in your browser (the link works once, within 60 seconds)
 ```
 
-## 構成
+## Layout
 
-| ファイル | 中身 |
+| File | Contents |
 | --- | --- |
-| `src/index.ts` | 起動の入口(引数の解釈、URL の表示とブラウザの起動、終了時にエンジンを閉じる) |
-| `src/browser.ts` | 既定のブラウザで URL を開く(`open` / `rundll32` / `xdg-open`、シェルを通さない。ディスプレイがなければ開かない) |
-| `src/server.ts` | HTTP: 引き換えコードとトークン、Host・Origin・JSON・Bearer の検査、CSP などのヘッダ、静的ファイル |
-| `src/files.ts` | ルートの下の Parquet ファイルの一覧(シンボリックリンクはたどらない、隠しファイルは飛ばす、件数に上限) |
-| `src/view.ts` | 開いた 1 ファイル: エンジン(1 ソース 1 つ、操作は 1 つずつ)、行のページ(条件つきも)、位置の範囲・条件・列から Ref |
-| `spa/api.ts` | SPA から core への呼び先。`Api` を差し替えれば、ローカルサーバー以外(VS Code の webview など)からも使える |
-| `spa/app.ts` | ファイルの一覧と絞り込み、表、列のチェック、行の条件、選択、Copy。値は `textContent` でだけ DOM に入れる |
+| `src/index.ts` | Entry point (argument parsing, printing the URL and launching the browser, closing the engine at exit) |
+| `src/browser.ts` | Opens a URL in the default browser (`open` / `rundll32` / `xdg-open`, never through a shell; does nothing without a display) |
+| `src/server.ts` | HTTP: the redeem code and token, checks for Host, Origin, JSON and Bearer, headers such as CSP, static files |
+| `src/files.ts` | The list of Parquet files under the roots (symlinks are not followed, hidden files are skipped, the count is capped) |
+| `src/view.ts` | One opened file: the engine (one per source, one operation at a time), pages of rows (with a condition too), and a Ref from position ranges, a condition and columns |
+| `spa/api.ts` | What the SPA calls into core. Swap the `Api` and the SPA can be used from something other than the local server (such as a VS Code webview) |
+| `spa/app.ts` | The file list and filter, the table, column checkboxes, the row condition, selection and Copy. Values enter the DOM only through `textContent` |
 
-## API(内部用、版なし)
+## API (internal, unversioned)
 
-すべて `POST`、本文は JSON、`/api/session` 以外は `Authorization: Bearer <token>` が要ります。
+All requests are `POST` with a JSON body, and everything except `/api/session` needs `Authorization: Bearer <token>`.
 
-| パス | 本文 | 返すもの |
+| Path | Body | Returns |
 | --- | --- | --- |
-| `/api/session` | `{ code }` | `{ token }`。コードは 1 回だけ、60 秒まで |
-| `/api/files` | `{}` | `{ roots: [{ root, files: [{ path, name, size, modified }], truncated }], truncated }`。name はルートからの `/` 区切りのパス、path は開くときに渡すパス |
+| `/api/session` | `{ code }` | `{ token }`. The code works once, for up to 60 seconds |
+| `/api/files` | `{}` | `{ roots: [{ root, files: [{ path, name, size, modified }], truncated }], truncated }`. `name` is the `/`-separated path from the root, and `path` is the path to pass when opening |
 | `/api/open` | `{ path }` | `{ source, fingerprint, card, ref, selectable }` |
-| `/api/rows` | `{ source, fingerprint, offset, limit?, where? }` | `{ rows: [{ pos, cells }], next, cut, matched }`。limit は 1〜500(既定 100)。`where` があれば合う行だけで、`offset` と `next` は位置(位置で選べないファイルでは合う行の中の順番)、`matched` は合う行の数 |
-| `/api/ref` | `{ source, fingerprint, ranges: [[a, b], ...], where?, columns? }` | `{ ref }`。範囲は結合して 1,000 個まで。範囲と `where` の両方があれば両方に合う行、範囲が空なら `where` の行。`where` に表を読む関数と `*`・`COLUMNS(*)` は使えない。`columns` はファイルの列の順に並べ直し、全部なら `cols=` を付けない |
+| `/api/rows` | `{ source, fingerprint, offset, limit?, where? }` | `{ rows: [{ pos, cells }], next, cut, matched }`. `limit` is 1 to 500 (default 100). With `where`, only the matching rows are returned; `offset` and `next` are positions (in a file that cannot be selected by position, the order among the matching rows), and `matched` is the number of matching rows |
+| `/api/ref` | `{ source, fingerprint, ranges: [[a, b], ...], where?, columns? }` | `{ ref }`. Ranges are merged, up to 1,000. With both ranges and `where`, the rows matching both; with no ranges, the rows of `where`. `where` cannot use table-reading functions, `*` or `COLUMNS(*)`. `columns` is reordered into the file's column order, and `cols=` is omitted when all columns are kept |
 
-ファイルが開いたときから変わっていれば `409` と `{ error, changed: true }` を返します。エラー文は core が組み立てたものだけで、エンジンのエラー文は伏せます。
+If the file has changed since it was opened, the response is `409` with `{ error, changed: true }`. Error messages are only ones built by core; the engine's own error messages are withheld.

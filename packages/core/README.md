@@ -1,17 +1,17 @@
 # @fusenduck/core
 
-fusenduck のエンジン、Ref モデル、描画。CLI と MCP サーバーはどちらもこのパッケージを通してデータを読みます。
+fusenduck's engine, Ref model and rendering. Both the CLI and the MCP server read data through this package.
 
-| ファイル | 内容 |
+| File | Contents |
 | --- | --- |
-| `src/engine.ts` | DuckDB を開き、読み取り専用の設定(`allowed_paths`、外部アクセスの禁止、メモリ上限、設定の固定)をかける。クエリのタイムアウト |
-| `src/card.ts` | data card(行数、型、null 率、min/max、近似の distinct 数) |
-| `src/fingerprint.ts` | データの指紋(行数、サイズ、Parquet フッターの列統計) |
-| `src/ref.ts` | Ref の文法(`parseRef` / `formatRef`)、述語とクエリの検査、`id=` の計算 |
-| `src/resolve.ts` | `mintRef`、`resolveRef`、`peek`。`--root` の検査、コストの上限、あいまいの検出 |
-| `src/render.ts` | エージェント向けの描画(区切り、注意書き、`OMITTED:`) |
-| `src/errors.ts` | `FusenError` と、エンジンのエラーを固定文言にする `describeError` |
+| `src/engine.ts` | Opens DuckDB and applies the read-only settings (`allowed_paths`, external access banned, memory cap, configuration locked). Query timeouts |
+| `src/card.ts` | The data card (row count, types, null rates, min/max, approximate distinct counts) |
+| `src/fingerprint.ts` | The data fingerprint (row count, size, Parquet footer column statistics) |
+| `src/ref.ts` | The Ref grammar (`parseRef` / `formatRef`), validation of predicates and queries, computing `id=` |
+| `src/resolve.ts` | `mintRef`, `resolveRef`, `peek`. The `--root` check, cost limits, ambiguity detection |
+| `src/render.ts` | Rendering for agents (delimiters, notice, `OMITTED:`) |
+| `src/errors.ts` | `FusenError`, and `describeError`, which turns engine errors into fixed wording |
 
-主な既定値: `DEFAULT_LIMIT`(100 行)、`DEFAULT_MAX_BYTES`(512MB)、`DEFAULT_TIMEOUT_MS`(10 秒)、`DEFAULT_PEEK_ROWS`(5)/ `MAX_PEEK_ROWS`(50)、`MAX_AMBIGUITY_ROWS`(10,000)。
+Main defaults: `DEFAULT_LIMIT` (100 rows), `DEFAULT_MAX_BYTES` (512MB), `DEFAULT_TIMEOUT_MS` (10 seconds), `DEFAULT_PEEK_ROWS` (5) / `MAX_PEEK_ROWS` (50), `MAX_AMBIGUITY_ROWS` (10,000).
 
-使い方と出力の形は [docs/guide.md](../../docs/guide.md)、決定の経緯は [ADR 0001](../../docs/adr/0001-engine-ref-rendering.md) を参照。
+For usage and the shape of the output see [docs/guide.md](../../docs/guide.md), and for the history of the decisions see [ADR 0001](../../docs/adr/0001-engine-ref-rendering.md).

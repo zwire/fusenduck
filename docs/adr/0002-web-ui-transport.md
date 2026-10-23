@@ -1,95 +1,95 @@
-# ADR 0002: Web UI とブラウザから Core への経路
+# ADR 0002: The Web UI and the route from the browser to Core
 
-- ステータス: 承認済み(2026-10-22、takumi が A 案で承認)
-- 日付: 2026-10-22
-- 判定: go(increment で最初のスライスを作る)
+- Status: Accepted (2026-10-22, takumi approved option B)
+- Date: 2026-10-22
+- Verdict: go (build the first slice as an increment)
 
-## 背景
+## Background
 
-構想書(`docs/vision.md` 5 章)は、Web UI を SPA(`apps/web`)にし、のちに VSCode 拡張の webview で再利用するとしている。GUI の役目は「選んで、Ref をワンクリックでコピー」(5.1)である。
-決まっていなかったのは、ブラウザがどうやって Core に届くかだった。Core はローカルのファイルを読むので、ブラウザに開いている別のページから使われてはならない。既存の `fusen-mcp --http` はループバック限定で Bearer トークン必須にしてある(PR #10)。
+The vision document (`docs/vision.md`, chapter 5) says the Web UI is an SPA (`apps/web`) that will later be reused in a VS Code extension's webview. The GUI's job is "select, then copy a Ref with one click" (5.1).
+What was undecided was how the browser reaches Core. Core reads local files, so it must not be usable from some other page open in the browser. The existing `fusen-mcp --http` is loopback-only and requires a Bearer token (PR #10).
 
-spike [web-ui](evidence/web-ui.md) で、3 つの経路を本物の Chromium(Playwright、ヘッドレス)から試した。spike のコードは `.scratch/web-ui` にあり、リポジトリには含めない。
+The spike [web-ui](evidence/web-ui.md) tried three routes from a real Chromium (Playwright, headless). The spike code is in `.scratch/web-ui` and is not included in the repository.
 
-| 経路 | 結果 |
+| Route | Result |
 | --- | --- |
-| A. SPA から `fusen-mcp --http` を直接呼ぶ | 正規の SPA からも呼べない。Authorization ヘッダがあるので CORS の事前確認(OPTIONS)が飛び、サーバーは 401 を CORS ヘッダなしで返す |
-| B. SPA と小さな JSON API を同じオリジンで配るローカルサーバー | 動く。別オリジンのページ(トークンを盗んでいても)、no-cors の単純 POST、DNS リバインディング、ルート外のパスは、すべて拒否された(iframe に埋め込んだページは中身を読めなかったが、`frame-ancestors` で止まったことまでは確かめていない) |
-| C. DuckDB-WASM でブラウザ内だけで動かす | ページはファイルの絶対パスを知れない(`C:\fakepath\orders.parquet`)。Ref は `fusen://file/<絶対パス>` なので、ブラウザで作った Ref はエージェントが解決できない |
+| A. The SPA calls `fusen-mcp --http` directly | It cannot be called even from the legitimate SPA. Because of the Authorization header a CORS preflight (OPTIONS) is sent, and the server answers 401 without CORS headers |
+| B. A local server that serves the SPA and a small JSON API from the same origin | It works. A page from another origin (even one that stole the token), a no-cors simple POST, DNS rebinding and a path outside the root were all refused (a page embedded in an iframe could not read the contents, but we did not confirm that it was `frame-ancestors` that stopped it) |
+| C. Run only inside the browser with DuckDB-WASM | The page cannot learn a file's absolute path (`C:\fakepath\orders.parquet`). A Ref is `fusen://file/<absolute path>`, so an agent cannot resolve a Ref minted in the browser |
 
-B では、行のクリック、Shift での範囲、Ctrl での追加、2 ページ目の行の 4 通りすべてで、コピーした Ref を `resolveRef` すると選んだ id と完全に一致した。1,000,000 行(10.8 MB)の Parquet で、開く(カード)約 0.2 秒、100 行のページ約 0.06 秒、Ref の作成約 0.025 秒だった。
+With B, in all four cases (clicking a row, a Shift range, a Ctrl addition, and a row on page 2), `resolveRef` on the copied Ref matched the selected ids exactly. On a 1,000,000-row (10.8 MB) Parquet file, opening (card) took about 0.2 seconds, a 100-row page about 0.06 seconds, and minting a Ref about 0.025 seconds.
 
-## 決定
+## Decision
 
-### 1. 経路: SPA を配るローカルサーバー
+### 1. Route: a local server that serves the SPA
 
-- `apps/web` に SPA と、それを配るサーバーを置く。起動は `fusen-web --root <dir>`(`fusen-mcp` と同じく、ルートの下のファイルだけ開ける)。
-- サーバーはループバックのアドレスにだけ bind する。ポートは既定で OS に選ばせ(`0`)、bind が済んでから URL を出す。起動ごとに 32 バイトの乱数のセッショントークンを作る。
-- URL に載せるのはセッショントークンではなく、**1 回だけ使える引き換えコード**にする(`http://127.0.0.1:<port>/#c=<code>`)。ブラウザを自動で開くと URL がプロセスの引数になり、同じマシンの他の利用者から見える(Linux の `/proc/*/cmdline`)ため。SPA はこのコードを POST でセッショントークンに引き換え、コードは最初の引き換えか 60 秒で失効する。
-- コードは URL の**フラグメント**で渡す。フラグメントはリクエストに乗らないので、サーバーのログ、プロキシ、Referer に出ない。ブラウザの履歴には残りうるが、コードは引き換え後に使えない。SPA はセッショントークンを sessionStorage に持ち、アドレスバーからフラグメントを消す。
-- API の呼び出しはすべて、次をサーバー側で確かめる。Host がサーバー自身(DNS リバインディング対策)、Origin があればサーバー自身、Content-Type が `application/json`(単純リクエストを事前確認の対象にする)、Bearer トークン(定数時間比較)。CORS ヘッダは出さない。
-- 応答には次の CSP を付ける: `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'`(最後の項目は、`innerHTML` などへの文字列の代入をブラウザ側で拒ませる)。`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer`、`Cache-Control: no-store` も付ける。
-- 静的ファイル(SPA)はトークンなしで返す。SPA 自体はデータを含まないため。
-- `fusen-mcp --http` は変えない。エージェント用の入口に CORS を足して UI のために広げることはしない。
+- `apps/web` holds the SPA and the server that serves it. It starts with `fusen-web --root <dir>` (like `fusen-mcp`, it opens only files under the roots).
+- The server binds to loopback addresses only. By default the OS picks the port (`0`), and the URL is printed after binding is done. A 32-byte random session token is generated at each start.
+- The URL carries not the session token but a **redeem code that can be used once** (`http://127.0.0.1:<port>/#c=<code>`). When the browser is opened automatically, the URL becomes a process argument and is visible to other users on the same machine (`/proc/*/cmdline` on Linux). The SPA exchanges this code for the session token with a POST, and the code expires at the first exchange or after 60 seconds.
+- The code is passed in the URL **fragment**. A fragment is not sent with the request, so it does not appear in server logs, proxies or the Referer. It can remain in browser history, but the code is unusable after the exchange. The SPA keeps the session token in sessionStorage and removes the fragment from the address bar.
+- Every API call has the server check the following. The Host is the server itself (against DNS rebinding), the Origin, if present, is the server itself, the Content-Type is `application/json` (so that simple requests become subject to a preflight), and the Bearer token (constant-time comparison). No CORS headers are sent.
+- Responses carry this CSP: `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; require-trusted-types-for 'script'` (the last item makes the browser refuse assigning strings to `innerHTML` and the like). `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and `Cache-Control: no-store` are also set.
+- Static files (the SPA) are served without a token, because the SPA itself contains no data.
+- `fusen-mcp --http` does not change. We do not add CORS to the agents' entry point and widen it for the UI.
 
-### 2. ブラウザに出すデータ
+### 2. Data shown in the browser
 
-- セルの値もカードの min/max も信用できない入力として扱う。DOM には `textContent` だけで入れ、`innerHTML` は使わない(spike では `<img onerror>` と `</script>` を入れたセルが文字列として表示され、何も実行されなかった)。
-- エラーは core の `describeError` を通した固定の文言だけをページに返す(エンジンのエラー文はセルの値を引用しうる。ADR 0001)。
+- Cell values and the card's min/max are both treated as untrusted input. They enter the DOM only through `textContent`, never `innerHTML` (in the spike, cells containing `<img onerror>` and `</script>` were displayed as strings and nothing ran).
+- Errors return to the page only as the fixed wording that went through core's `describeError` (an engine error message can quote cell values; ADR 0001).
 
-### 3. 選択から Ref
+### 3. From selection to Ref
 
-- 表の行は `file_row_number` を持って表示し、選択は位置の範囲をまとめた述語にする(`file_row_number BETWEEN 10 AND 14 OR file_row_number = 40`)。キー列は要らない。1 回の選択でまとめた範囲は 1,000 個までにする。
-- ファイルが `file_row_number` という本物の列を持つときは、述語がその列を読み、位置では選べない(ADR 0001)。そのファイルでは `open` が知らせ、選択を無効にする。
-- 選択が変わるたびにサーバーで Ref を作る。最新の選択の結果だけを反映し、Copy は作成中の Ref を待ってからコピーする(spike では、待たないと一つ前の Ref がコピーされた。ボタンを無効にすると速いクリックが無視された)。
-- **見たものと Ref を一致させる。** ページは開いたときの指紋を持ち、Ref の作成時にそれを送る。ファイルの指紋が違えば作成を拒否し、「ファイルが変わった、読み直して」と表示する。spike では、id 7 を見てからファイルを書き換えると、コピーした Ref は id 8 を返した。このため core の `mintRef` に「期待する指紋」の引数を足す。Ref の文法は変わらない。ただし指紋の限界(列統計がすべて同じままの書き換えは検出できない。ADR 0001)はここにも残る。
+- Table rows are shown with their `file_row_number`, and a selection becomes a predicate that merges position ranges (`file_row_number BETWEEN 10 AND 14 OR file_row_number = 40`). No key column is needed. One selection can be merged into at most 1,000 ranges.
+- When a file has a real column named `file_row_number`, the predicate reads that column and rows cannot be selected by position (ADR 0001). For that file `open` says so, and selection is disabled.
+- A Ref is minted on the server each time the selection changes. Only the result of the latest selection is reflected, and Copy waits for a Ref that is still being minted before copying (in the spike, without waiting the previous Ref was copied; disabling the button caused fast clicks to be ignored).
+- **Make the Ref match what was seen.** The page holds the fingerprint from when it was opened and sends it when a Ref is minted. If the file's fingerprint differs, minting is refused and the page shows "the file changed, read it again". In the spike, after viewing id 7 and then rewriting the file, the copied Ref returned id 8. For this reason an "expected fingerprint" argument is added to core's `mintRef`. The Ref grammar does not change. The limit of the fingerprint (a rewrite that leaves every column statistic the same cannot be detected; ADR 0001) remains here too.
 
-### 4. API と SPA の作り
+### 4. The API and the SPA's construction
 
-- エンジンは開いた Source ごとに 1 つ作り(ADR 0001: 1 インスタンス = 固定の Source)、別のファイルを開いたときとサーバーの終了時に閉じる。
-- 構想書 5 章は「Core が 1 つのプロトコル(HTTP/JSON-RPC)を話す」としているが、この API はそれとは別の、UI 専用の入口になる。エージェント向けの契約は MCP のツールのままで、UI のために MCP を広げないための意図的な逸脱である。
-- API は同一オリジンの内部 API で、契約にはしない(安定度: 内部。版を付けず、予告なく変えてよい)。最初は `open`(カードとファイル全体の Ref)、`rows`(位置順のページ)、`ref`(位置の範囲から Ref)の 3 つ。
-- SPA は TypeScript を `tsc` で ES モジュールに出すだけにし、フレームワークもバンドラも入れない(spike の SPA は 4.2 KB で足りた)。依存を増やさない。VSCode の webview で再利用するとき、API の呼び先だけを差し替えられるようにしておく。
+- One engine is created per opened Source (ADR 0001: one instance = a fixed Source), and it is closed when a different file is opened and when the server exits.
+- The vision document, chapter 5, says "Core speaks one protocol (HTTP/JSON-RPC)", but this API is a separate, UI-only entry point. The agents' contract remains the MCP tools; this is a deliberate deviation so that MCP is not widened for the UI.
+- The API is an internal same-origin API and not a contract (stability: internal. It carries no version and may change without notice). At first there are three calls: `open` (the card and a whole-file Ref), `rows` (a page in position order) and `ref` (a Ref from position ranges).
+- The SPA is just TypeScript compiled to ES modules with `tsc`, with no framework and no bundler (the spike's SPA fit in 4.2 KB). No dependencies are added. So that it can be reused in a VS Code webview, only the target the API calls go to can be swapped.
 
-## 影響
+## Consequences
 
-- 良い点: Core の守り(ADR 0001 のエンジンのロック、ルートの制限)をそのまま使える。ブラウザに開いている他のページからは使えない。Ref はエージェントが CLI や MCP で解決できる。
-- 悪い点: UI を使うにはプロセスを 1 つ起動する必要がある。トークンは起動ごとに変わるので、ブラウザを閉じると URL を開き直す必要がある。
-- 同じマシンで動く他のプロセスは、ループバックに届く。セッショントークンがその前提の守りであり、引き換えコードを使って以降の URL を共有しても開けない。ただし同じ利用者の権限で動くプロセス(ブラウザ拡張を含む)は守りの外で、docs にそう書く。
+- Good: Core's protections (ADR 0001's engine lock, the root restriction) are used as they are. It cannot be used from other pages open in the browser. A Ref can be resolved by agents with the CLI or MCP.
+- Bad: using the UI requires starting one process. The token changes at every start, so after closing the browser you need to reopen the URL.
+- Other processes on the same machine can reach loopback. The session token is the protection that assumes this, and sharing a later URL does not open it because a redeem code was used. But processes running with the same user's privileges (browser extensions included) are outside the protection, and the docs say so.
 
-## 退けた案
+## Rejected options
 
-- A(MCP の HTTP を直接呼ぶ): 今のままでは呼べず、呼べるようにするにはエージェント用の入口に CORS を足し、利用者がトークンをページに貼る必要があるため。
-- C(DuckDB-WASM): ページがファイルのパスを知れず、エージェントが解決できる Ref を作れないため。ADR 0001 のエンジンのロックの外で 2 つ目のエンジンを動かすことにもなる。
-- トークンをクッキーで持つ案: ブラウザが自動で送るので、別のページからのリクエストにも付く(CSRF)。ヘッダで送るほうが単純に守れる。
-- トークンをクエリ文字列で渡す案: リクエストに乗るので、サーバーやプロキシのログ、Referer に残るため。
-- セッショントークンそのものを URL に載せる案: ブラウザの起動引数として他の利用者から読めるため。
+- A (call MCP's HTTP directly): it cannot be called as things stand, and making it callable would require adding CORS to the agents' entry point and having users paste the token into the page.
+- C (DuckDB-WASM): the page cannot learn the file's path, so it cannot make a Ref an agent can resolve. It would also run a second engine outside ADR 0001's engine lock.
+- Holding the token in a cookie: the browser sends it automatically, so it is attached even to requests from another page (CSRF). Sending it in a header is simpler to protect.
+- Passing the token in the query string: it goes with the request, so it would remain in server and proxy logs and in the Referer.
+- Putting the session token itself in the URL: it would be readable by other users as the browser's launch argument.
 
-## 最初のスライス
+## First slice
 
-「`fusen-web` を起動し、ブラウザで Parquet を開き、カードと行を見て、行や範囲を選び、Ref をコピーすると、その Ref が選んだ行だけを返す」。
+"Start `fusen-web`, open a Parquet file in the browser, look at the card and rows, select rows or a range, and when you copy the Ref, it returns only the selected rows."
 
-受け入れテスト(実際の出力を証拠にする):
-1. Chromium(Playwright)で、1 行、Shift の範囲、Ctrl の追加、2 ページ目の行を選んでコピーした Ref を `fusen resolve` すると、選んだ行だけが返る。
-2. ファイルを書き換えたあとに行を選ぶと、Ref を作らず「ファイルが変わった」と表示する。
-3. API の守り(統合テスト): 引き換えコードは 2 回目と 60 秒後に拒否、トークンなし 401、別の Origin 403、別の Host 403、JSON 以外 415、ルート外のパスは固定の文言で拒否。ループバック以外の `--host` は起動時に拒否。
-4. `<img onerror>` や `</script>` を含むセルとカードが文字列のまま表示され、何も実行されない。
-5. 応答の CSP が上の文字列と完全に一致し、`nosniff`、`no-referrer`、`no-store` が付いている。別オリジンの iframe への埋め込みが CSP 違反として拒否される(コンソールの違反を証拠にする)。
-6. 行をクリックしてすぐ Copy を押すと、最新の選択の Ref がコピーされる(spike で見つかった競合)。
-7. `file_row_number` という列を持つファイルでは、選択が無効になり、その旨が表示される。
+Acceptance tests (evidence is the actual output):
+1. In Chromium (Playwright), running `fusen resolve` on the Ref copied after selecting one row, a Shift range, a Ctrl addition and a row on page 2 returns only the selected rows.
+2. Selecting rows after the file has been rewritten makes no Ref and shows "the file changed".
+3. API protection (integration tests): the redeem code is refused the second time and after 60 seconds, no token gives 401, a different Origin 403, a different Host 403, non-JSON 415, a path outside the root is refused with fixed wording. A non-loopback `--host` is refused at startup.
+4. Cells and the card containing `<img onerror>` and `</script>` are displayed as plain strings and nothing runs.
+5. The response's CSP matches the string above exactly, and `nosniff`, `no-referrer` and `no-store` are set. Embedding in a cross-origin iframe is refused as a CSP violation (the console violation is the evidence).
+6. Clicking a row and immediately pressing Copy copies the Ref of the latest selection (the race found in the spike).
+7. For a file with a column named `file_row_number`, selection is disabled and the page says so.
 
-予算(最初の値。実測で見直す):
-- 1,000,000 行の Parquet で、開く(カード)1 秒以内、100 行のページ 0.2 秒以内、Ref の作成 0.1 秒以内(spike の実測は約 0.2 / 0.06 / 0.025 秒)。
-- 1 ページの行数は既定 100、最大 500。1 回の選択の範囲は 1,000 個まで。
-- SPA は実行時の依存なしで 50 KB 以内(spike は 4.2 KB)。
+Budgets (initial values; to be revisited with measurements):
+- On a 1,000,000-row Parquet file: open (card) within 1 second, a 100-row page within 0.2 seconds, minting a Ref within 0.1 seconds (the spike measured about 0.2 / 0.06 / 0.025 seconds).
+- Rows per page: default 100, maximum 500. One selection is at most 1,000 ranges.
+- The SPA within 50 KB with no runtime dependencies (the spike was 4.2 KB).
 
-## spike のコードについて
+## About the spike code
 
-spike のコードは `.scratch/web-ui` に残し、取り込まない。`apps/web` は、spike で分かったことから実際の構成の中で新しく書く。spike の近道(リクエストごとに新しいエンジンを開いたまま閉じない、SQL を文字列で組み立てる、範囲の数に上限がない、エンジンのエラー文をそのまま返す、指紋の確認がない、型とテストがない)は引き継がない。
+The spike code stays in `.scratch/web-ui` and is not brought in. `apps/web` is written fresh, in the real layout, from what the spike taught. The spike's shortcuts (opening a new engine on every request and never closing it, building SQL as strings, no upper limit on the number of ranges, returning engine error messages as they are, no fingerprint check, no types or tests) are not carried over.
 
-## 未決事項(スライスの外)
+## Open questions (outside the slice)
 
-- VSCode 拡張の webview での API の呼び先(拡張のホストとのメッセージにするか、同じローカルサーバーを使うか)。
-  - 2026-10-22 追記: 拡張のホストとのメッセージにした(`apps/vscode`)。ポートとトークンを持たずに済み、webview の CSP で通信をすべて止められるため。ホストは `apps/web` の `View` をそのまま使い、webview は Web UI の `index.html` と SPA を再利用する。
-- ファイルを開く手段(パスの入力だけか、ルートの下の一覧を出すか)。最初のスライスはパスの入力だけ。その後、ルートの下の一覧(`/api/files`、シンボリックリンクはたどらない)を足し、パスの入力も残した。
-- 列の選択(`cols=`)、述語の入力、クエリ付き Ref を UI から作ること。
+- What the API calls go to in a VS Code extension's webview (messages to the extension host, or the same local server).
+  - 2026-10-22 addendum: it became messages to the extension host (`apps/vscode`). That avoids holding a port and a token, and lets the webview's CSP block all connections. The host uses `apps/web`'s `View` as it is, and the webview reuses the Web UI's `index.html` and SPA.
+- How to open a file (typing a path only, or showing a list under the roots). The first slice was path input only. Later a list under the roots (`/api/files`, symlinks not followed) was added, and path input was kept.
+- Column selection (`cols=`), entering a predicate, and making a Ref with a query from the UI.

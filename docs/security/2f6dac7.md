@@ -1,32 +1,32 @@
-# セキュリティレビュー: 2f6dac7
+# Security review: 2f6dac7
 
-対象は `main` の 2f6dac7(PR #13 のマージ後)です。重点は `fusen-mcp --http` で追加した HTTP サーバーで、Ref・SQL・ファイルの範囲などの core の守りも合わせて見ました。修正は同じ pull request に入っています。攻撃ケースは使い捨てのスクリプトで実機に当て、確かめたものを `tests/security` に残しました。
+The target is `main` at 2f6dac7 (after PR #13 was merged). The focus is the HTTP server added with `fusen-mcp --http`, and we also looked at core's protections such as Refs, SQL and the file root. The fixes are in the same pull request. Attack cases were run against the real thing with throwaway scripts, and the ones we confirmed were kept in `tests/security`.
 
-## 見つけて直したもの
+## Found and fixed
 
-| # | 面 | 何が起きたか | 直し方 | テスト |
+| # | Surface | What happened | How it was fixed | Test |
 |---|---|---|---|---|
-| 1 | エンジンの鍵 | DuckDB はスピル先(既定は作業ディレクトリの `.tmp/`)を `allowed_directories` に自動で加え、外部アクセスを止めても読み書きを許していた。`current_setting('allowed_directories')` が `[<cwd>/.tmp/]` を返し、そこへの `COPY TO`・`ATTACH`・`read_text`・`glob` が通った。MCP の入口からは SELECT しか届かないので、外から使えたのは `.tmp/` の中の読み取りと一覧(`fusen_ref` の query に `read_text(...)`)。 | ロックの前に `SET temp_directory=''`。スピルをやめ、許可リストを空にする。代わりに、メモリが足りないクエリはスピルせずに失敗する(下の「残っているもの」)。 | `readonly.test.ts` の「the engine's temp directory」6 件(修正前はすべて赤) |
-| 2 | 結果の大きさ | 描画はセルを 2000 文字、結果を約 256KB で切るが、切るのは行を JS に読み込んだ後だった。Ref の query で `repeat('x', 20000000)` を 100 行作ると、28.7 秒・RSS 6.2GB で `Invalid string length`(貼られた Ref ひとつでプロセスが落ちる)。この最悪の形は #1 のスピルが許していたもので、スピルを止めるとエンジンのメモリ上限(512MB)で素早く失敗する。それでも上限の手前(数 MB〜約 480MB)の結果は丸ごと JS に運ばれ、1 要求で RSS が 1GB を超えた。 | 行はまずエンジンの中の一時テーブルに 1 回だけ作り(メモリ上限と時計の内側)、そこでセルごとのバイト数を測り、合計 8MB(`MAX_FETCH_BYTES`)に収まる先頭の行だけを読む。測った行と読む行が同じなので、`current_query()` や `random()` で測るときだけ小さく見せる手は効かない(独立レビューで見つかり、この形に直した)。読まなかった行は `OMITTED:` に「The rows past 8388608 bytes are not read」と書く。普通の結果の出力は変わらない。 | `readonly.test.ts` の巨大セル 4 件(3 件は修正前に赤)。既存の「far more memory」テストはそのまま通る(メモリ上限で失敗し、落ちない) |
-| 3 | HTTP の Origin | `Origin: http://evil.example` を付けた要求も、トークンがあれば通っていた。トークンがなければ届かないので単独では悪用できないが、MCP の仕様は Origin の検証を求めている。 | `Origin` があり、サーバー自身のループバックのオリジン(`http://127.0.0.1:<port>` など 3 つ)でなければ 403。`Origin` のない要求(ブラウザー以外)はこれまで通り。 | `tests/security/mcp-http.test.ts` の Origin 2 件(拒否側は修正前に赤) |
+| 1 | Engine lock | DuckDB automatically added the spill directory (by default `.tmp/` in the working directory) to `allowed_directories` and allowed reading and writing there even with external access switched off. `current_setting('allowed_directories')` returned `[<cwd>/.tmp/]`, and `COPY TO`, `ATTACH`, `read_text` and `glob` against it went through. From the MCP entry only SELECT can arrive, so what could be used from outside was reading and listing inside `.tmp/` (`read_text(...)` in `fusen_ref`'s query). | `SET temp_directory=''` before the lock. Spilling is dropped and the allow list is emptied. In exchange, a query that runs out of memory fails instead of spilling (see "What remains" below). | 6 cases under "the engine's temp directory" in `readonly.test.ts` (all red before the fix) |
+| 2 | Size of results | Rendering cuts cells at 2000 characters and the result at about 256KB, but the cutting happened after the rows had been read into JS. A Ref query that built 100 rows with `repeat('x', 20000000)` took 28.7 seconds and 6.2GB of RSS before `Invalid string length` (one pasted Ref could bring the process down). This worst case was allowed by #1's spilling, and once spilling is stopped it fails quickly at the engine's memory cap (512MB). Even so, results just under the cap (a few MB to about 480MB) were carried whole into JS, and RSS passed 1GB for one request. | Rows are first built just once into a temporary table inside the engine (within the memory cap and the clock), the byte size of each cell is measured there, and only the leading rows that fit within a total of 8MB (`MAX_FETCH_BYTES`) are read. The rows measured and the rows read are the same, so tricks that look small only when measured, with `current_query()` or `random()`, do not work (found by independent review and fixed to this form). The rows not read are noted on the `OMITTED:` line as "The rows past 8388608 bytes are not read". Output for ordinary results does not change. | 4 huge-cell cases in `readonly.test.ts` (3 were red before the fix). The existing "far more memory" test still passes as it is (it fails at the memory cap and does not crash) |
+| 3 | HTTP Origin | A request with `Origin: http://evil.example` was accepted if it carried the token. Without the token it cannot get in, so it is not exploitable alone, but the MCP specification asks for Origin validation. | If `Origin` is present and is not the server's own loopback origin (the three such as `http://127.0.0.1:<port>`), the answer is 403. Requests without `Origin` (non-browsers) are as before. | 2 Origin cases in `tests/security/mcp-http.test.ts` (the refusing side was red before the fix) |
 
-## 問題がなかったもの
+## What had no problem
 
-- **待ち受け**: `--host` はループバックの 3 つだけ。`0.0.0.0` は起動しない(既存テスト)。
-- **トークン**: 本文を読む前に検査する。sha256 にそろえてから `timingSafeEqual` で比べるので、長さも時間も漏れない。16 文字未満は起動しない。生成したトークンを標準エラーに出すのは仕様。
-- **トークンの漏れ(canary)**: `FUSEN_MCP_TOKEN` に canary を入れ、`DEBUG=*` で起動し、4 つのツールと失敗 4 種(ルート外、拒否された述語、エンジンのエラー、壊れた Ref)と、拒否される要求 2 種を流した。ツールの出力、標準出力、標準エラーのどこにも出ない(新しいテスト)。エンジンから環境変数を読む `getenv` は Node の DuckDB にない。
-- **DNS リバインディング**: `Host` が `127.0.0.1:<port>`、`localhost:<port>`、`[::1]:<port>` 以外なら 403(既存テスト)。ブラウザーからの別オリジンの要求は、`Authorization` ヘッダーのためにプリフライトになり、それが 401 で終わるので届かない。
-- **要求の上限**: 本文 1MB を超えたら 413、JSON でなければ 400、`/mcp` 以外は 404、POST 以外は 405。本文の受信は 30 秒で打ち切る。認証前の要求は本文を読まない。
-- **パス**: `realpath` してからルートと比べるので、ルートの中からルートの外へ向くシンボリックリンクは断る。エンジンは確かめた実パスで開く。glob の文字(`*`、`[ab]`)を名前に含むファイルを開いても、DuckDB は展開後のファイルを一つずつ `allowed_paths` と照らすため、同じディレクトリの別ファイルは読めない(開くこと自体が失敗する。機能上の制限で、セキュリティの問題ではない)。
-- **SQL**: `query` と `where` は解析して 1 つの SELECT であることを確かめてから走らせるが、守りの本体はエンジンの鍵。`INSTALL`/`LOAD`、`EXPORT DATABASE`、`read_csv('https://...')`、`glob('/etc/*')`、`parquet_metadata` での別ファイル、`sniff_csv` はどれも Permission Error になることを実機で確かめた。インメモリの `CREATE TABLE` はできるが、ディスクには届かず、メモリ上限の内側。
-- **エンジンの後始末**: 要求ごとに DuckDB インスタンスを作って閉じていないが、300 回開いても RSS は約 265MB で一定(GC で解放される)。
-- **プロンプトインジェクション**: 敵対的な行(`PWNED-7731`)がデータブロックの中だけに出ることは既存の統合テストが確かめている。ツールの説明は `server.ts` の固定文。
+- **Listening**: `--host` accepts only the three loopback addresses. `0.0.0.0` does not start (existing test).
+- **Token**: it is checked before the body is read. It is normalized with sha256 and then compared with `timingSafeEqual`, so neither length nor timing leaks. Under 16 characters it does not start. Printing the generated token on standard error is by design.
+- **Token leaks (canary)**: we put a canary in `FUSEN_MCP_TOKEN`, started with `DEBUG=*`, and ran the four tools, four kinds of failure (outside the root, a refused predicate, an engine error, a broken Ref) and two kinds of refused request. It appears in none of the tool output, standard output or standard error (new test). `getenv`, which reads environment variables from the engine, does not exist in Node's DuckDB.
+- **DNS rebinding**: a `Host` other than `127.0.0.1:<port>`, `localhost:<port>` and `[::1]:<port>` is 403 (existing test). A cross-origin request from a browser becomes a preflight because of the `Authorization` header, and it ends in 401, so it does not get through.
+- **Request limits**: a body over 1MB is 413, non-JSON is 400, anything other than `/mcp` is 404, anything other than POST is 405. Receiving the body is cut off at 30 seconds. A request before authentication does not have its body read.
+- **Paths**: the path is `realpath`ed before it is compared with the root, so a symlink pointing from inside the root to outside the root is refused. The engine opens the real path that was checked. Even if a file whose name contains glob characters (`*`, `[ab]`) is opened, DuckDB checks the expanded files one by one against `allowed_paths`, so other files in the same directory cannot be read (opening itself fails. This is a functional limit, not a security problem).
+- **SQL**: `query` and `where` are parsed and confirmed to be one SELECT before running, but the engine's lock is the real protection. We confirmed on the real thing that `INSTALL`/`LOAD`, `EXPORT DATABASE`, `read_csv('https://...')`, `glob('/etc/*')`, another file through `parquet_metadata`, and `sniff_csv` all give a Permission Error. An in-memory `CREATE TABLE` is possible, but it does not reach the disk and stays within the memory cap.
+- **Cleaning up the engine**: a DuckDB instance is created per request and not closed explicitly, but even after opening it 300 times RSS is steady at about 265MB (freed by GC).
+- **Prompt injection**: the existing integration tests confirm that hostile rows (`PWNED-7731`) appear only inside the data block. Tool descriptions are fixed text in `server.ts`.
 
-## 残っているもの
+## What remains
 
-- **PII のマスク**: 未実装。vision.md にあるだけで、コードにも ADR にもない。サンプル行は今はそのまま出る。新機能として扱う。
-- **card の重さ**: `fusen_card` と `fusen_peek` の `SUMMARIZE` には時計もバイトの上限もない。ルートの中の大きなファイルは、終わるまで待つことになる。
-- **同時実行の数**: HTTP サーバーは同時に来た要求の数を絞らない。要求ごとにエンジン(メモリ 512MB、4 スレッド)を開くので、トークンを持つ相手は並べて送ればメモリを使い切れる。トークンを持つ相手は信頼する前提。
-- **切断された要求**: 接続が切れても、走っているクエリは時計が来るまで止まらない。
-- **スピルを止めた代わりに**: バイトの上限(512MB)の内側のファイルでも、大きな `DISTINCT`・`GROUP BY`・`ORDER BY` は以前はスピルで通り、いまは Out of Memory で失敗する(800 万行・322MB のファイルで確認)。通したいなら、エンジンごとに専用の一時ディレクトリを作って上限(`max_temp_directory_size`)をかけ、閉じるときに消す形がある。ただしその中はクエリから読み書きできるので、「どこにも書かない」を緩めることになる。
-- **最初の 1 行**: 描画の 256KB の上限は、2 行目からしか効かない(最初の行は必ず出す)。今回の 8MB の上限で、最初の行の大きさにも天井ができた。
+- **PII masking**: not implemented. It exists only in vision.md, not in code or in an ADR. Sample rows are currently shown as they are. It will be treated as a new feature.
+- **Weight of the card**: `SUMMARIZE` in `fusen_card` and `fusen_peek` has neither a clock nor a byte cap. A large file inside the root has to be waited on until it finishes.
+- **Number of concurrent requests**: the HTTP server does not limit the number of simultaneous requests. A request opens an engine (512MB of memory, 4 threads) each, so someone holding the token can use up memory by sending requests in parallel. The premise is that whoever holds the token is trusted.
+- **Disconnected requests**: even if the connection drops, a running query does not stop until the clock arrives.
+- **In exchange for stopping spilling**: even for files within the byte cap (512MB), a large `DISTINCT`, `GROUP BY` or `ORDER BY` used to get through by spilling and now fails with Out of Memory (confirmed on an 8-million-row, 322MB file). To let them through, there is a form where each engine gets a dedicated temporary directory with a cap (`max_temp_directory_size`) and it is deleted on close. But queries could read and write inside it, so that would loosen "writes nowhere".
+- **The first row**: rendering's 256KB cap only takes effect from the second row (the first row is always shown). The 8MB cap added now puts a ceiling on the size of the first row as well.

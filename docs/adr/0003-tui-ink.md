@@ -1,88 +1,88 @@
-# ADR 0003: TUI は ink で作る
+# ADR 0003: Build the TUI with ink
 
-- ステータス: 承認済み(2026-10-23、takumi が B 案で承認)
-- 日付: 2026-10-23
-- 判定: go(increment で最初のスライスを作る)
+- Status: Accepted (2026-10-23, takumi approved option B)
+- Date: 2026-10-23
+- Verdict: go (build the first slice as an increment)
 
-## 背景
+## Background
 
-構想書(`docs/vision.md`)は、Web UI・VS Code 拡張と並べて TUI を挙げている。役目は他の UI と同じで、選んで Ref をコピーすることである。
-決めることは 2 つあった。画面の作り方(Node 標準だけか、ライブラリか)と、既存の守りをどう引き継ぐかである。
+The vision document (`docs/vision.md`) lists a TUI alongside the Web UI and the VS Code extension. Its job is the same as the other UIs: select, then copy a Ref.
+There were two things to decide: how to build the screen (Node's standard library only, or a library), and how to carry over the existing protections.
 
-## 決定
+## Decision
 
-### 1. 画面は ink(React の端末向け描画)で作る
+### 1. The screen is built with ink (React rendering for the terminal)
 
-takumi が 3 案から B を選んだ。
+takumi chose B from three options.
 
-| 案 | 内容 | 採否 |
+| Option | What it is | Verdict |
 | --- | --- | --- |
-| A | Node 標準(`readline`、raw モード、ANSI)だけで描く | 退けた(推奨だったが takumi が B を選んだ) |
-| B | ink を入れる | **採用** |
-| C | 一覧と行番号の入力だけの最小の対話 | 退けた |
+| A | Draw with only Node's standard library (`readline`, raw mode, ANSI) | Rejected (it was the recommendation, but takumi chose B) |
+| B | Bring in ink | **Adopted** |
+| C | A minimal interaction with only a list and typing a row number | Rejected |
 
-### 2. 依存を増やすことと、ADR 0002 との関係
+### 2. Adding dependencies, and the relation to ADR 0002
 
-ADR 0002 の「依存を増やさない」は SPA(ブラウザに配る 4.2 KB)の決定で、実行時の依存の方針を縛るものではない。ただし、いまの実行時の依存は DuckDB と MCP SDK(と zod)だけで、TUI はこれを大きく増やす。影響は次のとおり。
+ADR 0002's "add no dependencies" is a decision about the SPA (the 4.2 KB served to the browser) and does not bind the policy on runtime dependencies. Still, today's runtime dependencies are only DuckDB and the MCP SDK (and zod), and the TUI increases them considerably. The effects are as follows.
 
-- **増える量**: `apps/tui` の実行時の依存に ink 8.0.0 と react 19.3.1 の 2 つ。推移的に 33 パッケージが加わる(lockfile で 37 件の増加。うち 2 件は型だけの `@types/react` と `csstype`)。ライセンスは確かめた範囲(ink、react、react-reconciler、yoga-layout、chalk、es-toolkit)がすべて MIT。
-- **インストール時のスクリプト**: 追加分に `requiresBuild` のものはない(`pnpm-lock.yaml` で確認)。`pnpm.neverBuiltDependencies` の方針は変えない。ネイティブのバイナリも増えない(`yoga-layout` は WebAssembly で 332 KB)。
-- **固定**: `ink`、`react`、`@types/react` は範囲指定でなく完全なバージョンで固定する。更新は lockfile の差分を見て手で上げる。
-- **広がり**: 依存は `apps/tui`(private)だけに置く。`packages/core`、`packages/cli`、`packages/mcp`、`apps/web`、VS Code 拡張の依存は変えない。`.vsix` と `fusen-web` に ink は入らない。
-- **やめるとき**: 画面は `apps/tui/src/app.ts` の 1 ファイルで、ink に依存するのはここと `mount.ts` だけ。選択(`selection.ts`)と端末向けの無害化(`text.ts`)は ink を使わない。A に戻すなら描画だけを書き直せばよい。
+- **How much is added**: ink 8.0.0 and react 19.3.1 as `apps/tui` runtime dependencies. Transitively 33 packages are added (an increase of 37 entries in the lockfile, 2 of which are the type-only `@types/react` and `csstype`). Of what we checked (ink, react, react-reconciler, yoga-layout, chalk, es-toolkit), all are MIT licensed.
+- **Install-time scripts**: none of the additions has `requiresBuild` (checked in `pnpm-lock.yaml`). The `pnpm.neverBuiltDependencies` policy does not change. No native binaries are added either (`yoga-layout` is WebAssembly, 332 KB).
+- **Pinning**: `ink`, `react` and `@types/react` are pinned to exact versions, not ranges. Updates are raised by hand after looking at the lockfile diff.
+- **Reach**: the dependencies live only in `apps/tui` (private). The dependencies of `packages/core`, `packages/cli`, `packages/mcp`, `apps/web` and the VS Code extension do not change. ink does not go into the `.vsix` or `fusen-web`.
+- **Backing out**: the screen is the single file `apps/tui/src/app.ts`, and only that and `mount.ts` depend on ink. Selection (`selection.ts`) and terminal sanitization (`text.ts`) do not use ink. To go back to A, only the rendering needs rewriting.
 
-### 3. 既存の守りは `apps/web` の `View` を使うことで引き継ぐ
+### 3. Existing protections are carried over by using `apps/web`'s `View`
 
-TUI は Web UI や VS Code 拡張と同じ `View` を使い、`core` を直接呼ばない。そのため次はそのまま効く。
+The TUI uses the same `View` as the Web UI and the VS Code extension, and does not call `core` directly. So the following apply as they are.
 
-- ルートの下のファイルしか開けない(`--root`、既定は現在のディレクトリ)。
-- すべての問い合わせに時計(`DEFAULT_TIMEOUT_MS`)がつく。
-- カードの min/max は PII をマスクした形で出る(core の `buildCard`)。
-- 開いたあとにファイルが変わっていれば、Ref を作らず「ファイルが変わった」と出す(`SourceChanged`)。
-- エラーは `describeError` の固定の文言だけを出し、予期しないエラーは `logLine` で stderr に出す。
+- Only files under the roots can be opened (`--root`, default: the current directory).
+- Every query has a clock (`DEFAULT_TIMEOUT_MS`).
+- The card's min/max appears with PII masked (core's `buildCard`).
+- If the file has changed since it was opened, no Ref is made and "the file changed" is shown (`SourceChanged`).
+- Errors show only the fixed wording of `describeError`, and unexpected errors go to stderr through `logLine`.
 
-TUI で足した守りは次の 2 つ。
+The TUI adds two protections of its own.
 
-- **切断で中断**: 画面は操作ごとに `AbortController` を作り、新しい操作、終了(`q`、Ctrl-C)、端末が閉じたとき(`SIGHUP`、`SIGTERM`)に走っている問い合わせを止める。`View` は signal をエンジンに渡す(PR #29)。
-- **端末への書き込みを無害化する**: セル、列名、パス、条件の文字列はファイルの中身なので信用しない。端末は制御文字に反応する(カーソル移動、画面の消去、ウィンドウタイトル、OSC 52 によるクリップボードの書き換え)ため、C0/C1 の制御文字、DEL、双方向の制御文字、ゼロ幅や不可視の書式文字、タグ文字は `�` に、改行は `⏎` に置き換えて出す(`text.ts`)。ink 8 も文字列の中のエスケープを取り除く(`renderToString` で OSC と CSI が消えることを確かめた)が、守りを依存の挙動に預けない。取り除くと中身が黙って消えるので、ここで見える印に替えておく。
+- **Abort on disconnect**: the screen creates an `AbortController` per operation, and stops a running query on a new operation, on exit (`q`, Ctrl-C), and when the terminal closes (`SIGHUP`, `SIGTERM`). `View` passes the signal to the engine (PR #29).
+- **Sanitize what is written to the terminal**: strings of cells, column names, paths and conditions are file contents and are not trusted. A terminal reacts to control characters (cursor movement, clearing the screen, the window title, rewriting the clipboard with OSC 52), so C0/C1 control characters, DEL, bidirectional control characters, zero-width and invisible format characters, and tag characters are replaced with `�`, and newlines with `⏎` (`text.ts`). ink 8 also strips escapes inside strings (we confirmed with `renderToString` that OSC and CSI disappear), but we do not leave the protection to a dependency's behavior. Stripping silently removes content, so we replace them with visible markers here.
 
-### 4. 画面と操作
+### 4. Screen and controls
 
-`fusen-tui <file.parquet> [--root <dir>]...`。標準入力と標準エラー出力が端末のときだけ動く。画面と OSC 52 は標準エラー出力に出し、標準出力は終了時の Ref だけにする(パイプで使えるように)。
+`fusen-tui <file.parquet> [--root <dir>]...`. It runs only when standard input and standard error are terminals. The screen and OSC 52 go to standard error, and standard output is only the Ref at exit (so it can be piped).
 
-- 表(1 ページの行数は画面の高さから決め、最大 `MAX_PAGE_ROWS`)、先頭の行にファイルの位置(`file_row_number`)。列が画面に入らないときは ←→ で列をずらす。
-- 行は `space` で 1 行ずつ、`v` で範囲の始まりを決めてから ↑↓ で行を足す(Esc で範囲を終える)。位置の集合は ADR 0002 と同じく範囲の述語になる。ファイルが自分で `file_row_number` 列を持つときは、選択を断る。
-- `/` で行の条件を入力する(Web UI の条件と同じ検査)。条件が通らなければ core の文言を出して、前の条件に戻す。Ref は選んだ行と条件の両方に合う行なので、条件を変えたときは選択を空にして、「N 行選択」と Ref の行数がずれないようにする。
-- 選択が変わるたびに Ref を作り直し、最新のものだけを表示する。`y` は作成中の Ref を待ってからコピーする。
-- コピーは **OSC 52**(端末の機能)で行う。追加のパッケージも外部コマンドも使わない。OSC 52 を受け付けない端末(tmux の既定など)のために、Ref は画面に常に出し、終了時(`q`、Ctrl-C)に標準出力へも 1 行で出す(ファイルが変わったと分かったあとは出さない)(`fusen-tui f.parquet | pbcopy`)。
-- 送り出す OSC 52 の中身は、自分で作った Ref(ASCII のみ)だけで、ファイルの文字列は含まない。
+- The table (rows per page is decided from the screen height, at most `MAX_PAGE_ROWS`), with the file position (`file_row_number`) in the leading column. When the columns do not fit on screen, ←→ shifts them.
+- Rows are selected one at a time with `space`, or with `v` to mark the start of a range and then ↑↓ to add rows (Esc ends the range). The set of positions becomes a range predicate, as in ADR 0002. When the file has its own `file_row_number` column, selection is refused.
+- `/` enters a row condition (checked the same way as the Web UI's condition). If the condition does not pass, core's wording is shown and the previous condition returns. The Ref means the rows that match both the selection and the condition, so when the condition changes the selection is cleared, so that "N rows selected" and the Ref's rows do not drift apart.
+- The Ref is minted again each time the selection changes, and only the latest is shown. `y` waits for a Ref that is still being minted before copying.
+- Copying uses **OSC 52** (a terminal feature). No extra package or external command is used. For terminals that do not accept OSC 52 (tmux by default, for example), the Ref is always shown on screen and also printed to standard output on one line at exit (`q`, Ctrl-C) (not printed once the file is known to have changed) (`fusen-tui f.parquet | pbcopy`).
+- The content of the OSC 52 sent out is only the Ref we made ourselves (ASCII only) and contains no strings from the file.
 
-### 5. ファイルの一覧と列の選択(2026-10-23 追記)
+### 5. File list and column selection (addendum 2026-10-23)
 
-- ファイルを渡さずに起動すると、ルートの下の Parquet ファイルを一覧にする。一覧は Web UI の `listFiles` をそのまま使うので、symlink をたどらない、隠しファイルを飛ばす、件数と読むエントリ数に上限がある、という守りも同じ。ファイル名はディスク由来なので `plain()` を通す。開くのは `View.open`(ルートの検査は core)。`b` で一覧に戻り、いまの `View` を閉じる。
-- 列は `c` の画面で残す/外す。表にも `View.ref` の `columns` にも同じ集合を渡す(Web UI と同じ契約。契約の変更なし)。列名は Ref に渡すときは元の綴り、画面に出すときは `plain()`。
-- 限界: `View.open` と `listFiles` は signal を取らないので、開いている最中・一覧を読んでいる最中に端末が閉じても、その 1 回は終わるまで続く(終わった `View` はすぐ閉じる)。どちらも上限と時計の内側で終わる。
+- When started without a file, it lists the Parquet files under the roots. The list uses the Web UI's `listFiles` as it is, so its protections are the same too: symlinks are not followed, hidden files are skipped, and there are caps on the count and on the entries read. File names come from disk, so they go through `plain()`. Opening goes through `View.open` (the root check is core's). `b` returns to the list and closes the current `View`.
+- Columns are kept or dropped on the `c` screen. The same set is passed to the table and to `View.ref`'s `columns` (the same contract as the Web UI; no contract change). Column names are passed to the Ref in their original spelling and shown on screen through `plain()`.
+- Limit: `View.open` and `listFiles` take no signal, so if the terminal closes while a file is being opened or the list is being read, that one operation continues until it finishes (a finished `View` is closed immediately). Both finish within their caps and clocks.
 
-## 影響
+## Consequences
 
-- 良い点: 矢印キーで選べる TUI が、Web UI と同じ検査の上に乗る。画面の再描画、リサイズ、キー入力の細部を自前で書かずに済む。
-- 悪い点: 実行時の依存と lockfile が増える。ink は React に依存し、メジャーアップデートの追従が要る。`apps/tui` の中だけの影響だが、サプライチェーンの面は広がった。
-- 端末での表示は、全角文字の幅や端末ごとのキー入力の違いに左右される。最初のスライスでは、Linux の端末エミュレーターに近い環境をテストし、Windows と macOS の対話操作はテストしていない(CI の `check` はこの 3 つの OS で TUI のテストを回し、ink が読み込めることまでは確かめる)。
+- Good: a TUI you can drive with arrow keys sits on the same checks as the Web UI. We avoid writing the details of redrawing, resizing and key input ourselves.
+- Bad: runtime dependencies and the lockfile grow. ink depends on React, and following major updates is needed. The effect is only inside `apps/tui`, but the supply-chain surface has widened.
+- How things look in a terminal depends on the width of full-width characters and on differences in key input between terminals. In the first slice we tested an environment close to a Linux terminal emulator, and did not test interactive use on Windows and macOS (CI's `check` runs the TUI tests on all three OSes, and confirms at least that ink loads).
 
-## 最初のスライス
+## First slice
 
-「`fusen-tui` を起動し、行を選んで `y` を押すと、選んだ行だけを返す Ref がコピーされる」。
+"Start `fusen-tui`, select rows, and press `y`: a Ref that returns only the selected rows is copied."
 
-受け入れテスト(`tests/integration/tui.test.ts`):
-1. `space` と `v` で選んだ行の Ref を `resolveRef` すると、選んだ行だけが返る。
-2. 条件を入れると合う行だけの Ref になる。通らない条件は core の文言で断り、前の条件に戻る。
-3. 2 ページ目の行を選んでも、位置が合う。
-4. 自前の `file_row_number` 列があるファイルでは選べない。
-5. 開いたあとにファイルが変わると、Ref を作らず注意を出す。
-6. エスケープ、OSC、ベル、双方向の上書き文字を含むセルと列名が、端末にそのまま渡らない。
+Acceptance tests (`tests/integration/tui.test.ts`):
+1. `resolveRef` on the Ref for rows selected with `space` and `v` returns only the selected rows.
+2. Entering a condition gives a Ref for only the matching rows. A condition that does not pass is refused with core's wording and the previous condition returns.
+3. Selecting a row on page 2 gives matching positions.
+4. A file that has its own `file_row_number` column cannot be selected from.
+5. If the file changes after it was opened, no Ref is made and a notice is shown.
+6. Cells and column names containing escapes, OSC, bell and bidirectional override characters are not passed to the terminal as they are.
 
-## 未決事項(スライスの外)
+## Open questions (outside the slice)
 
-- ルートの下のファイルの一覧から選ぶ画面(今は引数でファイルを渡す)。
-- 列の選択(`cols=`)。
-- Windows と macOS の端末での手元の確認。
+- A screen to choose from a list of files under the roots (today the file is passed as an argument).
+- Column selection (`cols=`).
+- Checking by hand on Windows and macOS terminals.

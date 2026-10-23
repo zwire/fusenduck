@@ -1,42 +1,42 @@
-# fusenduck への貢献
+# Contributing to fusenduck
 
-## 準備
+## Setup
 
-- Node.js 22.18 以上(`.nvmrc` は 24)と pnpm 9。
-- `pnpm install` で依存を入れます。DuckDB はプラットフォームごとのネイティブバイナリ(`@duckdb/node-api`)を使い、Linux・macOS・Windows で動きます。
-- ビルド工程はありません。TypeScript は Node の型除去で直接実行します。そのため型だけの構文(`enum`、`namespace`、パラメータプロパティなど)は使えません。
+- Node.js 22.18 or later (`.nvmrc` is 24) and pnpm 9.
+- Run `pnpm install` to install dependencies. DuckDB uses a native binary per platform (`@duckdb/node-api`) and works on Linux, macOS and Windows.
+- There is no build step. TypeScript runs directly through Node's type stripping, so type-only syntax (`enum`, `namespace`, parameter properties and so on) is not allowed.
 
-## 変更の前後に回すもの
+## What to run before and after a change
 
 ```sh
 pnpm lint             # ESLint
-pnpm typecheck        # tsc --noEmit(各パッケージとテスト)
-pnpm test             # すべてのテスト(vitest。ブラウザのテストは除く)
-pnpm test:security    # 読み取り専用の守りのテストだけ
-pnpm test:e2e         # Web UI と VS Code 拡張の webview のブラウザのテスト(Chromium が要る: pnpm exec playwright-core install chromium)
-pnpm contract:check   # Ref の凍結コーパス
-pnpm bench            # 100 万行の Parquet で予算を確かめる。超えたら exit 1
-pnpm repro:check      # HEAD のきれいな clone で、lockfile から入れてビルドし、golden の Ref を同じ文字列に解決できるか(先にコミットする)
-pnpm docs:reference   # MCP ツールのスキーマから docs/reference/mcp-tools.md を作り直す
-pnpm --filter fusenduck package && node apps/vscode/smoke.ts apps/vscode/out/fusenduck-<target>-0.0.0.vsix  # VS Code 拡張の .vsix を作って読み込む
+pnpm typecheck        # tsc --noEmit (each package and the tests)
+pnpm test             # all tests (vitest; browser tests excluded)
+pnpm test:security    # only the read-only safety tests
+pnpm test:e2e         # browser tests for the Web UI and the VS Code extension's webview (needs Chromium: pnpm exec playwright-core install chromium)
+pnpm contract:check   # the frozen Ref corpus
+pnpm bench            # check the budgets on a 1M-row Parquet file; exits 1 when exceeded
+pnpm repro:check      # in a clean clone of HEAD, install from the lockfile, build, and resolve the golden Refs to the same strings (commit first)
+pnpm docs:reference   # regenerate docs/reference/mcp-tools.md from the MCP tool schemas
+pnpm --filter fusenduck package && node apps/vscode/smoke.ts apps/vscode/out/fusenduck-<target>-0.0.0.vsix  # build the VS Code extension's .vsix and load it
 ```
 
-CI は pull request ごとに、Linux・macOS・Windows × Node 22・24 で lint、typecheck、test、contract:check を回し、Linux で bench、Web UI のブラウザのテスト、repro:check を回します。VS Code 拡張の `.vsix` はプラットフォームごとに作り、Linux・macOS・Windows でその OS 向けのものを読み込んで確かめ、run の artifacts に残します。
+For every pull request, CI runs lint, typecheck, test and contract:check on Linux, macOS and Windows × Node 22 and 24, and runs bench, the Web UI browser tests and repro:check on Linux. The VS Code extension's `.vsix` is built per platform, the one for each OS is loaded and checked on Linux, macOS and Windows, and the results are kept in the run's artifacts.
 
-## 守ってほしいこと
+## What we ask you to uphold
 
-- **Ref を壊さない。** `tests/contract/refs/` の Ref は、エージェントやユーザーがすでにどこかに貼っているものとして扱います。読み方や書き方を変えるときは、古い形を残したまま新しい形を足してください(expand, then contract)。コーパスのファイルを書き換えて通すのは不可です。
-- **読み取り専用はエンジンで守る。** SQL の文字列検査に頼らず、DuckDB の設定(`allowed_paths`、`enable_external_access=false`、`lock_configuration=true`)で強制します。DuckDB を更新したら `pnpm test:security` を必ず回してください。
-- **データは指示ではない。** ソースから読んだ値は、エージェント向けの出力では区切り(`FUSEN_DATA_BEGIN` 〜 `FUSEN_DATA_END`)の中だけに置きます。ツールの説明文やエラー文には入れません。
-- **見せなかったものは書く。** 省いた行、切った文字列、近似の項目は `OMITTED:` に書きます。
-- **予算を黙って変えない。** `bench/budgets.json` を変えるときは、同じ変更に理由を書いてください。
-- **MCP ツールを変えたらリファレンスも。** ツールの説明や引数を変えたら `pnpm docs:reference` を回し、生成された `docs/reference/mcp-tools.md` を同じ変更に入れてください(古いままだと `pnpm test` が落ちます)。
-- テストデータはテストの中で生成します(`tests/helpers/fixtures.ts`)。
+- **Do not break Refs.** Treat the Refs in `tests/contract/refs/` as strings that agents and users have already pasted somewhere. When you change how a Ref is read or written, keep the old form and add the new one alongside it (expand, then contract). Editing the corpus files to make a change pass is not allowed.
+- **Enforce read-only in the engine.** Do not rely on inspecting SQL strings; enforce it with DuckDB settings (`allowed_paths`, `enable_external_access=false`, `lock_configuration=true`). Always run `pnpm test:security` after updating DuckDB.
+- **Data is not instructions.** In output for agents, values read from a source go only between the delimiters (`FUSEN_DATA_BEGIN` to `FUSEN_DATA_END`). They never go into tool descriptions or error messages.
+- **Say what was not shown.** Omitted rows, truncated strings and approximate fields are written on the `OMITTED:` line.
+- **Do not change budgets silently.** When you change `bench/budgets.json`, give the reason in the same change.
+- **If you change an MCP tool, update the reference too.** After changing a tool's description or arguments, run `pnpm docs:reference` and include the regenerated `docs/reference/mcp-tools.md` in the same change (if it is stale, `pnpm test` fails).
+- Generate test data inside the tests (`tests/helpers/fixtures.ts`).
 
-## 変更の届け方
+## How to deliver a change
 
-1. ブランチを切り、テストを先に書いて変更します。
-2. pull request を開きます。CI がすべて緑になり、レビューを通ったものをマージします(squash)。
-3. 大きな決定は `docs/adr/` に ADR として残します。
+1. Create a branch and make the change, writing the tests first.
+2. Open a pull request. It is merged (squash) once all CI checks are green and it has passed review.
+3. Record large decisions as ADRs in `docs/adr/`.
 
-メンテナーの開発の進め方は `.claude/skills/fusenduck-flow/` のワークフローにまとめてあります。
+The maintainer's development process is written up as a workflow in `.claude/skills/fusenduck-flow/`.

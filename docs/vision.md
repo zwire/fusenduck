@@ -1,177 +1,177 @@
-# fusenduck 構想書
+# fusenduck vision
 
-- ステータス: Draft v0.1
-- 作成日: 2026-10-18
+- Status: Draft v0.1
+- Written: 2026-10-18
 
-## 1. 一言で
+## 1. In one sentence
 
-**どんなテーブルやファイルでも、ゼロ設定・読み取り専用で覗けて、見たものをそのまま文字列(Ref/クエリ)としてAIエージェントのコンテキストに載せられる、IDE非依存のデータ参照レイヤー。**
+**A zero-config, read-only data reference layer, independent of any IDE, that lets you peek at any table or file and put what you saw into an AI agent's context as a plain string (a Ref or a query).**
 
-人間とエージェントが「同じデータの同じ部分」を見ている状態を、最小の手間で作る。
+It builds, with minimal effort, the state where a human and an agent are looking at "the same part of the same data".
 
-## 2. 背景と課題
+## 2. Background and the problem
 
-### 2.1 データの消費者が変わりつつある
+### 2.1 The consumer of data is changing
 
-データの第一の消費者が人間からエージェントに移りつつある。人間がグリッドを目で舐める前提のGUI(VSCode Data Wranglerなど)は、IDEに閉じており、見たものをエージェントに渡す経路もない。
+The primary consumer of data is shifting from humans to agents. GUIs that assume a human scanning a grid by eye (such as VS Code Data Wrangler) are closed inside the IDE, and have no path for handing what you saw to an agent.
 
-### 2.2 BIは「終わる」のではなく分解される
+### 2.2 BI is not "ending"; it is being unbundled
 
-| 役割 | 今後 |
+| Role | Future |
 | --- | --- |
-| アドホックな探索 | エージェント + 使い捨てビューに置き換わる |
-| 共有される信頼済み指標 | semantic layer(Cube, dbt MetricFlow, Malloy)として残り、エージェントの足場としてむしろ重要になる |
-| 人間による検証のための可視化 | 「作り置きの画面」ではなく、意図から生成される派生物として残る |
+| Ad hoc exploration | Replaced by an agent plus throwaway views |
+| Shared, trusted metrics | Stays as a semantic layer (Cube, dbt MetricFlow, Malloy), and becomes more important as a foothold for agents |
+| Visualization for human verification | Stays, not as pre-built screens but as derivatives generated from intent |
 
-Cubeなどのsemantic layerが担う領域は、fusenduckの対象ではない。fusenduckが狙うのは、**その手前のアドホックな領域**である。
+The territory that semantic layers such as Cube cover is not fusenduck's target. fusenduck aims at **the ad hoc territory in front of it**.
 
-### 2.3 解きたい問題: 覗くことの心理的コスト
+### 2.3 The problem to solve: the psychological cost of peeking
 
-ちょっとしたParquetや外部DBを見るだけなのに、次の理由で億劫になる。
+Even to glance at a small Parquet file or an external database, people balk for these reasons:
 
-1. 接続のセットアップ(ドライバ、認証、接続文字列)
-2. 最初の一手が重い(スキーマが分からず探索クエリから考える)
-3. 事故が怖い(本番への重いクエリ、誤書き込み、PII表示)
-4. 結果が揮発する(他人やエージェントに渡せない)
-5. 文脈の切り替え(作業場所を離れてGUIを開く)
+1. Connection setup (drivers, authentication, connection strings)
+2. The first move is heavy (you do not know the schema, so you start by thinking up exploratory queries)
+3. Fear of accidents (heavy queries against production, accidental writes, showing PII)
+4. Results are volatile (you cannot hand them to other people or to an agent)
+5. Context switching (leaving where you work to open a GUI)
 
-既存のDuckDB CLI/UI、Rill Developer、Harlequin、VisiData、Datasette、DBeaverは、このうち一部しか解いていない。
+The DuckDB CLI/UI, Rill Developer, Harlequin, VisiData, Datasette and DBeaver each solve only some of these.
 
-## 3. 目標と非目標
+## 3. Goals and non-goals
 
-### 目標
+### Goals
 
-- `fusen <path|url>` だけで開ける(ゼロ設定、認証は既存の設定を拾う)
-- 読み取り専用・コストガード付きがデフォルト
-- 開いた瞬間にdata card(スキーマ・統計・出自)が得られる
-- 見た範囲を、再現可能な文字列(Ref)としてエージェントに渡せる
-- 人間用UIとエージェント用インターフェース(MCP)が同じCoreの上に乗る
-- アドホックなクエリから、semantic layer定義への昇格パスがある
+- Open with just `fusen <path|url>` (zero config; credentials are picked up from existing setups)
+- Read-only with cost guards by default
+- A data card (schema, statistics, provenance) the moment you open something
+- Hand the part you looked at to an agent as a reproducible string (a Ref)
+- The human UI and the agent interface (MCP) sit on the same core
+- A promotion path from ad hoc queries to semantic layer definitions
 
-### 非目標
+### Non-goals
 
-- BIツール、ダッシュボードビルダーの再発明
-- 書き込み・ETL・パイプライン実行
-- 大規模なマルチユーザーのガバナンス基盤(これはsemantic layerの領域)
-- 特定のIDEやエージェントへの依存
+- Reinventing a BI tool or a dashboard builder
+- Writing, ETL or running pipelines
+- A large multi-user governance platform (that is the semantic layer's territory)
+- Dependence on a particular IDE or agent
 
-## 4. コア抽象
+## 4. Core abstraction
 
-中心概念は、テーブルでもクエリでもなく**参照(Ref)**である。
+The central concept is neither the table nor the query but the **reference (Ref)**.
 
 ```
 Source → Dataset → Query → Result → Selection → ContextItem
-(file/DB)  (+card)  (SQL)   (handle)  (列/行/セル)  (Ref + 描画ポリシー)
+(file/DB)  (+card)  (SQL)   (handle)  (cols/rows/cells)  (Ref + rendering policy)
 ```
 
-| 概念 | 説明 |
+| Concept | Description |
 | --- | --- |
-| Source | ファイル、DB、URLなどデータの出どころ。接続情報は既存の設定から解決する |
-| Dataset | Sourceが公開する名前付きテーブル状のもの。data cardを持つ |
-| Query | Dataset上のSQL。不変で内容アドレス可能(正規化したSQLと入力のハッシュ) |
-| Result | Queryの実行結果へのハンドル。データ本体ではなく参照を持つ |
-| Selection | Resultの一部(列、行、セル範囲)。**座標ではなく述語(クエリ)として表現する** |
-| ContextItem | Selection + 描画ポリシー。エージェントに渡す単位 |
+| Source | Where the data comes from: a file, a database, a URL. Connection details are resolved from existing configuration |
+| Dataset | A named table-like thing a Source exposes. Has a data card |
+| Query | SQL over a Dataset. Immutable and content-addressable (a hash of the normalized SQL and its inputs) |
+| Result | A handle to the result of running a Query. Holds a reference, not the data itself |
+| Selection | A part of a Result (columns, rows, a cell range). **Expressed as a predicate (a query), not as coordinates** |
+| ContextItem | A Selection plus a rendering policy. The unit handed to an agent |
 
-### 4.1 コンテキスト化 = 文字列化 / クエリ生成
+### 4.1 Contextualizing = stringifying / generating a query
 
-コンテキスト化は特別な機構ではなく、**何らかの文字列化、またはクエリ生成**として扱う。
+Putting something into context is not a special mechanism; it is treated as **some kind of stringification, or query generation**.
 
-- UIで選択した範囲は、(a) 短いRef文字列、または (b) その範囲を再現するSQLに変換できる。
-- どちらもテキストなので、コピー&ペースト、プロンプトへの埋め込み、ファイル保存など、あらゆる経路に乗る。
-- エージェントはRefをMCP/CLIで解決して中身を得る。解決はいつでも同じ結果(またはデータ更新の差分)を返す。
+- A range selected in the UI can be converted into (a) a short Ref string, or (b) the SQL that reproduces that range.
+- Both are text, so they travel by any route: copy and paste, embedding in a prompt, saving to a file.
+- An agent resolves a Ref over MCP/CLI to get the contents. Resolution always returns the same result (or a diff when the data has been updated).
 
-Refのイメージ(スキーマは未確定):
+What a Ref might look like (the schema is not settled):
 
 ```
 fusen://<session>/<query-id>#cols=amount,region&where=amount>1000
 ```
 
-### 4.2 描画ポリシー(エージェント向け)
+### 4.2 Rendering policy (for agents)
 
-同じRefでも、トークン予算に応じて段階的に展開する。
+Even for the same Ref, the output expands in stages according to the token budget.
 
-| レベル | 内容 |
+| Level | Contents |
 | --- | --- |
-| schema | カラム名と型のみ |
-| card | 統計プロファイル(欠損、分布、min/max、カーディナリティ) |
-| sample | 先頭や層化サンプル数行 |
-| full | 全件(上限付き) |
+| schema | Column names and types only |
+| card | Statistical profile (missing values, distribution, min/max, cardinality) |
+| sample | A few rows from the top, or a stratified sample |
+| full | Everything (with an upper limit) |
 
-要約はバイアスを持つため、**何を見せていないか**(サンプリングの有無、切り詰めた行数)を必ず出力に含める。
+Summaries carry bias, so the output must always say **what was not shown** (whether sampling was used, how many rows were cut).
 
-## 5. アーキテクチャ
+## 5. Architecture
 
 ```
         ┌─ CLI / TUI
-Core ───┼─ Web UI (SPA) ── VSCode / Cursor の webview で再利用
+Core ───┼─ Web UI (SPA) ── reused in the webview of VS Code / Cursor
         ├─ MCP server
-        └─ (将来) 他のホスト
+        └─ (future) other hosts
 ```
 
-- **Coreは1つ**で、プロトコル(HTTP/JSON-RPC)を話す。全クライアントはその薄いラッパー。
-- **MCPは最初から入れる。** Ref解決プロトコルそのものがMCPの実体なので、設計時から「エージェントが使う」前提でRefの粒度とトークン予算を決める。
-- **エンジンはDuckDB。** CSV/Parquet/JSONを直接読み、`ATTACH` でPostgres/MySQL/SQLite、httpfsでS3/GCS/HTTPに繋ぐ。
-- **Web UIはSPA**にして、VSCode拡張のwebviewにそのまま載せる。
-- 実装は当面TypeScript(Web UI、VSCode拡張、MCP SDKと言語を揃える)。性能要件が出た部分のみ後から差し替える。
+- **There is one Core**, and it speaks a protocol (HTTP/JSON-RPC). Every client is a thin wrapper around it.
+- **MCP is included from the start.** The Ref resolution protocol is itself the substance of MCP, so the granularity of Refs and the token budget are decided at design time on the premise that "agents will use this".
+- **The engine is DuckDB.** It reads CSV/Parquet/JSON directly, connects to Postgres/MySQL/SQLite through `ATTACH`, and to S3/GCS/HTTP through httpfs.
+- **The Web UI is an SPA**, so it can be dropped straight into a VS Code extension's webview.
+- The implementation is TypeScript for now (to match the language of the Web UI, the VS Code extension and the MCP SDK). Only the parts with performance requirements will be swapped out later.
 
-### 5.1 エディタ連携の現実
+### 5.1 The reality of editor integration
 
-エディタ(Cursorを含む)のチャットに任意のコンテンツを注入する公開APIは限定的。確実に動く経路は次の通り。
+Public APIs for injecting arbitrary content into an editor's chat (Cursor included) are limited. The routes that reliably work are:
 
-1. UIで選択 → ワンクリックでRef文字列をコピー/挿入
-2. エージェントがMCP/CLIでRefを解決
+1. Select in the UI → copy or insert the Ref string with one click
+2. The agent resolves the Ref over MCP/CLI
 
-選択からRef文字列化までを1アクションにすることで、体験を「選んで渡す」に近づける。ホスト側APIが使えるようになれば、それを優先経路として追加する。
+By making the path from selecting to a Ref string a single action, the experience moves closer to "select and hand over". If host-side APIs become available, they will be added as the preferred route.
 
-### 5.2 パッケージ構成
+### 5.2 Package layout
 
 ```
 packages/
-  core/   エンジン、Refモデル、プロトコル、data card生成
-  cli/    CLI / TUI クライアント
-  mcp/    MCP サーバ(coreの薄いアダプタ)
-apps/     (将来)
+  core/   engine, Ref model, protocol, data card generation
+  cli/    CLI / TUI client
+  mcp/    MCP server (a thin adapter over core)
+apps/     (future)
   web/    Web UI (SPA)
-  vscode/ VSCode 拡張 (webview で web を再利用)
+  vscode/ VS Code extension (reuses web in a webview)
 ```
 
-## 6. 安全性
+## 6. Safety
 
-- **読み取り専用がデフォルト。** 書き込み系ステートメントは拒否する。
-- **コストガード:** 自動LIMIT、タイムアウト、EXPLAINによる事前見積もり、スキャン量が閾値を超える場合は確認を要求する。
-- **PII:** PIIが疑われるカラムは既定でマスクし、明示的な指示でのみ展開する。
-- **認証情報:** `~/.pgpass`、AWSプロファイル、dbt profiles、`.env` など既存のものを読むのみ。独自の資格情報ストアは作らない。Refやログに資格情報を含めない。
-- **プロンプトインジェクション:** データ中の文字列はそのままエージェントの入力経路になり得る。エージェント向け出力ではデータ値を構造的に区切り、「データであり指示ではない」ことを明示する。
+- **Read-only by default.** Statements that write are rejected.
+- **Cost guards:** automatic LIMIT, timeouts, up-front estimation with EXPLAIN, and a confirmation request when the scan size exceeds a threshold.
+- **PII:** columns suspected of holding PII are masked by default and expanded only on explicit instruction.
+- **Credentials:** only read what already exists, such as `~/.pgpass`, AWS profiles, dbt profiles and `.env`. No credential store of our own. Credentials never go into Refs or logs.
+- **Prompt injection:** a string in the data can become an input path to the agent as it is. In output for agents, data values are structurally delimited and it is stated explicitly that they are "data, not instructions".
 
-## 7. semantic layerとの関係(昇格パス)
+## 7. Relationship to the semantic layer (the promotion path)
 
 ```
-アドホックなクエリ → 繰り返し検出 → dimension/measure の候補 → Cube / MetricFlow 定義のスケルトン
+Ad hoc query → detect repetition → dimension/measure candidates → skeleton of a Cube / MetricFlow definition
 ```
 
-- 保存されたQueryが繰り返し使われたら、集計をmeasure、GROUP BYキーをdimensionの候補として提案する。
-- 出力は既存のsemantic layerの定義ファイル(スケルトン)とし、fusenduck自身は指標定義を所有しない。
-- これにより、アドホックと正式レイヤーが一方通行で繋がる。
+- When a saved Query is used repeatedly, propose its aggregations as measure candidates and its GROUP BY keys as dimension candidates.
+- The output is a skeleton of an existing semantic layer's definition files; fusenduck itself does not own metric definitions.
+- This links the ad hoc world and the formal layer in one direction.
 
-## 8. 既存ツールとの差分
+## 8. Differences from existing tools
 
-| ツール | 補う部分 | fusenduckが埋める部分 |
+| Tool | What it covers | What fusenduck fills in |
 | --- | --- | --- |
-| DuckDB CLI/UI | クエリ実行、ローカル閲覧 | エージェントとの共有セッション、ガードレール、Ref |
-| Rill Developer | Parquetから即ダッシュボード | UI生成ではなくコンテキスト化が目的 |
-| Harlequin / VisiData | ターミナルでの閲覧 | エージェント連携、昇格パス |
-| Datasette | SQLiteの公開と閲覧 | 多様なSource、ゼロ設定、安全性 |
-| DBeaver | 汎用DBクライアント | 軽さ、読み取り専用、エージェント連携 |
-| Cube / MetricFlow | 信頼済み指標 | その手前のアドホック領域 |
+| DuckDB CLI/UI | Running queries, local browsing | A session shared with agents, guardrails, Refs |
+| Rill Developer | Instant dashboards from Parquet | The goal is contextualizing, not generating UI |
+| Harlequin / VisiData | Browsing in the terminal | Agent integration, the promotion path |
+| Datasette | Publishing and browsing SQLite | Diverse Sources, zero config, safety |
+| DBeaver | A general-purpose database client | Lightness, read-only, agent integration |
+| Cube / MetricFlow | Trusted metrics | The ad hoc territory in front of them |
 
-差別化は「便利さ」ではなく、**共有セッション + 安全がデフォルト + 昇格パス**の組み合わせに置く。
+Differentiation rests not on "convenience" but on the combination of **a shared session + safe by default + a promotion path**.
 
-## 9. 未決事項とリスク
+## 9. Open questions and risks
 
-- **Refのスキーマ:** URI形式か、不透明ID + メタデータか。述語をどこまで表現できるか。
-- **Refの寿命:** セッション限定か永続か。データ更新時に何を保証するか。
-- **要約のバイアス:** 外れ値や稀なパターンが落ちるのを、どう明示するか。
-- **外部DBの認証:** 沼になりやすい。初期は Parquet/CSV + Postgres に絞る。
-- **差別化の維持:** DuckDB UIなどの進化に飲み込まれないか。共有セッション・ガードレール・昇格パスの3点を核に保てるか。
-- **ホストAPI依存:** エディタ側のコンテキスト注入APIが使えない場合、体験がRef文字列のコピー経由に限られる。
+- **The Ref schema:** a URI form, or an opaque ID plus metadata? How much of a predicate can it express?
+- **Ref lifetime:** limited to a session, or permanent? What is guaranteed when the data is updated?
+- **Summary bias:** how to make explicit that outliers and rare patterns are dropped.
+- **External database authentication:** a quagmire. Start narrow, with Parquet/CSV plus Postgres.
+- **Keeping the differentiation:** will it be swallowed by the evolution of tools like the DuckDB UI? Can the three points (shared session, guardrails, promotion path) stay at the core?
+- **Dependence on host APIs:** if the editor-side context-injection APIs are not usable, the experience is limited to copying a Ref string.
