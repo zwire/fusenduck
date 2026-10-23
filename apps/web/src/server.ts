@@ -114,7 +114,7 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
   let allowedOrigins: string[] = [];
   let view: View | undefined;
 
-  async function api(req: IncomingMessage, path: string): Promise<unknown> {
+  async function api(req: IncomingMessage, path: string, signal: AbortSignal): Promise<unknown> {
     if (req.method !== "POST") throw new HttpError(405, "method not allowed");
     const type = (req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
     if (type !== "application/json") throw new HttpError(415, "the body must be application/json");
@@ -140,9 +140,9 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
         return next.opened;
       }
       case "/api/rows":
-        return current(body).rows(body.fingerprint, body.offset, body.limit, body.where);
+        return current(body).rows(body.fingerprint, body.offset, body.limit, body.where, signal);
       case "/api/ref":
-        return { ref: await current(body).ref(body.fingerprint, body.ranges, body.where, body.columns) };
+        return { ref: await current(body).ref(body.fingerprint, body.ranges, body.where, body.columns, signal) };
       default:
         throw new HttpError(404, "not found");
     }
@@ -167,8 +167,14 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
       res.writeHead(200, { ...SECURITY_HEADERS, "content-type": file.type });
       return res.end(req.method === "HEAD" ? undefined : file.body);
     }
+    // A caller that hangs up stops the queries it started: the engine has one connection, so they
+    // would otherwise keep every later request waiting until their clock.
+    const gone = new AbortController();
+    res.on("close", () => {
+      if (!res.writableFinished) gone.abort();
+    });
     try {
-      send(res, 200, await api(req, path));
+      send(res, 200, await api(req, path, gone.signal));
     } catch (error) {
       if (error instanceof HttpError) {
         return send(res, error.status, { error: error.message }, error.status === 401 ? { "www-authenticate": "Bearer" } : {});

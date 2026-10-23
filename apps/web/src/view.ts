@@ -106,12 +106,20 @@ export class View {
   /** The count of the last filter, so paging through its rows counts them once. */
   #counted: { where: string; n: number } | undefined;
 
+  /** The caller of the operation that is running, whose going away stops its queries. */
+  #signal: AbortSignal | undefined;
   readonly opened: Opened;
   readonly #engine: Engine;
   readonly #columns: string[];
 
   private constructor(engine: Engine, opened: Opened, columns: string[]) {
-    this.#engine = engine;
+    // Every query of an operation carries its caller's signal, however deep it is issued (fingerprint,
+    // checkPredicate and mintRefWith run their own).
+    this.#engine = {
+      source: engine.source,
+      query: (sql, options) => engine.query(sql, { ...options, ...(this.#signal ? { signal: this.#signal } : {}) }),
+      close: () => engine.close(),
+    };
     this.opened = opened;
     this.#columns = columns;
   }
@@ -137,10 +145,17 @@ export class View {
   }
 
   /** Runs one operation at a time on the engine, which has one connection. */
-  #serial<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.#tail.then(() => {
+  #serial<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const run = this.#tail.then(async () => {
       if (this.#closed) throw new FusenError("this file was closed. Open it again.");
-      return work();
+      // A caller that left while it waited its turn does not take one.
+      if (signal?.aborted) throw new FusenError("the request was cancelled");
+      this.#signal = signal;
+      try {
+        return await work();
+      } finally {
+        this.#signal = undefined;
+      }
     });
     this.#tail = run.catch(() => undefined);
     return run;
@@ -197,7 +212,7 @@ export class View {
     return wanted.size === this.#columns.length ? undefined : this.#columns.filter((c) => wanted.has(c));
   }
 
-  rows(expected: unknown, offset: unknown, limit: unknown = DEFAULT_PAGE_ROWS, where?: unknown): Promise<Page> {
+  rows(expected: unknown, offset: unknown, limit: unknown = DEFAULT_PAGE_ROWS, where?: unknown, signal?: AbortSignal): Promise<Page> {
     return this.#serial(async () => {
       await this.#check(expected);
       if (!Number.isSafeInteger(offset) || (offset as number) < 0) throw new FusenError("offset must be a non-negative integer");
@@ -251,7 +266,7 @@ export class View {
         page.next = end < (this.opened.selectable ? this.opened.card.rows : matched) ? end : null;
       }
       return page;
-    });
+    }, signal);
   }
 
   async #count(where: string, sql: string): Promise<number> {
@@ -266,7 +281,7 @@ export class View {
    * The Ref for what the page shows: the selected positions, the rows that pass the filter, or both
    * (a Shift range under a filter spans rows the table hides), and only the kept columns.
    */
-  ref(expected: unknown, ranges: unknown, where?: unknown, columns?: unknown): Promise<string> {
+  ref(expected: unknown, ranges: unknown, where?: unknown, columns?: unknown, signal?: AbortSignal): Promise<string> {
     return this.#serial(async () => {
       if (expected !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
       const picked = Array.isArray(ranges) && ranges.length > 0;
@@ -282,7 +297,7 @@ export class View {
       return mintRefWith(this.#engine, { where: predicate, columns: kept, expect: this.opened.fingerprint }).catch((error: unknown) => {
         throw error instanceof SourceChanged ? new SourceChanged(CHANGED) : error;
       });
-    });
+    }, signal);
   }
 
   /** Closes the engine once the operations already queued are done. */
