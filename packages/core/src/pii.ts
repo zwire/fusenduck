@@ -8,6 +8,8 @@
 /** One column that had something hidden, and why. */
 export interface Masked {
   column: string;
+  /** The column's place in the result, from 1; the note names a column by it when its name is not plain. */
+  position?: number;
   kinds: string[];
   by: "name" | "value";
 }
@@ -155,21 +157,70 @@ export const holdsText = (type: string): boolean =>
 
 // A nested value (LIST, STRUCT, MAP, JSON) is walked: a field named like personal data is hidden whole.
 function maskValue(value: unknown, found: Set<string>): unknown {
-  if (typeof value === "string") return maskText(value, found);
+  // A JSON value (a JSON column, or JSON inside a LIST or STRUCT) arrives as text.
+  if (typeof value === "string") return /^\s*[{[]/.test(value) ? maskJson(value, found) : maskText(value, found);
   if (Array.isArray(value)) return value.map((v) => maskValue(v, found));
   if (value !== null && typeof value === "object") {
+    // A MAP arrives as a list of { key, value } entries: the entry's key names the value.
+    const entry = value as Record<string, unknown>;
+    if (Object.keys(entry).length === 2 && typeof entry.key === "string" && "value" in entry) {
+      const kind = nameKind(entry.key);
+      if (kind && entry.value !== null && entry.value !== undefined) {
+        found.add(kind);
+        return { key: maskText(entry.key, found), value: mask(kind) };
+      }
+      return { key: maskText(entry.key, found), value: maskValue(entry.value, found) };
+    }
     return Object.fromEntries(
       Object.entries(value).map(([key, v]) => {
         const kind = nameKind(key);
         if (kind && v !== null && v !== undefined) {
           found.add(kind);
-          return [key, mask(kind)];
+          return [maskText(key, found), mask(kind)];
         }
-        return [key, maskValue(v, found)];
+        return [maskText(key, found), maskValue(v, found)];
       }),
     );
   }
   return value;
+}
+
+// Text that parses as JSON has its fields walked like a STRUCT's. Writing it out again would change
+// what nothing was hidden in (big numbers, 1.0, spacing), so it is rewritten only when the walk hid
+// something; otherwise its shapes are masked in place.
+function maskJson(text: string, found: Set<string>): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return maskText(text, found);
+  }
+  const walked = new Set<string>();
+  const shown = maskValue(parsed, walked);
+  if (!walked.size) return maskText(text, found);
+  for (const k of walked) found.add(k);
+  return JSON.stringify(shown);
+}
+
+// The keys in a nested value written out as text, as the card's min and max are: {'a': 1} (STRUCT),
+// {a=1} (MAP, whose keys are bare and may hold spaces) and {"a":1} (JSON). A key runs from a "{" or
+// "," to the next ":" or "="; read in one pass, so a long value cannot make the search slow.
+const nested = (type: string): boolean => /^(STRUCT|MAP|UNION|JSON)\b/i.test(type) || /\]$/.test(type);
+
+/** The kind a nested value's text gives away by a key named like personal data, if any. */
+export function keyKind(text: string, type: string): string | undefined {
+  if (!nested(type)) return undefined;
+  let start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{" || c === ",") start = i + 1;
+    else if ((c === ":" || c === "=") && start >= 0) {
+      const kind = nameKind(text.slice(start, i).trim().replace(/^(['"])([\s\S]*)\1$/, "$2"));
+      if (kind) return kind;
+      start = -1;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -205,17 +256,22 @@ export function maskRows(rows: Record<string, unknown>[], types: Map<string, str
   return {
     rows: masked,
     masked: [
-      ...columns.filter((c) => hiddenByName.has(c)).map((c): Masked => ({ column: c, kinds: [byName.get(c)!], by: "name" })),
-      ...columns.filter((c) => byValue.has(c)).map((c): Masked => ({ column: c, kinds: sorted(byValue.get(c)!), by: "value" })),
+      ...columns.filter((c) => hiddenByName.has(c)).map((c): Masked => ({ column: c, position: columns.indexOf(c) + 1, kinds: [byName.get(c)!], by: "name" })),
+      ...columns.filter((c) => byValue.has(c)).map((c): Masked => ({ column: c, position: columns.indexOf(c) + 1, kinds: sorted(byValue.get(c)!), by: "value" })),
     ],
   };
 }
 
 export { sorted as orderKinds };
 
+// A column name is source text, and the note sits outside the data block: only a name that is one
+// plain word is repeated there (a line break could forge the end of the block, and spaces could
+// carry a sentence); any other column is named by its place.
+const PLAIN = /^[\p{L}\p{N}_.-]{1,64}$/u;
+
 /** The note that says what was hidden: `what` names the hidden things ("values", "min, max and avg values"). */
 export function maskedNote(masked: Masked[], what: string): string[] {
   if (!masked.length) return [];
-  const list = masked.map((m) => `${m.column} (${m.kinds.join(", ")}, by ${m.by === "name" ? "column name" : "value"})`).join(", ");
+  const list = masked.map((m) => `${PLAIN.test(m.column) ? m.column : (m.position ? `column ${m.position}` : "a column with an unusual name")} (${m.kinds.join(", ")}, by ${m.by === "name" ? "column name" : "value"})`).join(", ");
   return [`MASKED: ${what} that look like personal data are hidden: ${list}. Whoever runs fusenduck can show them with --unmask.`];
 }

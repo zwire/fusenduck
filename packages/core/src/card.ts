@@ -1,6 +1,6 @@
 import { lit, type Engine } from "./engine.ts";
 import { FusenError } from "./errors.ts";
-import { holdsText, mask, maskText, nameKind, orderKinds, type Masked } from "./pii.ts";
+import { holdsText, keyKind, mask, maskText, nameKind, orderKinds, type Masked } from "./pii.ts";
 
 export interface CardColumn {
   column: string;
@@ -37,19 +37,28 @@ function shorten(value: string | null, type: string): string | null {
 const clip = (value: string): string => (value.length > MAX_NAME ? `${value.slice(0, MAX_NAME)}…` : value);
 
 /** Hides a column's min, max and avg when its name or their shape says personal data; records why in `masked`. */
-function maskBounds(column: CardColumn, masked: Masked[]): CardColumn {
+function maskBounds(column: CardColumn, position: number, masked: Masked[]): CardColumn {
   const kind = nameKind(column.column);
   if (kind) {
     if (column.min === null && column.max === null && column.avg === null) return column;
-    masked.push({ column: column.column, kinds: [kind], by: "name" });
+    masked.push({ column: column.column, position, kinds: [kind], by: "name" });
     const hide = (value: string | null) => (value === null ? null : mask(kind));
     return { ...column, min: hide(column.min), max: hide(column.max), avg: hide(column.avg) };
   }
   if (!holdsText(column.type)) return column;
   const found = new Set<string>();
-  const min = column.min === null ? null : maskText(column.min, found);
-  const max = column.max === null ? null : maskText(column.max, found);
-  if (found.size) masked.push({ column: column.column, kinds: orderKinds(found), by: "value" });
+  // A nested bound is a whole value: a key named like personal data hides all of it, since the
+  // card's cut to 40 characters would still show the start of what the key holds.
+  const bound = (value: string | null) => {
+    if (value === null) return null;
+    const kind = keyKind(value, column.type);
+    if (!kind) return maskText(value, found);
+    found.add(kind);
+    return mask(kind);
+  };
+  const min = bound(column.min);
+  const max = bound(column.max);
+  if (found.size) masked.push({ column: column.column, position, kinds: orderKinds(found), by: "value" });
   return { ...column, min, max };
 }
 
@@ -81,7 +90,7 @@ export async function buildCard(engine: Engine, opts: { timeoutMs?: number; unma
   });
   const masked: Masked[] = [];
   // Masked before they are cut, so a cut cannot break the shape that gives a value away.
-  const shown = (opts.unmask ? columns : columns.map((c) => maskBounds(c, masked))).map((c) => ({
+  const shown = (opts.unmask ? columns : columns.map((c, i) => maskBounds(c, i + 1, masked))).map((c) => ({
     ...c,
     min: shorten(c.min, c.type),
     max: shorten(c.max, c.type),
