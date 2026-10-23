@@ -107,20 +107,31 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   if (signal?.aborted) throw cancelled();
   const instance = await DuckDBInstance.create(":memory:");
   const connection: DuckDBConnection = await instance.connect();
-  await connection.run(`SET allowed_paths=[${lit(path)}]`);
-  // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
-  await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
-  await connection.run("SET threads=4");
-  // DuckDB may always read and write its spill directory (default: .tmp under the working
-  // directory), whatever the lock says. No spill directory means nothing outside the source is reachable.
-  await connection.run("SET temp_directory=''");
-  await connection.run("SET enable_external_access=false");
-  // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
-  await watchOpen(path, connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`));
-  await connection.run("SET lock_configuration=true");
-  if (signal?.aborted) {
+  // The engine is released when opening fails, once a read of the file that is still running has ended.
+  let binding: Promise<unknown> | undefined;
+  const release = () => {
     connection.closeSync();
     instance.closeSync();
+  };
+  try {
+    await connection.run(`SET allowed_paths=[${lit(path)}]`);
+    // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
+    await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
+    await connection.run("SET threads=4");
+    // DuckDB may always read and write its spill directory (default: .tmp under the working
+    // directory), whatever the lock says. No spill directory means nothing outside the source is reachable.
+    await connection.run("SET temp_directory=''");
+    await connection.run("SET enable_external_access=false");
+    // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
+    binding = connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
+    await watchOpen(path, binding);
+    await connection.run("SET lock_configuration=true");
+  } catch (error) {
+    void Promise.resolve(binding).then(release, release);
+    throw error;
+  }
+  if (signal?.aborted) {
+    release();
     throw cancelled();
   }
   return {
@@ -138,19 +149,20 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
         releasePipe(path);
       };
       let timedOut = false;
-      const timer = opts.timeoutMs
-        ? setTimeout(() => {
-            timedOut = true;
-            interrupt();
-          }, opts.timeoutMs)
-        : undefined;
-      // A caller that goes away (a closed connection, a cancelled tool call) stops the running query.
-      // An interrupt that lands before DuckDB has started the query is dropped, so it repeats until the query ends.
+      // An interrupt that lands before DuckDB has started the query is dropped, and a pipe released
+      // before the open began frees nothing, so both repeat until the query ends.
       let repeat: ReturnType<typeof setInterval> | undefined;
       const stop = () => {
         interrupt();
         repeat ??= setInterval(interrupt, 25);
       };
+      const timer = opts.timeoutMs
+        ? setTimeout(() => {
+            timedOut = true;
+            stop();
+          }, opts.timeoutMs)
+        : undefined;
+      // A caller that goes away (a closed connection, a cancelled tool call) stops the running query.
       for (const s of signals) s.addEventListener("abort", stop, { once: true });
       try {
         const reader = await connection.runAndReadAll(sql);

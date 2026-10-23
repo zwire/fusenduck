@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, openSync, unlinkSync } from "node:fs";
+import { closeSync, constants, openSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DuckDBInstance } from "@duckdb/node-api";
@@ -33,6 +33,7 @@ describe.skipIf(process.platform === "win32")("a file swapped for a FIFO after i
     } catch {
       // No reader is waiting.
     }
+    rmSync(fifo, { force: true });
   });
 
   async function openThenSwap() {
@@ -65,8 +66,11 @@ describe.skipIf(process.platform === "win32")("a file swapped for a FIFO after i
     execFileSync("mkfifo", [file]);
     fifo = file;
     const connection = await (await DuckDBInstance.create(":memory:")).connect();
-    const result = await settle(watchOpen(file, connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(file)})`), 500));
+    const binding = connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(file)})`);
+    const result = await settle(watchOpen(file, binding, 500));
     expect(result).toMatch(/^refused: the source did not open within 500 ms/);
+    // The blocked open itself ended (the pipe was released), not only the caller's wait for it.
+    expect(await settle(binding, 2000)).toMatch(/^refused: /);
   });
 });
 
@@ -102,4 +106,13 @@ describe("the Web UI stops a query when its caller hangs up", () => {
       await handle.close();
     }
   }, 30_000);
+});
+
+describe("opening that fails releases the engine", () => {
+  it("a file that is not Parquet can be refused again and again (the failed engines close without error)", async () => {
+    const dir = tempDir();
+    const bad = join(dir, "bad.parquet");
+    writeFileSync(bad, "not parquet");
+    for (let i = 0; i < 20; i++) await expect(openSource(bad, { roots: [dir] })).rejects.toThrow();
+  });
 });
