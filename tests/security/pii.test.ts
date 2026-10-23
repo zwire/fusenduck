@@ -260,3 +260,41 @@ describe("the MASKED note names columns without carrying text from the file", ()
     expect(outside(out)).toMatch(/column 2 \(email, by column name\)/);
   });
 });
+
+describe("JSON and MAP keys in every place they can sit", () => {
+  const dir = tempDir();
+  const file = join(dir, "json-places.parquet");
+  // Nothing personal: this document must come back exactly as stored.
+  const PLAIN_DOC = '{"z":1,"a":12345678901234567890,"f":1.0, "e":1E2}';
+
+  beforeAll(async () => {
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    await connection.run(`COPY (
+      SELECT 1 AS id,
+             '${PLAIN_DOC}'::JSON AS plain_doc,
+             ['{"full_name":"Taro ListJson"}'::JSON] AS docs,
+             {'j': '{"full_name":"Jiro StructJson"}'::JSON} AS wrapped,
+             MAP {'full name': 'Saburo SpacedKey'} AS spaced
+    ) TO '${file}' (FORMAT parquet)`);
+  });
+
+  it("a JSON value with nothing to hide is shown exactly as stored", async () => {
+    const row = dataLines(await resolveRef(await mintRef(file), { roots: [dir] }))[0]!;
+    expect(row.plain_doc).toBe(PLAIN_DOC);
+  });
+
+  it("JSON in a LIST or a STRUCT is walked too", async () => {
+    const out = await resolveRef(await mintRef(file), { roots: [dir] });
+    expect(out).not.toContain("ListJson");
+    expect(out).not.toContain("StructJson");
+  });
+
+  it("a MAP key with a space hides its value in the card", async () => {
+    const engine = await openSource(file);
+    try {
+      expect(renderCard(await buildCard(engine), file)).not.toContain("Sabu");
+    } finally {
+      engine.close();
+    }
+  });
+});

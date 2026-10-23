@@ -157,7 +157,8 @@ export const holdsText = (type: string): boolean =>
 
 // A nested value (LIST, STRUCT, MAP, JSON) is walked: a field named like personal data is hidden whole.
 function maskValue(value: unknown, found: Set<string>): unknown {
-  if (typeof value === "string") return maskText(value, found);
+  // A JSON value (a JSON column, or JSON inside a LIST or STRUCT) arrives as text.
+  if (typeof value === "string") return /^\s*[{[]/.test(value) ? maskJson(value, found) : maskText(value, found);
   if (Array.isArray(value)) return value.map((v) => maskValue(v, found));
   if (value !== null && typeof value === "object") {
     // A MAP arrives as a list of { key, value } entries: the entry's key names the value.
@@ -175,16 +176,18 @@ function maskValue(value: unknown, found: Set<string>): unknown {
         const kind = nameKind(key);
         if (kind && v !== null && v !== undefined) {
           found.add(kind);
-          return [key, mask(kind)];
+          return [maskText(key, found), mask(kind)];
         }
-        return [key, maskValue(v, found)];
+        return [maskText(key, found), maskValue(v, found)];
       }),
     );
   }
   return value;
 }
 
-// A JSON value arrives as its text; its fields are walked like a STRUCT's.
+// Text that parses as JSON has its fields walked like a STRUCT's. Writing it out again would change
+// what nothing was hidden in (big numbers, 1.0, spacing), so it is rewritten only when the walk hid
+// something; otherwise its shapes are masked in place.
 function maskJson(text: string, found: Set<string>): string {
   let parsed: unknown;
   try {
@@ -192,20 +195,30 @@ function maskJson(text: string, found: Set<string>): string {
   } catch {
     return maskText(text, found);
   }
-  return JSON.stringify(maskValue(parsed, found));
+  const walked = new Set<string>();
+  const shown = maskValue(parsed, walked);
+  if (!walked.size) return maskText(text, found);
+  for (const k of walked) found.add(k);
+  return JSON.stringify(shown);
 }
 
 // The keys in a nested value written out as text, as the card's min and max are: {'a': 1} (STRUCT),
-// {a=1} (MAP) and {"a":1} (JSON).
-const KEY = /[{,]\s*(?:'((?:[^']|'')*)'|"((?:[^"\\]|\\.)*)"|([^\s{}[\],=:'"]+))\s*[:=]/g;
+// {a=1} (MAP, whose keys are bare and may hold spaces) and {"a":1} (JSON). A key runs from a "{" or
+// "," to the next ":" or "="; read in one pass, so a long value cannot make the search slow.
 const nested = (type: string): boolean => /^(STRUCT|MAP|UNION|JSON)\b/i.test(type) || /\]$/.test(type);
 
 /** The kind a nested value's text gives away by a key named like personal data, if any. */
 export function keyKind(text: string, type: string): string | undefined {
   if (!nested(type)) return undefined;
-  for (const m of text.matchAll(KEY)) {
-    const kind = nameKind(m[1] ?? m[2] ?? m[3] ?? "");
-    if (kind) return kind;
+  let start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{" || c === ",") start = i + 1;
+    else if ((c === ":" || c === "=") && start >= 0) {
+      const kind = nameKind(text.slice(start, i).trim().replace(/^(['"])([\s\S]*)\1$/, "$2"));
+      if (kind) return kind;
+      start = -1;
+    }
   }
   return undefined;
 }
@@ -233,7 +246,7 @@ export function maskRows(rows: Record<string, unknown>[], types: Map<string, str
         }
         if (!holdsText(types.get(column) ?? "")) return [column, value];
         const found = byValue.get(column) ?? new Set<string>();
-        const shown = types.get(column) === "JSON" && typeof value === "string" ? maskJson(value, found) : maskValue(value, found);
+        const shown = maskValue(value, found);
         if (found.size) byValue.set(column, found);
         return [column, shown];
       }),

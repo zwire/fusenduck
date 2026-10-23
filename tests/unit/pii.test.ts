@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskText, nameKind } from "../../packages/core/src/pii.ts";
+import { keyKind, maskText, nameKind } from "../../packages/core/src/pii.ts";
 
 const masked = (text: string) => maskText(text, new Set());
 
@@ -46,5 +46,23 @@ describe("which text is shaped like personal data", () => {
     const found = new Set<string>();
     maskText("a@b.co and 03-1234-5678", found);
     expect([...found].sort()).toEqual(["email", "phone"]);
+  });
+});
+
+describe("keyKind", () => {
+  it("finds a key named like personal data in each way a nested value is written", () => {
+    expect(keyKind("{full name=Taro}", "MAP(VARCHAR, VARCHAR)")).toBe("name");
+    expect(keyKind("{'first_name': Taro}", "STRUCT(first_name VARCHAR)")).toBe("name");
+    expect(keyKind('{"email":"x"}', "JSON")).toBe("email");
+    expect(keyKind("{'plan': pro}", "STRUCT(plan VARCHAR)")).toBeUndefined();
+    expect(keyKind("{a, email: x}", "VARCHAR")).toBeUndefined();
+  });
+
+  it("reads a long value in one pass", () => {
+    const started = Date.now();
+    for (const text of ["{" + " ".repeat(1_000_000) + "x", "{" + "a,".repeat(500_000), "{" + "a:".repeat(500_000)]) {
+      expect(keyKind(text, "MAP(VARCHAR, VARCHAR)")).toBeUndefined();
+    }
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
