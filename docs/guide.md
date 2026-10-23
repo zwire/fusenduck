@@ -1,6 +1,6 @@
 # fusenduck でいまできること
 
-fusenduck は、Parquet ファイルを読み取り専用で覗き、見た範囲を `fusen://` で始まる 1 本の文字列(Ref)にして AI エージェントへ渡すための道具です。CLI(`fusen`)、MCP サーバー(`fusen-mcp`)、Web UI(`fusen-web`)の 3 つの入口があり、どれも同じ core を使います。
+fusenduck は、Parquet ファイルを読み取り専用で覗き、見た範囲を `fusen://` で始まる 1 本の文字列(Ref)にして AI エージェントへ渡すための道具です。CLI(`fusen`)、MCP サーバー(`fusen-mcp`)、Web UI(`fusen-web`)、TUI(`fusen-tui`)の 4 つの入口があり、どれも同じ core を使います。
 
 ステータス: 実験的(0.0.0、未公開)。Ref の形は凍結コーパスで守っていますが、まだ正式な互換の約束はしていません。対応するソースは Parquet ファイルだけです。
 
@@ -227,6 +227,14 @@ code --install-extension apps/vscode/out/fusenduck-<target>-0.0.0.vsix
 - 拡張はポートを開きません。画面(webview)は拡張のホストとメッセージでだけやり取りし、エンジンが読めるのは開いたファイルのフォルダーだけです。
 - webview の CSP は、スクリプトをページごとの nonce 付きのものだけ、スタイルと画像を拡張自身のファイルだけに絞り、通信(`connect-src`)をすべて止め、`require-trusted-types-for 'script'` を付けています。
 - Marketplace や Open VSX にはまだ出していません。
+
+## 9a. TUI
+
+```sh
+node apps/tui/src/index.ts sales.parquet --root /path/to/data
+```
+
+端末で表を見て、行を選び、`y` で Ref をコピーします(OSC 52。使えない端末では画面の `Ref:` の行か、`q` で終わるときに標準出力へ出る行を使います)。`space` で 1 行、`v` で範囲、`/` で行の条件、`n` `p` でページ、`←` `→` で列。ファイルを開く・行を読む・Ref を作る処理は Web UI と同じ `View` なので、ルートの制限、問い合わせの時計、切断での中断、ファイルが変わったときの拒否も同じです。ファイルの文字列は制御文字を印に替えてから端末に出します。キーの一覧は `apps/tui/README.md`、設計は ADR 0003 です。
 
 ## 10. 読み取り専用の守り
 

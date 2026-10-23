@@ -1,0 +1,22 @@
+{
+  "name": "@fusenduck/tui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "fusenduck TUI: pick rows in a terminal and copy a Ref.",
+  "bin": {
+    "fusen-tui": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fusenduck/core": "workspace:*",
+    "@fusenduck/web": "workspace:*",
+    "ink": "8.0.0",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0"
+  }
+}
