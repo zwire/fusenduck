@@ -67,6 +67,8 @@ export class Host {
   readonly #options: HostOptions;
   #view: View | undefined;
   #closed = false;
+  /** Aborted when the editor closes, so a query still running for it stops. */
+  readonly #leaving = new AbortController();
 
   constructor(options: HostOptions) {
     this.#options = options;
@@ -108,9 +110,9 @@ export class Host {
         return next.opened;
       }
       case "rows":
-        return this.#current(params).rows(params.fingerprint, params.offset, params.limit, params.where);
+        return this.#current(params).rows(params.fingerprint, params.offset, params.limit, params.where, this.#leaving.signal);
       case "ref":
-        return this.#current(params).ref(params.fingerprint, params.ranges, params.where, params.columns);
+        return this.#current(params).ref(params.fingerprint, params.ranges, params.where, params.columns, this.#leaving.signal);
       case "copy":
         if (typeof params.text !== "string" || !isRef(params.text)) throw new FusenError("only a Ref can be copied");
         await this.#options.copy(params.text);
@@ -129,6 +131,7 @@ export class Host {
   /** Closes the engine; later messages are refused. */
   async close(): Promise<void> {
     this.#closed = true;
+    this.#leaving.abort();
     await this.#view?.close();
   }
 }

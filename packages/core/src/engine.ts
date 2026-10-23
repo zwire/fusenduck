@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { closeSync, constants, lstatSync, openSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import { FusenError } from "./errors.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
@@ -9,7 +9,7 @@ export interface Engine {
   /** The absolute path of the one file this engine may read. */
   readonly source: string;
   /** Runs one statement and returns its rows as JSON-safe objects (BIGINT and DECIMAL arrive as strings). */
-  query(sql: string, opts?: { timeoutMs?: number }): Promise<Row[]>;
+  query(sql: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<Row[]>;
   /** Releases the engine. A query after this fails. */
   close(): void;
 }
@@ -62,6 +62,39 @@ function resolveWithin(source: string, roots: string[] | undefined): string {
   return path;
 }
 
+/** How long the engine may take to bind its file. A local Parquet file binds in milliseconds. */
+export const OPEN_TIMEOUT_MS = 10_000;
+
+/**
+ * Frees a reader that is blocked opening `path` because it turned into a FIFO after it was checked:
+ * opening a FIFO for writing completes the reader's open (it then finds an empty pipe and fails).
+ * DuckDB blocks inside the open system call, where neither the clock nor an interrupt reaches it.
+ */
+export function releasePipe(path: string): void {
+  try {
+    if (lstatSync(path).isFIFO()) closeSync(openSync(path, constants.O_WRONLY | constants.O_NONBLOCK));
+  } catch {
+    // Not a pipe, or no reader is waiting.
+  }
+}
+
+/** Runs the engine's first read of `path`; past `timeoutMs` the open is released and the caller gets an answer. */
+export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = OPEN_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      releasePipe(path);
+      reject(new FusenError(`the source did not open within ${timeoutMs} ms: ${path}`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+    work.catch(() => undefined);
+  }
+}
+
 /**
  * Opens one file read-only by construction. The engine is locked down before it is returned:
  * only this exact path is readable, nothing can be written (COPY TO, ATTACH, overwriting the
@@ -83,7 +116,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   await connection.run("SET temp_directory=''");
   await connection.run("SET enable_external_access=false");
   // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
-  await connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
+  await watchOpen(path, connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`));
   await connection.run("SET lock_configuration=true");
   if (signal?.aborted) {
     connection.closeSync();
@@ -92,29 +125,45 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   }
   return {
     source: path,
-    async query(sql: string, opts: { timeoutMs?: number } = {}): Promise<Row[]> {
+    async query(sql: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Row[]> {
+      // The caller of one query (a request of the Web UI) may go away while the engine lives on.
+      const signals = [signal, opts.signal].filter((s): s is AbortSignal => s !== undefined);
+      const gone = () => signals.some((s) => s.aborted);
       // A predicate is untrusted SQL and can be slow without reading many bytes; stop it on a clock.
-      if (signal?.aborted) throw cancelled();
-      const timer = opts.timeoutMs ? setTimeout(() => connection.interrupt(), opts.timeoutMs) : undefined;
+      if (gone()) throw cancelled();
+      // The file is read again by every query, so it may have turned into a FIFO since it was opened;
+      // an interrupt does not reach a blocked open, so the pipe is released as well.
+      const interrupt = () => {
+        connection.interrupt();
+        releasePipe(path);
+      };
+      let timedOut = false;
+      const timer = opts.timeoutMs
+        ? setTimeout(() => {
+            timedOut = true;
+            interrupt();
+          }, opts.timeoutMs)
+        : undefined;
       // A caller that goes away (a closed connection, a cancelled tool call) stops the running query.
       // An interrupt that lands before DuckDB has started the query is dropped, so it repeats until the query ends.
       let repeat: ReturnType<typeof setInterval> | undefined;
       const stop = () => {
-        connection.interrupt();
-        repeat = setInterval(() => connection.interrupt(), 25);
+        interrupt();
+        repeat ??= setInterval(interrupt, 25);
       };
-      signal?.addEventListener("abort", stop, { once: true });
+      for (const s of signals) s.addEventListener("abort", stop, { once: true });
       try {
         const reader = await connection.runAndReadAll(sql);
         return reader.getRowObjectsJson() as Row[];
       } catch (error) {
-        if (signal?.aborted) throw cancelled();
-        if (timer && /interrupt/i.test(String(error))) throw new FusenError(`query stopped after ${opts.timeoutMs} ms`);
+        if (gone()) throw cancelled();
+        // A released pipe fails the read with another message than an interrupt does.
+        if (timedOut || (timer && /interrupt/i.test(String(error)))) throw new FusenError(`query stopped after ${opts.timeoutMs} ms`);
         throw error;
       } finally {
         clearTimeout(timer);
         clearInterval(repeat);
-        signal?.removeEventListener("abort", stop);
+        for (const s of signals) s.removeEventListener("abort", stop);
       }
     },
     close(): void {
