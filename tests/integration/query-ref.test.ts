@@ -142,7 +142,8 @@ describe("hand-built Refs and limits", () => {
   });
 
   it("a query that needs far more memory than the engine may hold fails without a crash", () => {
-    const ref = run("ref", file, "--query", "SELECT repeat('x', 900000000) AS s");
+    // About 2.4 GB of integers against the 512 MB limit; it fails in the first second, where a single 900 MB string took 14.
+    const ref = run("ref", file, "--query", "SELECT list(i) AS l FROM range(300000000) t(i)");
     const r = ref.status === 0 ? run("resolve", ref.stdout.trim(), "--root", dir) : ref;
     expect(r.status).toBe(1);
     expect(r.stdout).toBe("");
