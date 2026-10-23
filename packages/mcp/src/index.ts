@@ -6,12 +6,17 @@
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { startHttpServer } from "./http.ts";
+import { LOOPBACK_HOSTS, MIN_TOKEN_LENGTH, startHttpServer } from "./http.ts";
 import { createServer } from "./server.ts";
 
-function fail(message: string): never {
-  process.stderr.write(`fusen-mcp: ${message}\n`);
-  process.exit(1);
+const USAGE = `usage: fusen-mcp [--root <dir>]... [--http [--host <loopback>] [--port <n>]]
+  stdio by default; --http serves Streamable HTTP on 127.0.0.1:7457/mcp with a bearer token
+  (FUSEN_MCP_TOKEN, or one generated and printed here). Roots default to the current directory.`;
+
+/** A wrong command line exits 2 with the usage; a server that could not start exits 1. */
+function fail(message: string, status = 2): never {
+  process.stderr.write(`fusen-mcp: ${message}\n${status === 2 ? `${USAGE}\n` : ""}`);
+  process.exit(status);
 }
 
 const parse = () =>
@@ -22,6 +27,7 @@ const parse = () =>
       http: { type: "boolean" },
       host: { type: "string" },
       port: { type: "string" },
+      help: { type: "boolean", short: "h" },
     },
   });
 let values: ReturnType<typeof parse>["values"];
@@ -29,6 +35,10 @@ try {
   ({ values } = parse());
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
+}
+if (values.help) {
+  process.stdout.write(`${USAGE}\n`);
+  process.exit(0);
 }
 const roots = values.root ?? [process.cwd()];
 
@@ -42,13 +52,19 @@ if (!values.http) {
   if (!/^\d+$/.test(values.port ?? "0") || port > 65535) {
     fail("--port must be an integer from 0 to 65535");
   }
+  if (values.host !== undefined && !(LOOPBACK_HOSTS as readonly string[]).includes(values.host)) {
+    fail(`--host must be a loopback address (${LOOPBACK_HOSTS.join(", ")}), got ${values.host}`);
+  }
   const given = process.env.FUSEN_MCP_TOKEN;
+  if (given !== undefined && given !== "" && given.length < MIN_TOKEN_LENGTH) {
+    fail(`FUSEN_MCP_TOKEN must be at least ${MIN_TOKEN_LENGTH} characters`);
+  }
   const token = given || randomBytes(24).toString("base64url");
   try {
     const { url } = await startHttpServer({ roots, token, port, ...(values.host === undefined ? {} : { host: values.host }) });
     process.stderr.write(`fusen-mcp: listening on ${url}\n`);
     if (!given) process.stderr.write(`fusen-mcp: token (send as "Authorization: Bearer <token>"): ${token}\n`);
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    fail(error instanceof Error ? error.message : String(error), 1);
   }
 }

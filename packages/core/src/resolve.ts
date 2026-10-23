@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import { lit, openSource, type Engine, type Row } from "./engine.ts";
-import { FusenError } from "./errors.ts";
+import { FusenError, planned } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
 import { baseQuery, checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
 import { buildCard } from "./card.ts";
@@ -66,6 +66,7 @@ export async function mintRefWith(engine: Engine, opts: MintOptions = {}): Promi
   if (opts.where) ref.where = opts.where;
   if (opts.columns?.length) ref.columns = opts.columns;
   // Plan it now (no rows read) so a missing column or a bad predicate fails here, not later.
+  await planned("selection", () => engine.query(`DESCRIBE ${selectionSql(ref)}`, { timeoutMs: DEFAULT_TIMEOUT_MS }));
   await engine.query(`${selectionSql(ref)} LIMIT 0`, { timeoutMs: DEFAULT_TIMEOUT_MS });
   ref.engine = await engineVersion(engine);
   ref.id = await refId(engine, ref);
@@ -79,6 +80,14 @@ export async function resolveRef(
   const ref = parseRef(text);
   // A Ref names its own file, so a pasted Ref must not be able to point anywhere on disk.
   const engine = await openSource(ref.source, { roots: opts.roots, signal: opts.signal });
+  try {
+    return await resolveWith(engine, ref, opts);
+  } finally {
+    engine.close();
+  }
+}
+
+async function resolveWith(engine: Engine, ref: Ref, opts: { limit?: number; maxBytes?: number; timeoutMs?: number }): Promise<string> {
   if (ref.query) await checkQuery(engine, ref.query);
   if (ref.where) await checkPredicate(engine, engine.source, ref.where, ref.query);
   const now = await fingerprint(engine);
@@ -98,6 +107,7 @@ export async function resolveRef(
   if (bytes > maxBytes) throw new CostExceeded(`would scan ${bytes} bytes, over the limit of ${maxBytes}`);
 
   const selection = selectionSql(ref);
+  await planned("selection", () => engine.query(`DESCRIBE ${selection}`, { timeoutMs: DEFAULT_TIMEOUT_MS }));
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const limit = opts.limit ?? DEFAULT_LIMIT;
   if (!Number.isInteger(limit) || limit < 0) throw new FusenError("limit must be a non-negative integer");
@@ -170,8 +180,14 @@ export async function peek(
   }
   const { signal } = opts;
   const engine = await openSource(source, { roots: opts.roots, signal });
-  const card = renderCard(await buildCard(engine), engine.source);
-  const ref = await mintRef(source, { roots: opts.roots, signal });
+  let card: string;
+  let ref: string;
+  try {
+    card = renderCard(await buildCard(engine), engine.source);
+    ref = await mintRefWith(engine);
+  } finally {
+    engine.close();
+  }
   // The Ref was just minted from this file, so resolving it may read this file's own directory.
   return `${card}\n${await resolveRef(ref, { limit: rows, roots: opts.roots ?? [dirname(engine.source)], signal })}`;
 }

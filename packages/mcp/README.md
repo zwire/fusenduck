@@ -4,9 +4,14 @@ MCP サーバー `fusen-mcp`。まだ公開していないので、リポジト�
 
 ```
 fusen-mcp [--root <dir>]... [--http [--host <loopback>] [--port <n>]]
+fusen-mcp --help
 ```
 
+コマンドラインの誤りは exit 2、サーバーが起動できなかったとき(ポートが使用中など)は exit 1 です。
+
 ## ツール
+
+引数の型と範囲の一覧は、スキーマから生成した [docs/reference/mcp-tools.md](../../docs/reference/mcp-tools.md) にあります。
 
 | ツール | 引数 | 内容 |
 | --- | --- | --- |

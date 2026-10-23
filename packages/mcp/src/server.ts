@@ -35,7 +35,11 @@ export function createServer(roots: string[], gate?: Gate): McpServer {
     ({ path }, { signal }) =>
       guarded(signal, async () => {
         const engine = await openSource(path, { roots, signal });
-        return renderCard(await buildCard(engine), engine.source);
+        try {
+          return renderCard(await buildCard(engine), engine.source);
+        } finally {
+          engine.close();
+        }
       }),
   );
 

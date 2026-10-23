@@ -105,9 +105,10 @@ describe("first slice: card, ref, resolve through the CLI", () => {
   it("fusen peek defaults to a handful of rows and rejects a bad --rows", () => {
     const out = run("peek", file).stdout;
     expect(dataLines(out.slice(out.indexOf('level="rows"'))).length).toBe(5);
-    expect(run("peek", file, "--rows", "-1").status).toBe(1);
-    expect(run("peek", file, "--rows", "1000").status).toBe(1);
-    for (const bad of ["", " 3", "1e1", "1.5", "abc"]) expect(run("peek", file, "--rows", bad).status, bad).toBe(1);
+    // A wrong command line exits 2, apart from a command that ran and failed (1).
+    expect(run("peek", file, "--rows", "-1").status).toBe(2);
+    expect(run("peek", file, "--rows", "1000").status).toBe(2);
+    for (const bad of ["", " 3", "1e1", "1.5", "abc"]) expect(run("peek", file, "--rows", bad).status, bad).toBe(2);
   });
 
   it("a Ref outside --root is refused", () => {
@@ -125,10 +126,58 @@ describe("first slice: card, ref, resolve through the CLI", () => {
     ["a flag that belongs to another command", ["card", "FILE", "--limit", "3"]],
     ["a non-numeric --limit", ["resolve", "fusen://file/x?v=1", "--limit", "abc"]],
     ["a negative --limit", ["resolve", "fusen://file/x?v=1", "--limit", "-3"]],
-  ])("rejects %s with exit 1 and no Ref", (_name, args) => {
+    ["an empty --limit", ["resolve", "fusen://file/x?v=1", "--limit", ""]],
+    ["no command", []],
+    ["an unknown command", ["cat", "FILE"]],
+    ["a command without its file", ["card"]],
+    ["an unquoted predicate", ["ref", "FILE", "--where", "id", "<", "3"]],
+  ])("rejects %s with exit 2, the usage and no Ref", (_name, args) => {
     const r = run(...args.map((a) => (a === "FILE" ? file : a)));
-    expect(r.status).toBe(1);
+    expect(r.status).toBe(2);
     expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("usage:");
+  });
+
+  it("--help and help print the usage to stdout, --version the version", () => {
+    for (const args of [["--help"], ["-h"], ["help"]]) {
+      const r = run(...args);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/^usage:\n {2}fusen card/);
+      expect(r.stdout).toContain("exit status:");
+    }
+    const v = run("--version");
+    expect(v.status).toBe(0);
+    expect(v.stdout).toMatch(/^\d+\.\d+\.\d+\n$/);
+  });
+
+  it("names the roots and the fix when a Ref is outside them", () => {
+    const ref = run("ref", file, "--where", "id <= 5").stdout.trim();
+    const other = tempDir();
+    const r = run("resolve", ref, "--root", other);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`roots: ${other}. Run from the file's directory or add --root <dir>.`);
+  });
+
+  it("shows a mistake in the caller's own predicate, and how to fix an unquoted value", () => {
+    const r = run("ref", file, "--where", "region = south");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toBe(
+      'fusen: selection rejected: Binder Error: Referenced column "south" not found in FROM clause! ' +
+        "If south is a text value, put it in single quotes: 'south'.\n",
+    );
+    expect(run("ref", file, "--query", "SELECT regoin FROM data").stderr).toContain('Referenced column "regoin" not found');
+    // A failure while rows are read can quote a cell, so it stays withheld.
+    const cast = run("ref", file, "--where", "CAST(note AS INTEGER) = 1");
+    expect(cast.status).toBe(0);
+    const read = resolve(dir, cast.stdout.trim());
+    expect(read.status).toBe(1);
+    expect(read.stderr).toContain("Details are withheld");
+    expect(read.stderr).not.toContain("note ");
+  });
+
+  it("says plainly that a file to open is missing", () => {
+    const r = run("card", join(dir, "nope.parquet"));
+    expect(r.stderr).toBe(`fusen: cannot read ${join(dir, "nope.parquet")}: there is no such file, or it is not readable\n`);
   });
 
   it("the CLI exits non-zero on a missing file", () => {

@@ -101,13 +101,14 @@ describe("MCP adapter over HTTP", () => {
   });
 
   it("the entry point rejects bad flags with a message, not a stack trace", async () => {
-    for (const args of [["--http", "--port", "70000"], ["--http", "--port", "-1"], ["--port", "1"]]) {
+    for (const args of [["--http", "--port", "70000"], ["--http", "--port", "-1"], ["--port", "1"], ["--http", "--host", "0.0.0.0"]]) {
       const child = spawn("node", [entry, ...args], { stdio: ["ignore", "ignore", "pipe"] });
       let stderr = "";
       child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
       const code = await new Promise((resolve) => child.on("exit", resolve));
-      expect(code).toBe(1);
+      expect(code).toBe(2);
       expect(stderr).toMatch(/^fusen-mcp: /);
+      expect(stderr).toContain("usage: fusen-mcp");
       expect(stderr).not.toContain("    at ");
     }
   });
