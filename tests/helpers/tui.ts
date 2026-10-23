@@ -5,7 +5,7 @@ import type { View } from "../../apps/web/src/view.ts";
 export const KEY = { up: "\u001b[A", down: "\u001b[B", right: "\u001b[C", left: "\u001b[D", enter: "\r", esc: "\u001b", backspace: "\u007f" };
 
 /** The TUI on fake terminal streams. `frame()` is the last screen drawn (debug mode writes whole frames). */
-export function driveTui(view: View, size = { columns: 100, rows: 24 }) {
+export function driveTui(view: View | null, size = { columns: 100, rows: 24 }, roots: string[] = []) {
   const stdout = Object.assign(new PassThrough(), { ...size, isTTY: true });
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} });
   let last = "";
@@ -17,8 +17,10 @@ export function driveTui(view: View, size = { columns: 100, rows: 24 }) {
   });
   const copied: string[] = [];
   const done: (string | undefined)[] = [];
+  /** Views the TUI opened itself from the file list. */
+  const tracked: View[] = [];
   const app = mount(
-    { view, copy: (t) => void copied.push(t), done: (r) => void done.push(r) },
+    { roots, ...(view ? { view } : {}), track: (v) => void tracked.push(v), copy: (t) => void copied.push(t), done: (r) => void done.push(r) },
     { stdout: stdout as never, stdin: stdin as never, debug: true, patchConsole: false },
   );
   const frame = () => last;
@@ -37,5 +39,5 @@ export function driveTui(view: View, size = { columns: 100, rows: 24 }) {
       await new Promise((r) => setTimeout(r, 40));
     }
   };
-  return { frame, until, press, copied, done, chunks, stop: () => app.unmount() };
+  return { tracked, frame, until, press, copied, done, chunks, stop: () => app.unmount() };
 }

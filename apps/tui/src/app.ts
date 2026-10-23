@@ -16,6 +16,8 @@ export interface AppProps {
   copy(text: string): void;
   /** Called once when the person quits, with the Ref last shown (undefined when it could not be made). */
   done(ref: string | undefined): void;
+  /** Goes back to the file list; absent when the file was given on the command line with no list to return to. */
+  back?: () => void;
 }
 
 type RefState = { text: string } | { error: string } | "pending";
@@ -24,16 +26,17 @@ const MAX_COLUMN_CHARS = 24;
 /** Lines the screen uses besides the rows: header, card, filter, column names, Ref, status, keys. */
 const CHROME_LINES = 8;
 
-export const KEYS = "↑↓ move  space pick  v range  esc end range  a clear  / filter  ←→ columns  n/p page  y copy  q quit";
+export const KEYS = "↑↓ move  space pick  v range  esc end range  a clear  / filter  ←→ scroll  c columns  n/p page  y copy  q quit";
+const CHOOSER_KEYS = "↑↓ move  space keep/drop  a keep all  enter done  esc done";
 
 const clip = (text: string, width: number) => (text.length > width ? `${text.slice(0, Math.max(0, width - 1))}…` : text);
 
-function failure(error: unknown, log: (line: string) => void): string {
+export function failure(error: unknown, log: (line: string) => void): string {
   if (!(error instanceof FusenError)) log(logLine(error));
   return describeError(error);
 }
 
-export function App({ view, copy, done }: AppProps): ReactElement {
+export function App({ view, copy, done, back }: AppProps): ReactElement {
   const { exit } = useApp();
   const { columns: width, rows: height } = useWindowSize();
   const { opened } = view;
@@ -48,6 +51,10 @@ export function App({ view, copy, done }: AppProps): ReactElement {
   const [anchor, setAnchor] = useState<number | null>(null);
   const [picked, setPicked] = useState(() => new Selection());
   const [first, setFirst] = useState(0);
+  /** The columns the table and the Ref keep, by index in the file's order; null keeps them all. */
+  const [kept, setKept] = useState<Set<number> | null>(null);
+  /** The cursor of the column chooser while it is open. */
+  const [choosing, setChoosing] = useState<number | null>(null);
   const [ref, setRef] = useState<RefState>({ text: opened.ref });
   const [message, setMessage] = useState<string>("");
   const [changed, setChanged] = useState(false);
@@ -60,6 +67,9 @@ export function App({ view, copy, done }: AppProps): ReactElement {
   /** Set when a failure put the filter back, so the reload that follows keeps the failure's message. */
   const keepMessage = useRef(false);
   const offset = offsets.at(-1) ?? 0;
+  const visible = names.map((_, i) => i).filter((i) => kept === null || kept.has(i));
+  /** The names the Ref keeps, as the file spells them; undefined keeps every column. */
+  const keptKey = kept === null ? undefined : JSON.stringify(opened.card.columns.filter((_, i) => kept.has(i)).map((c) => c.column));
 
   // stderr is the screen, so a log line is shown as a line of the screen, controls made visible.
   const log = useCallback((line: string) => process.stderr.write(`fusen-tui: ${plain(line)}\n`), []);
@@ -106,14 +116,14 @@ export function App({ view, copy, done }: AppProps): ReactElement {
     const stop = () => controller.abort();
     quitting.current.signal.addEventListener("abort", stop, { once: true });
     const ranges = picked.ranges();
-    if (ranges.length === 0 && where === "") {
+    if (ranges.length === 0 && where === "" && keptKey === undefined) {
       setRef({ text: opened.ref });
       refPromise.current = Promise.resolve(opened.ref);
       return () => quitting.current.signal.removeEventListener("abort", stop);
     }
     setRef("pending");
     const made = view
-      .ref(opened.fingerprint, ranges, where === "" ? undefined : where, undefined, controller.signal)
+      .ref(opened.fingerprint, ranges, where === "" ? undefined : where, keptKey === undefined ? undefined : JSON.parse(keptKey), controller.signal)
       .then((text) => {
         if (!controller.signal.aborted) setRef({ text });
         return text;
@@ -129,7 +139,7 @@ export function App({ view, copy, done }: AppProps): ReactElement {
       controller.abort();
       quitting.current.signal.removeEventListener("abort", stop);
     };
-  }, [view, opened.fingerprint, picked, where, opened.ref, log]);
+  }, [view, opened.fingerprint, picked, where, keptKey, opened.ref, log]);
 
   const quit = useCallback(() => {
     quitting.current.abort();
@@ -163,6 +173,26 @@ export function App({ view, copy, done }: AppProps): ReactElement {
       quit();
       return;
     }
+    if (choosing !== null) {
+      if (key.escape || key.return) {
+        setChoosing(null);
+        setMessage("");
+      }
+      else if (key.upArrow || input === "k") setChoosing(Math.max(0, choosing - 1));
+      else if (key.downArrow || input === "j") setChoosing(Math.min(names.length - 1, choosing + 1));
+      else if (input === "a") setKept(null);
+      else if (input === " ") {
+        const next = new Set(kept ?? names.map((_, i) => i));
+        if (!next.delete(choosing)) next.add(choosing);
+        else if (next.size === 0) {
+          setMessage("keep at least one column");
+          return;
+        }
+        setKept(next.size === names.length ? null : next);
+        setFirst(0);
+      }
+      return;
+    }
     if (draft !== null) {
       if (key.escape) setDraft(null);
       else if (key.return) {
@@ -182,10 +212,18 @@ export function App({ view, copy, done }: AppProps): ReactElement {
       return;
     }
     if (input === "q") quit();
+    else if (input === "b" && back) {
+      quitting.current.abort();
+      back();
+    }
     else if (key.upArrow || input === "k") movedTo(cursor - 1);
     else if (key.downArrow || input === "j") movedTo(cursor + 1);
     else if (key.leftArrow) setFirst((f) => Math.max(0, f - 1));
-    else if (key.rightArrow) setFirst((f) => Math.min(Math.max(0, names.length - 1), f + 1));
+    else if (key.rightArrow) setFirst((f) => Math.min(Math.max(0, visible.length - 1), f + 1));
+    else if (input === "c") {
+      setChoosing(0);
+      setMessage("");
+    }
     else if (input === "n" || key.pageDown) {
       if (page?.next != null) goTo([...offsets, page.next]);
     } else if (input === "p" || key.pageUp) {
@@ -236,7 +274,7 @@ export function App({ view, copy, done }: AppProps): ReactElement {
   );
   const shown: number[] = [];
   let used = posWidth;
-  for (let i = first; i < names.length; i++) {
+  for (const i of visible.slice(first)) {
     const need = (widths[i] ?? 1) + 2;
     if (shown.length > 0 && used + need > width) break;
     shown.push(i);
@@ -248,6 +286,25 @@ export function App({ view, copy, done }: AppProps): ReactElement {
   const filterLine = draft !== null ? `filter> ${plain(draft)}█` : where === "" ? "filter: (none)  press / to type a condition, e.g. amount > 100" : `filter: ${plain(where)}`;
   const count = page === null ? "reading…" : `${page.matched} row${page.matched === 1 ? "" : "s"}${where === "" ? "" : " match"}`;
 
+  if (choosing !== null) {
+    // A window of the names that keeps the cursor's line in view.
+    const room = Math.max(3, height - 4);
+    const start = Math.max(0, Math.min(choosing - Math.floor(room / 2), names.length - room));
+    return h(
+      Box,
+      { flexDirection: "column" },
+      h(Text, { bold: true, wrap: "truncate-end" }, `fusen ${plain(opened.source)}: columns`),
+      h(Text, { dimColor: true, wrap: "truncate-end" }, `${kept === null ? names.length : kept.size} of ${names.length} kept. The Ref returns only the kept columns.`),
+      ...names.slice(start, start + room).map((name, k) => {
+        const i = start + k;
+        const on = kept === null || kept.has(i);
+        return h(Text, { key: i, inverse: i === choosing, wrap: "truncate-end" }, `${on ? "[x]" : "[ ]"} ${clip(name, Math.max(10, width - 6))}`);
+      }),
+      h(Text, { wrap: "truncate-end" }, plain(message)),
+      h(Text, { dimColor: true, wrap: "truncate-end" }, CHOOSER_KEYS),
+    );
+  }
+
   return h(
     Box,
     { flexDirection: "column" },
@@ -255,7 +312,7 @@ export function App({ view, copy, done }: AppProps): ReactElement {
     h(
       Text,
       { dimColor: true, wrap: "truncate-end" },
-      `${opened.card.rows} rows, ${names.length} columns${opened.card.masked.length > 0 ? `, ${opened.card.masked.length} masked as personal data` : ""} · ${count} · ${picked.size} picked`,
+      `${opened.card.rows} rows, ${kept === null ? names.length : `${kept.size} of ${names.length}`} columns${opened.card.masked.length > 0 ? `, ${opened.card.masked.length} masked as personal data` : ""} · ${count} · ${picked.size} picked`,
     ),
     h(Text, { wrap: "truncate-end" }, filterLine),
     h(
@@ -277,6 +334,6 @@ export function App({ view, copy, done }: AppProps): ReactElement {
       { color: changed ? "red" : undefined, wrap: "truncate-end" },
       changed ? "the file changed since it was opened. Quit and open it again." : plain(message),
     ),
-    h(Text, { dimColor: true, wrap: "truncate-end" }, KEYS),
+    h(Text, { dimColor: true, wrap: "truncate-end" }, back ? KEYS.replace("  q quit", "  b files  q quit") : KEYS),
   );
 }

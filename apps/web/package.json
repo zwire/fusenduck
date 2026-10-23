@@ -5,7 +5,8 @@
   "type": "module",
   "description": "fusenduck Web UI: a local server that serves the SPA and a small same-origin API.",
   "exports": {
-    "./view": "./src/view.ts"
+    "./view": "./src/view.ts",
+    "./files": "./src/files.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit && tsc --noEmit -p spa",
