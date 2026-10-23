@@ -20,7 +20,8 @@ export function describeError(error: unknown, opts: { debug?: boolean } = {}): s
 /**
  * The line a server writes to its own log for an error it did not expect. The log is kept (an MCP
  * host saves the server's stderr to files, VS Code shows the Output panel), so an engine message,
- * which can quote cell values, is cut to its kind ("Conversion Error") with where it was thrown.
+ * which can quote cell values, is cut to its kind ("Conversion Error"), with the JavaScript frames
+ * it was thrown from (DuckDB's own errors carry none).
  * FUSEN_DEBUG=1 logs the whole error, as the CLI shows it.
  */
 export function logLine(error: unknown, opts: { debug?: boolean } = {}): string {
@@ -28,7 +29,11 @@ export function logLine(error: unknown, opts: { debug?: boolean } = {}): string 
   if (!(error instanceof Error)) return debug ? String(error) : `${typeof error} thrown (FUSEN_DEBUG=1 shows it)`;
   if (debug) return error.stack ?? `${error.name}: ${error.message}`;
   const kind = /^([A-Za-z][A-Za-z ]{0,40} Error):/.exec(error.message)?.[1] ?? "message withheld";
-  const frames = (error.stack ?? "").split("\n").filter((line) => /^\s+at /.test(line));
+  // The stack starts with the message, which can span lines that look like frames (a cell with
+  // "\n    at ..."), so frames are read only after it; when it is not there, none are.
+  const header = `${error.name}: ${error.message}`;
+  const stack = error.stack ?? "";
+  const frames = stack.startsWith(header) ? stack.slice(header.length).split("\n").filter((line) => /^\s+at /.test(line)) : [];
   return [`${error.name}: ${kind} (FUSEN_DEBUG=1 shows the message, which can quote values from the source)`, ...frames].join("\n");
 }
 

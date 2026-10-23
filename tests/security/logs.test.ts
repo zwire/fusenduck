@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { logLine } from "@fusenduck/core";
 import { lit } from "../../packages/core/src/engine.ts";
 import { startWebServer, type WebHandle } from "../../apps/web/src/server.ts";
 import { Host } from "../../apps/vscode/src/host.ts";
@@ -64,7 +65,7 @@ describe("an engine error that quotes a cell is not written to a log", () => {
       return call(base, "/api/rows", { source, fingerprint, offset: 0, limit: 10, where: FAILS }, { token });
     };
 
-    it("logs the kind of error and where it came from, not the value", async () => {
+    it("logs the kind of error, not the value", async () => {
       const lines = logged();
       const res = await rows();
       expect(res.status).toBe(500);
@@ -80,6 +81,18 @@ describe("an engine error that quotes a cell is not written to a log", () => {
       await rows();
       expect(lines.join("\n")).toContain(CELL);
     });
+  });
+
+  it("a cell with lines that look like stack frames does not pass as frames", async () => {
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    const cell = `x\n    at ${CELL} (evil.js:1:1)\n\tat ${CELL}`;
+    const error = await connection.run(`SELECT CAST(${lit(cell)} AS INTEGER)`).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(String((error as Error).message)).toContain(CELL);
+    expect(logLine(error, { debug: false })).toMatch(/Conversion Error/);
+    expect(logLine(error, { debug: false })).not.toContain(CELL);
   });
 
   it("the VS Code extension host", async () => {
