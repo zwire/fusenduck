@@ -58,6 +58,8 @@ describe("Web UI in Chromium", () => {
     page.on("console", (m) => console.push(m.text()));
     await page.goto(handle.url);
     await page.waitForFunction(() => !location.hash);
+    // The hash goes first; the hint is written once the token is exchanged and the file list is loaded.
+    await page.waitForFunction(() => (document.getElementById("hint")?.textContent ?? "") !== "");
   });
 
   afterAll(async () => {
