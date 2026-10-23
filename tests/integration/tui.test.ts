@@ -148,15 +148,16 @@ describe("TUI: pick rows and copy a Ref (docs/adr/0003)", () => {
   it("pages forward and back, and a pick on the second page is a position in the file", async () => {
     const t = await start();
     await t.press("n");
-    await t.until((s) => /\n[> ] ?\s?(\d{2,3}) /.test(s) && !s.includes("\n>  0 "), "the second page");
+    // 24 terminal rows leave 16 table rows, so the second page starts at position 16 with the cursor on it.
+    // (Any two-digit row also matches on the first page, so wait for the cursor row itself.)
+    await t.until((s) => s.includes("\n> 16 "), "the second page");
     await t.press(" ");
     await t.press("y");
     await t.until(() => t.copied.length === 1, "a copy");
     const got = ids(await resolveRef(t.copied[0]!, { roots: [dir] }));
-    // 24 terminal rows leave 16 table rows, so the second page starts at position 16 (id 17).
     expect(got).toEqual([17]);
     await t.press("p");
-    await t.until((s) => s.includes("> ") && s.includes(" 1 "), "the first page again");
+    await t.until((s) => s.includes("\n> 0 "), "the first page again");
   });
 
   it("refuses to pick when the file has its own file_row_number column", async () => {
