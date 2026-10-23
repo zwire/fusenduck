@@ -75,7 +75,8 @@ describe("VS Code webview in Chromium", () => {
     const { page, copied } = await editor(customers);
     expect(await page.inputValue("#path")).toBe(customers);
     expect(await page.textContent("#open")).toBe("Reload");
-    expect(await page.textContent("#source")).toBe(`${customers} — 1000 rows`);
+    expect(await page.textContent("#source")).toBe("customers.parquet — 1,000 rows");
+    expect(await page.getAttribute("#source", "title")).toBe(customers);
     expect(await page.locator("#rows tbody tr").count()).toBe(100);
 
     await page.locator('#rows tbody tr[data-pos="3"]').click();
@@ -98,7 +99,7 @@ describe("VS Code webview in Chromium", () => {
     await page.click("#copy");
     expect(copied).toEqual([]);
     await page.click("#open");
-    await page.waitForFunction(() => /1001 rows$/.test(document.getElementById("source")?.textContent ?? ""));
+    await page.waitForFunction(() => /1,001 rows$/.test(document.getElementById("source")?.textContent ?? ""));
     await page.locator('#rows tbody tr[data-pos="7"]').click();
     await page.click("#copy");
     await page.waitForFunction(() => /^Copied/.test(document.getElementById("status")?.textContent ?? ""));

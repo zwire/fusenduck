@@ -274,8 +274,12 @@ describe("Web UI server: open, rows and ref", () => {
     // A misspelled column: the binder's message names it, so the person can fix the filter.
     const typo = await rows("amont > 1");
     expect(typo.status).toBe(400);
-    expect(String(typo.body.error)).toMatch(/^filter rejected: .*amont/);
+    expect(typo.body.error).toBe('filter rejected: this file has no column named "amont". Its columns are id, region, amount, status, note');
     expect((await ref("amont > 1")).status).toBe(400);
+    // The filter runs inside WHERE (…): a condition that stops short is called unfinished, not an
+    // error at a parenthesis the person never typed.
+    expect((await rows("amount >")).body.error).toBe("filter rejected: the condition is not finished, e.g. amount > 100");
+    expect((await rows("amount > > 1")).body.error).toMatch(/^filter rejected: syntax error at or near ">"$/);
     // A table function would read the file's bytes while binding; * and COLUMNS(*) mean other columns in a Ref.
     const table = await rows(`(SELECT count(*) FROM read_json('${file}', records=true, format='array')) = 1`);
     expect(table.body.error).toBe("filter rejected: a filter may not read a table; use the file's columns");

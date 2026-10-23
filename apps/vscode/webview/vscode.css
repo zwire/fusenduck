@@ -48,3 +48,13 @@ td.null,
 td.pos {
   color: var(--vscode-descriptionForeground);
 }
+#rows thead th {
+  background: var(--vscode-editor-background);
+}
+.error {
+  color: var(--vscode-errorForeground);
+}
+#copy.done {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+}

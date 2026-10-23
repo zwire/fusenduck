@@ -14,6 +14,17 @@
         <input id="path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/file.parquet (or relative to the first root)" />
         <button id="open" type="submit">Open</button>
       </form>
+      <div id="ref-panel" hidden>
+        <div class="refbar">
+          <label for="ref">Ref</label>
+          <input id="ref" type="text" readonly />
+          <button id="copy" type="button" title="Copy the Ref (Ctrl/⌘+C in the rows)">Copy</button>
+        </div>
+        <div class="bar">
+          <p id="selection"></p>
+          <button id="clear-selection" type="button" title="Select no rows (Esc in the rows)" hidden>Clear selection</button>
+        </div>
+      </div>
       <p id="status" role="status"></p>
     </header>
     <aside id="files-panel" hidden>
@@ -25,28 +36,29 @@
       <ul id="files" role="listbox" aria-label="Parquet files under the roots"></ul>
     </aside>
     <main>
+      <p id="hint" class="note"></p>
       <section id="card-section" hidden>
         <h2 id="source"></h2>
-        <table id="card"></table>
-        <p class="note">Untick a column to leave it out of the Ref. No row values are shown in the card. min/max of text columns are cut to 40 characters. approx_unique and avg are approximate.</p>
+        <p id="source-dir" class="note"></p>
+        <details id="card-details">
+          <summary id="card-summary"></summary>
+          <table id="card"></table>
+          <p class="note">Untick a column to leave it out of the Ref. No row values are shown in the card. min/max of text columns are cut to 40 characters. approx_unique and avg are approximate.</p>
+        </details>
       </section>
       <section id="rows-section" hidden>
-        <div class="refbar">
-          <input id="ref" type="text" readonly aria-label="Ref" />
-          <button id="copy" type="button">Copy</button>
-        </div>
         <form id="where-form" class="bar">
           <label for="where">Filter rows</label>
-          <input id="where" name="where" type="text" autocomplete="off" spellcheck="false" placeholder="SQL condition on the columns, e.g. amount > 100 AND region = 'south'" />
+          <input id="where" name="where" type="text" autocomplete="off" spellcheck="false" aria-describedby="where-error" placeholder="SQL condition on the columns, e.g. amount > 100 AND region = 'south'" />
           <button type="submit">Apply</button>
           <button id="clear-where" type="button">Clear</button>
         </form>
-        <p id="selection"></p>
-        <table id="rows"></table>
+        <p id="where-error" class="error" aria-live="polite"></p>
+        <table id="rows" role="grid" aria-label="Rows"></table>
         <nav>
-          <button id="prev" type="button">Previous</button>
+          <button id="prev" type="button" title="Previous page (PageUp in the rows)">Previous</button>
           <span id="page"></span>
-          <button id="next" type="button">Next</button>
+          <button id="next" type="button" title="Next page (PageDown in the rows)">Next</button>
         </nav>
         <p id="rows-note" class="note"></p>
       </section>

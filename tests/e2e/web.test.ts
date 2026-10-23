@@ -7,6 +7,7 @@ import { copyFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DuckDBInstance } from "@duckdb/node-api";
 import { resolveRef } from "@fusenduck/core";
 import { startWebServer, type WebHandle } from "../../apps/web/src/server.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
@@ -29,7 +30,7 @@ describe("Web UI in Chromium", () => {
   const open = async (path: string) => {
     await page.fill("#path", path);
     await page.click("#open");
-    await page.waitForFunction((p) => document.getElementById("source")?.textContent?.startsWith(p), path);
+    await page.waitForFunction((p) => document.getElementById("source")?.title === p, path);
     await page.waitForSelector("#rows tbody tr");
   };
   const row = (pos: number) => page.locator(`#rows tbody tr[data-pos="${pos}"]`);
@@ -67,6 +68,22 @@ describe("Web UI in Chromium", () => {
   it("removes the code from the address bar and keeps the token in this tab", async () => {
     expect(page.url()).toBe(`${origin}/`);
     expect(await page.evaluate(() => sessionStorage.getItem("fusenduck-token"))).toMatch(/^[\w-]{43}$/);
+  });
+
+  it("before a file is open, says where to start and shows no Ref", async () => {
+    expect(await page.textContent("#hint")).toMatch(/^Pick a file on the left/);
+    expect(await page.isHidden("#ref-panel")).toBe(true);
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe("filter");
+    // Open with nothing typed asks for a path instead of sending an empty one.
+    await page.click("#open");
+    expect(await page.textContent("#status")).toBe("Type the path of a Parquet file, or pick one from the list.");
+    // A path that is not there names the folder fusen-web may read.
+    await page.fill("#path", "missing.parquet");
+    await page.click("#open");
+    await page.waitForFunction(() => /^Cannot open/.test(document.getElementById("status")?.textContent ?? ""));
+    expect(await page.textContent("#status")).toBe(
+      `Cannot open missing.parquet: there is no such file, it cannot be read, or it is outside the folder fusen-web was started with (${dir}).`,
+    );
   });
 
   it("1 and 6: a row, a Shift range, a Ctrl addition and a row on page 2 each copy a Ref that resolves to exactly those rows", async () => {
@@ -118,9 +135,9 @@ describe("Web UI in Chromium", () => {
 
     await page.fill("#where", "region = 'south' AND id <= 40");
     await page.press("#where", "Enter");
-    await page.waitForFunction(() => /10 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
+    await page.waitForFunction(() => /10 of 1,000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
     expect(await page.locator("#rows tbody tr").count()).toBe(10);
-    expect(await page.textContent("#page")).toBe("rows 1–10 of 10 matching the filter (1000 in the file)");
+    expect(await page.textContent("#page")).toBe("rows 1–10 of 10 matching the filter (1,000 in the file)");
     expect(await page.textContent("#selection")).toMatch(/^The Ref covers the rows that match the filter, 3 of 5 columns \(id, amount, note\)\./);
     const filtered = await copy();
     expect(decodeURIComponent(filtered)).toContain("cols=id,amount,note&where=region = 'south' AND id <= 40");
@@ -135,11 +152,11 @@ describe("Web UI in Chromium", () => {
     expect(await page.textContent("#selection")).toMatch(/^The Ref covers the rows that match the filter within 9 selected positions/);
     expect(await resolved(await copy())).toEqual([1, 5, 9]);
 
-    // A bad filter says why and leaves the rows and the filter that was applied.
+    // A bad filter says why under the filter, and leaves the rows and the filter that was applied.
     await page.fill("#where", "amont > 1");
     await page.click("#where-form button[type=submit]");
-    await page.waitForFunction(() => document.getElementById("status")?.classList.contains("error"));
-    expect(await page.textContent("#status")).toMatch(/^Filter rejected: .*amont/);
+    await page.waitForFunction(() => document.getElementById("where-error")?.textContent);
+    expect(await page.textContent("#where-error")).toBe('Filter rejected: this file has no column named "amont". Its columns are id, region, amount, status, note');
     expect(await page.getAttribute("#where", "aria-invalid")).toBe("true");
     expect(await page.locator("#rows tbody tr").count()).toBe(10);
 
@@ -170,10 +187,10 @@ describe("Web UI in Chromium", () => {
       await page.press("#where", "Enter");
       await page.fill("#where", "id <= 5");
       await page.press("#where", "Enter");
-      await page.waitForFunction(() => /5 of 1000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
+      await page.waitForFunction(() => /5 of 1,000 rows match/.test(document.getElementById("status")?.textContent ?? ""));
       await new Promise((resolve) => setTimeout(resolve, 800));
       expect(await page.locator("#rows tbody tr").count()).toBe(5);
-      expect(await page.textContent("#page")).toBe("rows 1–5 of 5 matching the filter (1000 in the file)");
+      expect(await page.textContent("#page")).toBe("rows 1–5 of 5 matching the filter (1,000 in the file)");
       expect(await page.isDisabled("#prev")).toBe(true);
       expect(await page.getAttribute("#where", "aria-invalid")).toBeNull();
     } finally {
@@ -271,7 +288,7 @@ describe("Web UI in Chromium", () => {
     await page.fill("#path", path);
     await page.click("#open");
     await page.waitForFunction(() => /cannot be selected/.test(document.getElementById("selection")?.textContent ?? ""));
-    expect(await page.textContent("#status")).toBe("Rows of this file cannot be selected: see below.");
+    expect(await page.textContent("#status")).toBe("Rows of this file cannot be selected: see the note above.");
     expect(await page.locator("#rows tbody tr").count()).toBe(20);
     await page.locator("#rows tbody tr").nth(2).click();
     expect(await page.locator("#rows tr.selected").count()).toBe(0);
@@ -323,6 +340,98 @@ describe("Web UI in Chromium", () => {
     expect(await page.textContent("#files-note")).toBe("No file matches the filter.");
     await page.press("#filter", "Escape");
     expect(await page.inputValue("#filter")).toBe("");
+  });
+
+  it("the keyboard selects rows: ↑↓, Shift+↑↓, Space, Esc, PageDown, and Ctrl/⌘+C copies the Ref", async () => {
+    await open(customers);
+    await page.focus("#rows");
+    // Focus puts the keyboard on the first row without selecting it.
+    expect(await page.locator("#rows tr.cursor").getAttribute("data-pos")).toBe("0");
+    expect(await page.locator("#rows tr.selected").count()).toBe(0);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Shift+ArrowDown");
+    await expect.poll(() => page.locator("#rows tr.selected").count()).toBe(3);
+    // Ctrl/⌘+↓ moves without selecting, and Space adds the row.
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    await page.keyboard.press("ControlOrMeta+ArrowDown");
+    await page.keyboard.press("Space");
+    await page.keyboard.press("ControlOrMeta+c");
+    await page.waitForFunction(() => /^Copied/.test(document.getElementById("status")?.textContent ?? ""));
+    expect(await page.textContent("#copy")).toBe("Copied ✓");
+    expect(await resolved(await page.evaluate(() => navigator.clipboard.readText()))).toEqual([3, 4, 5, 7]);
+
+    // Esc selects none again: the Ref is the whole file.
+    expect(await page.isVisible("#clear-selection")).toBe(true);
+    await page.keyboard.press("Escape");
+    expect(await page.isHidden("#clear-selection")).toBe(true);
+    expect(await page.textContent("#selection")).toMatch(/^The Ref covers the whole file\./);
+
+    // PageDown turns the page; End and Shift+Home select from the last row back to the first.
+    await page.keyboard.press("PageDown");
+    await row(150).waitFor();
+    await page.keyboard.press("End");
+    await page.keyboard.press("Shift+Home");
+    await page.click("#copy");
+    await page.waitForFunction(() => /^Copied the Ref for 100 selected rows/.test(document.getElementById("status")?.textContent ?? ""));
+    expect(await resolved(await page.evaluate(() => navigator.clipboard.readText()))).toEqual(range(101, 200));
+  });
+
+  it("the Ref, Copy and the column names stay in view while the rows scroll", async () => {
+    // The 1,000-row file from the test before, still open.
+    await page.locator("main").evaluate((main) => main.scrollTo(0, main.scrollHeight));
+    const viewport = page.viewportSize()!;
+    const copyBox = (await page.locator("#copy").boundingBox())!;
+    expect(copyBox.y).toBeGreaterThanOrEqual(0);
+    expect(copyBox.y + copyBox.height).toBeLessThanOrEqual(viewport.height);
+    // The header row of the table sticks to the top of the scrolled part.
+    const mainTop = (await page.locator("main").boundingBox())!.y;
+    const headTop = (await page.locator("#rows thead th").first().boundingBox())!.y;
+    expect(Math.abs(headTop - mainTop)).toBeLessThan(2);
+    // Numbers line up on the right.
+    expect(await page.locator("#rows tbody tr").first().locator("td").nth(1).evaluate((td) => getComputedStyle(td).textAlign)).toBe("right");
+  });
+
+  it("Ctrl/⌘+C with text selected by hand copies that text, not the Ref; PageUp lands on the last row", async () => {
+    await page.locator("#rows thead th").nth(1).dblclick();
+    await page.keyboard.press("ControlOrMeta+c");
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("id");
+    await page.evaluate(() => getSelection()?.removeAllRanges());
+    await page.focus("#rows");
+    await page.keyboard.press("PageUp");
+    await row(99).waitFor();
+    await expect.poll(() => page.locator("#rows tr.cursor").getAttribute("data-pos")).toBe("99");
+    expect(await page.getAttribute("#rows", "aria-activedescendant")).toBe("row-99");
+  });
+
+  it("on a short window the whole page scrolls, so the rows are never a sliver", async () => {
+    const size = page.viewportSize()!;
+    await page.setViewportSize({ width: 600, height: 300 });
+    try {
+      expect((await page.locator("main").boundingBox())!.height).toBeGreaterThan(300);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight > innerHeight)).toBe(true);
+    } finally {
+      await page.setViewportSize(size);
+    }
+  });
+
+  it("a wide file starts with its card folded, and a large count reads with separators", async () => {
+    const path = join(dir, "wide.parquet");
+    const connection = await (await DuckDBInstance.create(":memory:")).connect();
+    const columns = Array.from({ length: 20 }, (_, i) => `i * ${i} AS c${i}`).join(", ");
+    await connection.run(`COPY (SELECT ${columns} FROM range(0, 12345) t(i)) TO '${path}' (FORMAT parquet)`);
+    await open(path);
+    expect(await page.textContent("#source")).toBe("wide.parquet — 12,345 rows");
+    expect(await page.evaluate(() => document.title)).toBe("wide.parquet — fusenduck");
+    expect(await page.getAttribute("#card-details", "open")).toBeNull();
+    expect(await page.textContent("#card-summary")).toBe("Columns and statistics: all 20 columns in the Ref");
+    expect(await page.textContent("#page")).toBe("rows 1–100 of 12,345");
+    // An unfinished filter is called that.
+    await page.fill("#where", "c1 >");
+    await page.press("#where", "Enter");
+    await page.waitForFunction(() => document.getElementById("where-error")?.textContent);
+    expect(await page.textContent("#where-error")).toBe("Filter rejected: the condition is not finished, e.g. amount > 100");
   });
 
   it("logged no CSP violation on its own page", () => {

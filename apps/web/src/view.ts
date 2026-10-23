@@ -53,6 +53,23 @@ export type Range = [number, number];
 
 const CHANGED = "the file changed since it was opened. Open it again.";
 
+/**
+ * An error about the person's filter, in words that point at the fix. The filter runs inside
+ * `WHERE (…)`, so a condition that stops short fails at the closing parenthesis it never typed.
+ */
+function rejected(message: string, text: string, columns: string[]): FusenError {
+  const said = message.replace(/^predicate rejected: /, "").replace(/^(Parser|Binder|Catalog) Error: /, "");
+  const missing = /^Referenced column "(.*)" not found in FROM clause/.exec(said);
+  if (missing) {
+    const list = columns.slice(0, 20).join(", ") + (columns.length > 20 ? `, … (${columns.length} in all)` : "");
+    return new FusenError(`filter rejected: this file has no column named "${missing[1]}". Its columns are ${list}`);
+  }
+  if (said === 'syntax error at or near ")"' && !text.includes(")")) {
+    return new FusenError("filter rejected: the condition is not finished, e.g. amount > 100");
+  }
+  return new FusenError(`filter rejected: ${said.slice(0, 300)}`);
+}
+
 /** Sorted, merged ranges of positions, checked against the row count. */
 export function mergeRanges(ranges: unknown, rows: number): Range[] {
   if (!Array.isArray(ranges) || ranges.length === 0) throw new FusenError("select at least one row");
@@ -149,7 +166,9 @@ export class View {
     const text = where.trim();
     if (text === "") return undefined;
     if (text.length > MAX_FILTER_CHARS) throw new FusenError(`a filter may be at most ${MAX_FILTER_CHARS} characters`);
-    await checkPredicate(this.#engine, this.#engine.source, text);
+    await checkPredicate(this.#engine, this.#engine.source, text).catch((error: unknown) => {
+      throw error instanceof FusenError && error.message.startsWith("predicate rejected: ") ? rejected(error.message, text, this.#columns) : error;
+    });
     const parsed = String((await this.#engine.query(`SELECT json_serialize_sql(${lit(`SELECT 1 WHERE (\n${text}\n)`)}) AS j`))[0]?.j);
     if (parsed.includes('"TABLE_FUNCTION"')) throw new FusenError("filter rejected: a filter may not read a table; use the file's columns");
     if (parsed.includes('"STAR"')) throw new FusenError("filter rejected: name the columns instead of * or COLUMNS(*)");
@@ -160,7 +179,7 @@ export class View {
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
       if (!/^(Parser|Binder|Catalog) Error:/.test(message)) throw error;
-      throw new FusenError(`filter rejected: ${message.slice(0, 300)}`);
+      throw rejected(message, text, this.#columns);
     }
     return text;
   }
