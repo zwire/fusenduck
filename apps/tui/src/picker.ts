@@ -66,9 +66,9 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
     if (input === "q" || (key.ctrl && input === "c")) quit();
     else if (opening) return;
     else if (key.upArrow || input === "k") setCursor(Math.max(0, at - 1));
-    else if (key.downArrow || input === "j") setCursor(Math.min(files.length - 1, at + 1));
+    else if (key.downArrow || input === "j") setCursor(Math.min(Math.max(0, files.length - 1), at + 1));
     else if (key.pageUp) setCursor(Math.max(0, at - 10));
-    else if (key.pageDown) setCursor(Math.min(files.length - 1, at + 10));
+    else if (key.pageDown) setCursor(Math.min(Math.max(0, files.length - 1), at + 10));
     else if (input === "r") setReload((n) => n + 1);
     else if (key.return && files[at]) open(files[at]);
   });

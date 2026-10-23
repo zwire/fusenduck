@@ -174,7 +174,10 @@ export function App({ view, copy, done, back }: AppProps): ReactElement {
       return;
     }
     if (choosing !== null) {
-      if (key.escape || key.return) setChoosing(null);
+      if (key.escape || key.return) {
+        setChoosing(null);
+        setMessage("");
+      }
       else if (key.upArrow || input === "k") setChoosing(Math.max(0, choosing - 1));
       else if (key.downArrow || input === "j") setChoosing(Math.min(names.length - 1, choosing + 1));
       else if (input === "a") setKept(null);

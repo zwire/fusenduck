@@ -26,6 +26,8 @@ export function Shell({ roots, view: given, copy, done, track }: ShellProps): Re
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState("");
   const gone = useRef(false);
+  /** Set from the moment a file starts opening, so a second Enter before the screen redraws opens nothing. */
+  const busy = useRef(false);
   useEffect(
     () => () => {
       gone.current = true;
@@ -35,10 +37,13 @@ export function Shell({ roots, view: given, copy, done, track }: ShellProps): Re
 
   const open = useCallback(
     (file: ListedFile) => {
+      if (busy.current) return;
+      busy.current = true;
       setOpening(true);
       setNotice("");
       View.open(file.path, roots).then(
         (opened) => {
+          busy.current = false;
           // The screen went away while the file was opening: nobody will use the view.
           if (gone.current) {
             void opened.close();
@@ -49,6 +54,7 @@ export function Shell({ roots, view: given, copy, done, track }: ShellProps): Re
           setView(opened);
         },
         (error: unknown) => {
+          busy.current = false;
           if (gone.current) return;
           setOpening(false);
           setNotice(failure(error, (line) => process.stderr.write(`fusen-tui: ${plain(line)}\n`)));
