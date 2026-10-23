@@ -323,6 +323,7 @@ async function loadPage(
   if (!api || !file) return "stale";
   const mine = ++pageSeq;
   loading = true;
+  rowsTable.setAttribute("aria-busy", "true");
   try {
     const next = await api.rows(file, at, PAGE_ROWS, where);
     if (mine !== pageSeq) return "stale";
@@ -337,7 +338,10 @@ async function loadPage(
     report(error);
     return "failed";
   } finally {
-    if (mine === pageSeq) loading = false;
+    if (mine === pageSeq) {
+      loading = false;
+      rowsTable.removeAttribute("aria-busy");
+    }
   }
 }
 
