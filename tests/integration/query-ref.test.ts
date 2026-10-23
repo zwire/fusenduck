@@ -144,9 +144,14 @@ describe("hand-built Refs and limits", () => {
   it("a query that needs far more memory than the engine may hold fails without a crash", () => {
     // About 2.4 GB of integers against the 512 MB limit; it fails in the first second, where a single 900 MB string took 14.
     const ref = run("ref", file, "--query", "SELECT list(i) AS l FROM range(300000000) t(i)");
-    const r = ref.status === 0 ? run("resolve", ref.stdout.trim(), "--root", dir) : ref;
+    const r =
+      ref.status === 0
+        ? spawnSync("node", [cli, "resolve", ref.stdout.trim(), "--root", dir], { encoding: "utf8", env: { ...process.env, FUSEN_DEBUG: "1" } })
+        : ref;
     expect(r.status).toBe(1);
     expect(r.stdout).toBe("");
+    // The cause, not just a failure: without the memory limit this query ends at the 10 s clock instead.
+    expect(r.stderr).toMatch(/Out of Memory/i);
   });
 });
 
