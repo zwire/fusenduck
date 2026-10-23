@@ -1,46 +1,51 @@
-/* Design tokens: a neutral palette with one accent, in the manner of shadcn/ui (no dependency, no
-   web font). Light and dark follow the system; every text/background pair is at least WCAG AA. */
+/* Design tokens, oklch throughout: a blue-violet neutral with one glowing accent, in the manner of
+   Linear and Raycast. No dependency, no web font, no inline style (CSP). Light and dark follow the
+   system; text/background pairs are at least WCAG AA. */
 :root {
   color-scheme: light dark;
-  --background: #ffffff;
-  --foreground: #0a0a0b;
-  --muted: #f4f4f5;
-  --muted-foreground: #5b5b66;
-  --border: #e4e4e7;
-  --input: #d4d4d8;
-  --primary: #18181b;
-  --primary-foreground: #fafafa;
-  --accent: #1d4ed8;
-  --selection: #2563eb1f;
-  --hover: #f4f4f5;
-  --ring: #2563eb;
-  --danger: #b91c1c;
-  --success: #15803d;
-  --radius: 6px;
-  --shadow: 0 1px 2px #0000000d;
   --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   font-family: var(--font);
   font-size: 14px;
   line-height: 1.5;
 }
+:root {
+  --background: oklch(0.985 0.003 280);
+  --foreground: oklch(0.2 0.02 280);
+  --muted: oklch(0.955 0.008 280);
+  --muted-foreground: oklch(0.47 0.03 280);
+  --border: oklch(0.2 0.02 280 / 0.1);
+  --input: oklch(0.2 0.02 280 / 0.16);
+  --primary: oklch(0.52 0.22 285);
+  --primary-foreground: oklch(0.99 0 0);
+  --accent: oklch(0.5 0.22 285);
+  --selection: oklch(0.52 0.22 285 / 0.12);
+  --hover: oklch(0.2 0.02 280 / 0.045);
+  --ring: oklch(0.55 0.22 285);
+  --danger: oklch(0.52 0.21 25);
+  --success: oklch(0.5 0.15 155);
+  --radius: 8px;
+  --shadow: 0 1px 0 oklch(1 0 0 / 0.6) inset, 0 1px 2px oklch(0.2 0.02 280 / 0.08);
+  --glow: oklch(0.7 0.18 285 / 0.18);
+}
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #09090b;
-    --foreground: #fafafa;
-    --muted: #18181b;
-    --muted-foreground: #a1a1aa;
-    --border: #27272a;
-    --input: #3f3f46;
-    --primary: #fafafa;
-    --primary-foreground: #18181b;
-    --accent: #60a5fa;
-    --selection: #60a5fa29;
-    --hover: #18181b;
-    --ring: #60a5fa;
-    --danger: #f87171;
-    --success: #4ade80;
-    --shadow: none;
+    --background: oklch(0.145 0.014 285);
+    --foreground: oklch(0.96 0.006 285);
+    --muted: oklch(0.2 0.018 285);
+    --muted-foreground: oklch(0.72 0.025 285);
+    --border: oklch(1 0 0 / 0.09);
+    --input: oklch(1 0 0 / 0.14);
+    --primary: oklch(0.68 0.2 285);
+    --primary-foreground: oklch(0.14 0.014 285);
+    --accent: oklch(0.8 0.14 285);
+    --selection: oklch(0.68 0.2 285 / 0.2);
+    --hover: oklch(1 0 0 / 0.05);
+    --ring: oklch(0.75 0.18 285);
+    --danger: oklch(0.75 0.17 25);
+    --success: oklch(0.8 0.17 155);
+    --shadow: 0 1px 0 oklch(1 0 0 / 0.07) inset;
+    --glow: oklch(0.6 0.22 285 / 0.28);
   }
 }
 body {
@@ -388,4 +393,158 @@ nav {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+body {
+  background:
+    radial-gradient(60rem 28rem at 50% -12rem, var(--glow), transparent 70%),
+    radial-gradient(30rem 20rem at 100% 100%, color-mix(in oklch, var(--ring) 10%, transparent), transparent 70%),
+    var(--background);
+  background-attachment: fixed;
+}
+body > header {
+  background: color-mix(in oklch, var(--background) 60%, transparent);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border-bottom-color: var(--border);
+  position: relative;
+}
+body > header::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 -1px 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ring), transparent);
+  opacity: 0.55;
+}
+h2 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+input,
+button {
+  background: color-mix(in oklch, var(--muted) 70%, transparent);
+  border-color: var(--input);
+}
+input:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 30%, transparent);
+}
+button[type="submit"],
+#copy {
+  background: linear-gradient(180deg, color-mix(in oklch, var(--primary) 82%, white), var(--primary));
+  border-color: color-mix(in oklch, var(--primary) 70%, black);
+  color: var(--primary-foreground);
+  box-shadow: 0 1px 0 oklch(1 0 0 / 0.3) inset, 0 4px 14px -4px var(--ring);
+}
+#copy.done {
+  background: var(--success);
+  box-shadow: 0 4px 14px -4px var(--success);
+}
+#ref {
+  background: color-mix(in oklch, var(--ring) 8%, var(--muted));
+  color: var(--accent);
+  border-color: color-mix(in oklch, var(--ring) 35%, transparent);
+}
+#files,
+table {
+  background: color-mix(in oklch, var(--muted) 45%, transparent);
+  border-color: var(--border);
+}
+#files li {
+  border-radius: 6px;
+  margin: 2px;
+}
+#files li.current {
+  background: color-mix(in oklch, var(--ring) 14%, transparent);
+  color: var(--accent);
+}
+#files li.current::before {
+  content: "●";
+  font-size: 8px;
+  align-self: center;
+  color: var(--ring);
+}
+td {
+  font-variant-numeric: tabular-nums;
+}
+#rows thead th {
+  background: color-mix(in oklch, var(--background) 75%, transparent);
+}
+#rows tr.selected td:first-child {
+  box-shadow: inset 2px 0 0 var(--ring);
+}
+#rows tr.selected td {
+  background: var(--selection);
+}
+#where[aria-invalid="true"] {
+  outline: none;
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 28%, transparent);
+}
+#where-error {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 99px;
+  background: color-mix(in oklch, var(--danger) 14%, transparent);
+  font-size: 12px;
+}
+
+/* Empty state: the hint before a file is open is a quiet card, not a stray line. */
+#hint:not(:empty):not([hidden]) {
+  margin: 24px 0;
+  padding: 28px 20px;
+  border: 1px dashed var(--input);
+  border-radius: 12px;
+  text-align: center;
+  background: color-mix(in oklch, var(--ring) 5%, transparent);
+}
+/* Loading: the rows dim and a thin light sweeps the top edge while a page is fetched. */
+#rows[aria-busy="true"] {
+  opacity: 0.55;
+  transition: opacity 0.15s 0.12s;
+}
+#rows-section:has(#rows[aria-busy="true"]) nav::after {
+  content: "";
+  width: 64px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--ring), transparent);
+  background-size: 200% 100%;
+  animation: sweep 1s linear infinite;
+}
+@keyframes sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+/* Entering content settles in; reduced motion turns every animation off. */
+@starting-style {
+  #card-section:not([hidden]) {
+    opacity: 0;
+  }
+}
+#card-section {
+  transition: opacity 0.2s;
+}
+button:active {
+  transform: translateY(1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
