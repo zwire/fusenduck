@@ -67,6 +67,35 @@ describe("TUI: pick rows and copy a Ref (docs/adr/0003)", () => {
     expect(screen).toContain("filter: (none)");
   });
 
+  it("goes back to the filter that worked when a later one fails, and keeps the failure's message", async () => {
+    const t = await start();
+    await t.press("/", "id > 990", KEY.enter);
+    await t.until((s) => s.includes("10 rows match"), "the first filter");
+    await t.press("/");
+    for (let i = 0; i < "id > 990".length; i++) await t.press(KEY.backspace);
+    await t.press("nosuch > 1", KEY.enter);
+    const screen = await t.until((s) => s.includes('no column named "nosuch"') && s.includes("10 rows match"), "the failure with the first filter back");
+    expect(screen).toContain("filter: id > 990");
+  });
+
+  it("clears the picks when the filter changes, so the count is what the Ref returns", async () => {
+    const t = await start();
+    await t.press(" ");
+    await t.until((s) => s.includes("1 picked"), "one pick");
+    await t.press("/", "id > 90", KEY.enter);
+    await t.until((s) => s.includes("0 picked") && s.includes("were cleared"), "the picks cleared");
+    await t.press(" ", "y");
+    await t.until(() => t.copied.length === 1, "a copy");
+    expect(ids(await resolveRef(t.copied[0]!, { roots: [dir] }))).toEqual([91]);
+  });
+
+  it("quits on Ctrl-C even while a filter is being typed", async () => {
+    const t = await start();
+    await t.press("/", "id >");
+    await t.press("\u0003");
+    await t.until(() => t.done.length === 1, "quit");
+  });
+
   it("pages forward and back, and a pick on the second page is a position in the file", async () => {
     const t = await start();
     await t.press("n");
@@ -75,8 +104,8 @@ describe("TUI: pick rows and copy a Ref (docs/adr/0003)", () => {
     await t.press("y");
     await t.until(() => t.copied.length === 1, "a copy");
     const got = ids(await resolveRef(t.copied[0]!, { roots: [dir] }));
-    expect(got).toHaveLength(1);
-    expect(got[0]).toBeGreaterThan(1);
+    // 24 terminal rows leave 16 table rows, so the second page starts at position 16 (id 17).
+    expect(got).toEqual([17]);
     await t.press("p");
     await t.until((s) => s.includes("> ") && s.includes(" 1 "), "the first page again");
   });
@@ -131,6 +160,8 @@ describe("TUI: text and selection helpers", () => {
     expect(plain("a\u001b[2Jb\u0007c‮d")).toBe("a�[2Jb�c�d");
     expect(plain("one\ntwo\r\nthree\tfour")).toBe("one⏎two⏎⏎three four");
     expect(plain("日本語 ok")).toBe("日本語 ok");
+    // Invisible characters that can hide text or reorder it.
+    expect(plain("a\u200bb\u061cc\ufeffd\u{e0041}e")).toBe("a\uFFFDb\uFFFDc\uFFFDd\uFFFDe");
   });
 
   it("Selection merges touching positions into ranges and toggles", () => {

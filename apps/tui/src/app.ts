@@ -55,11 +55,14 @@ export function App({ view, copy, done }: AppProps): ReactElement {
   const quitting = useRef(new AbortController());
   /** The filter whose page loaded last, which a filter that fails goes back to. */
   const goodWhere = useRef("");
+  /** The offsets of the page that loaded last, which a page that fails to load goes back to. */
+  const goodOffsets = useRef<number[]>([0]);
   /** Set when a failure put the filter back, so the reload that follows keeps the failure's message. */
   const keepMessage = useRef(false);
   const offset = offsets.at(-1) ?? 0;
 
-  const log = useCallback((line: string) => process.stderr.write(`fusen-tui: ${line}\n`), []);
+  // stderr is the screen, so a log line is shown as a line of the screen, controls made visible.
+  const log = useCallback((line: string) => process.stderr.write(`fusen-tui: ${plain(line)}\n`), []);
 
   // The page: reloaded when the offset or filter changes; a newer load stops the one in flight.
   useEffect(() => {
@@ -72,6 +75,7 @@ export function App({ view, copy, done }: AppProps): ReactElement {
       .rows(opened.fingerprint, offset, limit, where === "" ? undefined : where, controller.signal)
       .then((next) => {
         goodWhere.current = where;
+        goodOffsets.current = offsets;
         setPage(next);
         setCursor((c) => Math.min(c, Math.max(0, next.rows.length - 1)));
       })
@@ -84,6 +88,10 @@ export function App({ view, copy, done }: AppProps): ReactElement {
           keepMessage.current = true;
           setWhere(goodWhere.current);
           setOffsets([0]);
+        } else if (offsets !== goodOffsets.current) {
+          // A page that did not load must not leave the table under another page's offset.
+          keepMessage.current = true;
+          setOffsets(goodOffsets.current);
         }
       });
     return () => {
@@ -101,7 +109,7 @@ export function App({ view, copy, done }: AppProps): ReactElement {
     if (ranges.length === 0 && where === "") {
       setRef({ text: opened.ref });
       refPromise.current = Promise.resolve(opened.ref);
-      return;
+      return () => quitting.current.signal.removeEventListener("abort", stop);
     }
     setRef("pending");
     const made = view
@@ -125,9 +133,10 @@ export function App({ view, copy, done }: AppProps): ReactElement {
 
   const quit = useCallback(() => {
     quitting.current.abort();
-    done(typeof ref === "object" && "text" in ref ? ref.text : undefined);
+    // After the file changed, the Ref last shown names rows the file no longer has.
+    done(!changed && typeof ref === "object" && "text" in ref ? ref.text : undefined);
     exit();
-  }, [done, exit, ref]);
+  }, [done, exit, ref, changed]);
 
   const rows = page?.rows ?? [];
   const movedTo = (next: number) => {
@@ -150,17 +159,29 @@ export function App({ view, copy, done }: AppProps): ReactElement {
   };
 
   useInput((input, key) => {
+    if (key.ctrl && input === "c") {
+      quit();
+      return;
+    }
     if (draft !== null) {
       if (key.escape) setDraft(null);
       else if (key.return) {
         setDraft(null);
-        setWhere(draft.trim());
+        const next = draft.trim();
+        // The Ref ANDs the picked rows with the filter, so picks made under another filter would
+        // count rows the Ref no longer returns.
+        if (next !== where && picked.size > 0) {
+          setPicked(new Selection());
+          setMessage("the filter changed, so the picked rows were cleared");
+          keepMessage.current = true;
+        }
+        setWhere(next);
         goTo([0]);
       } else if (key.backspace || key.delete) setDraft(draft.slice(0, -1));
       else if (!key.ctrl && !key.meta && input !== "") setDraft(draft + input.replace(/[\r\n]+/g, " "));
       return;
     }
-    if (input === "q" || (key.ctrl && input === "c")) quit();
+    if (input === "q") quit();
     else if (key.upArrow || input === "k") movedTo(cursor - 1);
     else if (key.downArrow || input === "j") movedTo(cursor + 1);
     else if (key.leftArrow) setFirst((f) => Math.max(0, f - 1));
@@ -187,7 +208,17 @@ export function App({ view, copy, done }: AppProps): ReactElement {
       } else next.toggle(pos);
       setPicked(next);
     } else if (input === "y") {
-      void refPromise.current.then((text) => {
+      // A pick made while waiting replaces the Ref being made, so wait again for the newest one.
+      const newest = async () => {
+        let made = refPromise.current;
+        let text = await made;
+        while (made !== refPromise.current) {
+          made = refPromise.current;
+          text = await made;
+        }
+        return text;
+      };
+      void newest().then((text) => {
         if (text === undefined || changed) {
           setMessage("no Ref to copy");
           return;

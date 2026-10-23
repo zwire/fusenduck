@@ -7,9 +7,10 @@ import { parseArgs } from "node:util";
 import { describeError, FusenError, logLine } from "@fusenduck/core";
 import { View } from "@fusenduck/web/view";
 import { mount } from "./mount.ts";
+import { plain } from "./text.ts";
 
 function fail(message: string): never {
-  process.stderr.write(`fusen-tui: ${message}\n`);
+  process.stderr.write(`fusen-tui: ${plain(message)}\n`);
   process.exit(1);
 }
 
@@ -27,20 +28,21 @@ try {
 }
 const [file, ...extra] = parsed.positionals;
 if (file === undefined || extra.length > 0) fail("usage: fusen-tui <file.parquet> [--root <dir>]...");
-if (!process.stdin.isTTY || !process.stdout.isTTY) fail("needs a terminal on stdin and stdout; use `fusen peek` or the MCP server in a script");
+// The screen is drawn on stderr, so stdout can be piped: it gets only the Ref, when you quit.
+if (!process.stdin.isTTY || !process.stderr.isTTY) fail("needs a terminal on stdin and stderr; use `fusen peek` or the MCP server in a script");
 
 let view: View;
 try {
   view = await View.open(file, parsed.values.root ?? [process.cwd()]);
 } catch (error) {
-  if (!(error instanceof FusenError)) process.stderr.write(`fusen-tui: ${logLine(error)}\n`);
+  if (!(error instanceof FusenError)) process.stderr.write(`fusen-tui: ${plain(logLine(error))}\n`);
   fail(describeError(error));
 }
 
 let result: string | undefined;
 const app = mount({
     view,
-    copy: (text) => process.stdout.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`),
+    copy: (text) => process.stderr.write(`\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`),
     done: (ref) => {
       result = ref;
     },
