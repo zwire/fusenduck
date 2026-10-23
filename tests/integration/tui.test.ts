@@ -1,3 +1,4 @@
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -90,6 +91,53 @@ describe("TUI: pick rows and copy a Ref (docs/adr/0003)", () => {
     expect(ids(await resolveRef(t.copied[0]!, { roots: [dir] }))).toEqual([91]);
   });
 
+  it("keeps only the chosen columns in the table and the Ref, with the picked rows", async () => {
+    const t = await start();
+    await t.press(" ");
+    // Drop amount, status and note: the chooser starts on id.
+    await t.press("c");
+    await t.until((s) => s.includes("[x] id") && s.includes("5 of 5 kept"), "the chooser");
+    await t.press(KEY.down, KEY.down, " ", KEY.down, " ", KEY.down, " ");
+    await t.until((s) => s.includes("2 of 5 kept") && s.includes("[ ] note"), "three columns dropped");
+    await t.press(KEY.enter);
+    const screen = await t.until((s) => s.includes("2 of 5 columns") && s.includes("1 picked"), "the table with two columns");
+    const header = screen.split("\n").find((l) => l.startsWith("#"))!;
+    expect(header).not.toContain("amount");
+    expect(header).toContain("region");
+    await t.press("y");
+    await t.until(() => t.copied.length === 1, "a copy");
+    const out = (await resolveRef(t.copied[0]!, { roots: [dir] })).split("\n").filter((l) => l.startsWith("{"));
+    expect(out).toHaveLength(1);
+    expect(Object.keys(JSON.parse(out[0]!) as object)).toEqual(["id", "region"]);
+    // Keeping all again goes back to the Ref for the picked rows alone.
+    await t.press("c", "a", KEY.enter);
+    await t.until((s) => s.includes("5 columns") && s.includes("amount"), "all columns back");
+  });
+
+  it("copies only the kept columns of the whole file when nothing is picked", async () => {
+    const t = await start();
+    await t.press("c", " ");
+    await t.press(KEY.enter);
+    await t.until((s) => s.includes("4 of 5 columns") && !(s.split("\n").find((l) => l.startsWith("#")) ?? "").includes("id"), "id dropped");
+    await t.press("y");
+    await t.until(() => t.copied.length === 1, "a copy");
+    const out = (await resolveRef(t.copied[0]!, { roots: [dir] })).split("\n").filter((l) => l.startsWith("{"));
+    // The Ref names the whole file; resolving it previews the first 100 rows.
+    expect(out).toHaveLength(100);
+    expect(Object.keys(JSON.parse(out[0]!) as object)).toEqual(["region", "amount", "status", "note"]);
+  });
+
+  it("refuses to drop the last column", async () => {
+    const t = await start();
+    await t.press("c");
+    for (let i = 0; i < 4; i++) await t.press(KEY.down, " ");
+    await t.until((s) => s.includes("1 of 5 kept"), "one column left");
+    await t.press(KEY.up, KEY.up, KEY.up, KEY.up);
+    // The cursor is on id again; it is the only one kept.
+    await t.press(" ");
+    await t.until((s) => s.includes("keep at least one column") && s.includes("1 of 5 kept"), "the refusal");
+  });
+
   it("quits on Ctrl-C even while a filter is being typed", async () => {
     const t = await start();
     await t.press("/", "id >");
@@ -153,6 +201,90 @@ describe("TUI: pick rows and copy a Ref (docs/adr/0003)", () => {
     // eslint-disable-next-line no-control-regex -- the test looks for control characters
     expect(screen.replace(/\u001b\[[0-9;]*m/g, "")).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f‮]/);
     expect(screen).toContain("�");
+  });
+});
+
+describe("TUI: pick a file from the roots", () => {
+  const dir = tempDir();
+  const outside = tempDir();
+  let stop = () => {};
+  let tracked: View[] = [];
+  beforeAll(async () => {
+    mkdirSync(join(dir, "sub"));
+    mkdirSync(join(dir, ".hidden"));
+    await writeCustomers(join(dir, "a.parquet"), 30);
+    await writeCustomers(join(dir, "sub", "b.parquet"), 40);
+    await writeCustomers(join(dir, ".hidden", "c.parquet"), 5);
+    await writeCustomers(join(outside, "secret.parquet"), 5);
+    symlinkSync(join(outside, "secret.parquet"), join(dir, "link.parquet"));
+    writeFileSync(join(dir, "broken.parquet"), "not parquet");
+    // A name that carries a terminal escape.
+    await writeCustomers(join(dir, `esc${String.fromCharCode(27)}[2Jx.parquet`), 5);
+  });
+  afterEach(async () => {
+    stop();
+    await Promise.all(tracked.splice(0).map((v) => v.close()));
+  });
+  const startList = async () => {
+    const tui = driveTui(null, undefined, [dir]);
+    stop = tui.stop;
+    tracked = tui.tracked;
+    await tui.until((s) => s.includes("Parquet files"), "the list");
+    return tui;
+  };
+
+  it("lists the files under the roots without hidden files and links, then opens the picked one", async () => {
+    const t = await startList();
+    const screen = await t.until((s) => s.includes("sub/b.parquet"), "the nested file");
+    expect(screen).toContain("a.parquet");
+    expect(screen).not.toContain("c.parquet");
+    expect(screen).not.toContain("link.parquet");
+    expect(screen).not.toContain("secret");
+    // Sorted: a, broken, esc…, sub/b.
+    await t.press(KEY.down, KEY.down, KEY.down, KEY.enter);
+    await t.until((s) => s.includes("40 rows"), "the nested file's table");
+    await t.press(" ", "y");
+    await t.until(() => t.copied.length === 1, "a copy");
+    expect(await resolveRef(t.copied[0]!, { roots: [dir] })).toContain('"id"');
+    expect(t.tracked).toHaveLength(1);
+  });
+
+  it("goes back to the list with b and opens another file", async () => {
+    const t = await startList();
+    await t.until((s) => s.includes("a.parquet"), "the list");
+    await t.press(KEY.enter);
+    await t.until((s) => s.includes("\n> 0"), "the first table");
+    await t.press("b");
+    await t.until((s) => s.includes("pick a file"), "the list again");
+    await t.press("j", "j", KEY.enter);
+    await t.until((s) => s.includes("\n> 0") && s.includes("5 rows, 5 columns"), "the second table");
+    expect(t.tracked).toHaveLength(2);
+    await t.press("q");
+    await t.until(() => t.done.length === 1, "quit");
+  });
+
+  it("shows core's wording when a file does not open, and stays on the list", async () => {
+    const t = await startList();
+    await t.until((s) => s.includes("broken.parquet"), "the list");
+    await t.press(KEY.down, KEY.enter);
+    const screen = await t.until((s) => s.includes("pick a file") && !s.includes("opening…") && /not|cannot|could/i.test(s.split("\n").slice(-3).join("\n")), "an error line");
+    expect(screen).toContain("broken.parquet");
+  });
+
+  it("prints a file name that carries an escape as a placeholder", async () => {
+    const t = await startList();
+    await t.until((s) => s.includes("esc"), "the escape name");
+    const screen = t.chunks.join("");
+    // eslint-disable-next-line no-control-regex -- the test looks for control characters
+    expect(screen.replace(/\u001b\[[0-9;]*m/g, "")).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/);
+    expect(screen).toContain("esc�[2Jx.parquet");
+  });
+
+  it("quits from the list with nothing to print", async () => {
+    const t = await startList();
+    await t.press("q");
+    await t.until(() => t.done.length === 1, "quit");
+    expect(t.done[0]).toBeUndefined();
   });
 });
 
