@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
 
+# A newer push to the same pull request replaces the run in progress, so old runs stop holding runners.
+# On main every push keeps its own run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   check:
     # The supported platforms: package.json engines (Node >= 22.18) on the three OSes that
@@ -62,7 +68,15 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec playwright-core install --with-deps chromium
+      # The browser download is cached by playwright-core's version; the apt step of --with-deps was
+      # the slow and unpredictable part of this job (19 s on a good day, over 6 minutes on a bad one).
+      - id: playwright
+        run: echo "version=$(pnpm exec playwright-core --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - run: pnpm exec playwright-core install chromium
       - run: pnpm test:e2e
 
   repro:
