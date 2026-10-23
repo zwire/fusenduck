@@ -1,5 +1,6 @@
 import { lit, type Engine } from "./engine.ts";
 import { FusenError } from "./errors.ts";
+import { holdsText, mask, maskText, nameKind, orderKinds, type Masked } from "./pii.ts";
 
 export interface CardColumn {
   column: string;
@@ -16,6 +17,8 @@ export interface DataCard {
   columns: CardColumn[];
   /** Fields in each column that are estimates, not exact. */
   approximate: string[];
+  /** Columns whose min/max were hidden as personal data (empty when unmasked). */
+  masked: Masked[];
 }
 
 /** A card reads every row of the file; past this it is stopped, so a huge file cannot hold a caller forever. */
@@ -33,7 +36,25 @@ function shorten(value: string | null, type: string): string | null {
 // Column names are source text too.
 const clip = (value: string): string => (value.length > MAX_NAME ? `${value.slice(0, MAX_NAME)}…` : value);
 
-export async function buildCard(engine: Engine, opts: { timeoutMs?: number } = {}): Promise<DataCard> {
+/** Hides a column's min, max and avg when its name or their shape says personal data; records why in `masked`. */
+function maskBounds(column: CardColumn, masked: Masked[]): CardColumn {
+  const kind = nameKind(column.column);
+  if (kind) {
+    if (column.min === null && column.max === null && column.avg === null) return column;
+    masked.push({ column: column.column, kinds: [kind], by: "name" });
+    const hide = (value: string | null) => (value === null ? null : mask(kind));
+    return { ...column, min: hide(column.min), max: hide(column.max), avg: hide(column.avg) };
+  }
+  if (!holdsText(column.type)) return column;
+  const found = new Set<string>();
+  const min = column.min === null ? null : maskText(column.min, found);
+  const max = column.max === null ? null : maskText(column.max, found);
+  if (found.size) masked.push({ column: column.column, kinds: orderKinds(found), by: "value" });
+  return { ...column, min, max };
+}
+
+/** `unmask` shows min/max that look like personal data; only whoever runs fusenduck may ask for it. */
+export async function buildCard(engine: Engine, opts: { timeoutMs?: number; unmask?: boolean } = {}): Promise<DataCard> {
   const timeoutMs = opts.timeoutMs ?? CARD_TIMEOUT_MS;
   let summary;
   try {
@@ -50,13 +71,20 @@ export async function buildCard(engine: Engine, opts: { timeoutMs?: number } = {
     return {
       column: clip(String(c.column_name)),
       type,
-      min: shorten((c.min as string | null) ?? null, type),
-      max: shorten((c.max as string | null) ?? null, type),
+      min: (c.min as string | null) ?? null,
+      max: (c.max as string | null) ?? null,
       // The estimate can exceed the row count; a distinct count never can.
       approx_unique: Math.min(Number(c.approx_unique), rows),
       null_percentage: String(c.null_percentage),
       avg: (c.avg as string | null) ?? null,
     };
   });
-  return { rows, columns, approximate: ["approx_unique", "avg"] };
+  const masked: Masked[] = [];
+  // Masked before they are cut, so a cut cannot break the shape that gives a value away.
+  const shown = (opts.unmask ? columns : columns.map((c) => maskBounds(c, masked))).map((c) => ({
+    ...c,
+    min: shorten(c.min, c.type),
+    max: shorten(c.max, c.type),
+  }));
+  return { rows, columns: shown, approximate: ["approx_unique", "avg"], masked };
 }

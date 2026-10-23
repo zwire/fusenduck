@@ -112,6 +112,22 @@ OMITTED: 47 of 50 rows are not shown (the first 3 in file order are). ...
 - ただし、自分で書いた述語やクエリの書き間違い(構文、存在しない列、型の合わない関数)は、行を読む前の計画の段階で見つかり、セルの値を含まないので、そのまま見せます。`--where "region = south"` なら `Referenced column "south" not found` と、文字列は `'south'` のように引用符で囲むことを返します。
 - CLI の終了コードは、0 が成功(`DATA_CHANGED` の結果も含む)、1 がコマンドの失敗(ファイルが読めない、Ref が壊れている、エンジンのエラーなど)、2 がコマンドラインの誤り(知らないコマンドやオプション、値の形)です。`fusen --help` で使い方、`fusen --version` で版が出ます。
 
+### 個人情報のマスク
+
+個人情報らしい値は、既定で `«masked:<種類>»` に置き換えて見せます。対象は resolve と peek の行、カードの min・max・avg です。
+
+- **列名で**: 名前が個人情報を示す列(`email`、`phone`・`tel`・`mobile`、`first_name`・`customer_name`・`owner_name` などの人名、`birth_date`・`dob`、`address`・`zip`・`postal_code`、`ssn`・`passport`・`card_number` など。`氏名`・`住所`・`電話番号`・`メールアドレス`・`生年月日` のような日本語の列名も)は、値をすべて伏せます。単なる `name` や `product_name`、データについての列(`is_mobile`、`phone_count`、`email_verified`、`address_id` など)は対象外です。
+- **値の形で**: 文字を持ちうる列(文字列、JSON、LIST・STRUCT・MAP の中も)にあるメールアドレス、電話番号、カード番号(Luhn で確かめたもの)は、その部分だけ伏せます。入れ子の値では、名前が個人情報を示すフィールド(`{"email": ...}`)を丸ごと伏せます。全角の数字や「＠」も読みます。日時や数値の列は形を見ません。電話番号は国際形式、ハイフンかドットで区切った形、`0` で始まる 10〜11 桁で、空白だけで区切った数字の並び(座標や数の一覧)は電話とみなしません。
+- 伏せたものは `MASKED:` の一行に、列と種類と理由(列名か値か)を書きます。
+
+```
+OMITTED: none. All 2 matching rows are shown. MASKED: values that look like personal data are hidden: email (email, by column name), note (phone, email, by value). Whoever runs fusenduck can show them with --unmask.
+```
+
+見せるには、起動する人が `--unmask` を付けます(`fusen card|peek|resolve --unmask`、`fusen-mcp --unmask`)。MCP のツールの引数では外せないので、エージェントが自分で外すことはできません。
+
+マスクは表示だけのもので、保証ではありません。Ref の `where` は本当の値で評価するので、`email = '...'` のような述語で値を確かめることはできますし、`--query` で値の形を崩せば(`replace(email, '@', ' at ')` など)形では見つけられません。Web UI はその場にいる人が見るためのもので、行は伏せません(カードの min・max・avg は伏せます)。
+
 ## 8. MCP サーバー
 
 エージェントからは MCP の 4 つのツールで同じ操作ができます。

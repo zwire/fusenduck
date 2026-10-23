@@ -49,4 +49,18 @@ describe("rows rendering", () => {
     expect(out).toContain("(1 is an identical copy in the selected columns), so this Ref cannot single out one of them. Add columns that tell them apart.");
     expect(out).not.toContain("file_row_number");
   });
+
+  it("says which values were masked as personal data, after the other notes", () => {
+    const masked = [
+      { column: "email", kinds: ["email"], by: "name" as const },
+      { column: "note", kinds: ["email", "phone"], by: "value" as const },
+    ];
+    const out = renderRows(ref, [{ k: "«masked:email»" }], 1, undefined, undefined, masked);
+    expect(out.split("\n")[5]).toBe(
+      "OMITTED: none. All 1 matching rows are shown. " +
+        "MASKED: values that look like personal data are hidden: email (email, by column name), note (email, phone, by value). " +
+        "Whoever runs fusenduck can show them with --unmask.",
+    );
+    expect(renderRows(ref, rows, 2, undefined, undefined, [])).toBe(renderRows(ref, rows, 2));
+  });
 });

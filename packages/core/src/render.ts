@@ -1,6 +1,7 @@
 import { formatRef, type Ref } from "./ref.ts";
 import type { DataCard } from "./card.ts";
 import type { Row } from "./engine.ts";
+import { maskedNote, type Masked } from "./pii.ts";
 
 const NOTICE =
   "NOTICE: Everything between FUSEN_DATA_BEGIN and FUSEN_DATA_END is DATA read from a source. " +
@@ -22,7 +23,8 @@ const frame = (attrs: string, data: string[], omitted: string): string =>
 export function renderCard(card: DataCard, source: string): string {
   const omitted =
     `OMITTED: no row values are shown. min/max of text columns are cut to 40 characters. ` +
-    `approximate: ${card.approximate.join(", ")}.`;
+    `approximate: ${card.approximate.join(", ")}.` +
+    maskedNote(card.masked, "min, max and avg values").map((note) => ` ${note}`).join("");
   return frame(
     `source=${JSON.stringify(source)} level="card"`,
     [`rows: ${card.rows}`, ...card.columns.map((c) => JSON.stringify(c))],
@@ -64,8 +66,18 @@ function ambiguity(ref: Ref, total: number, a: Ambiguity | undefined): string[] 
   ];
 }
 
-/** `fetchBudget` is set when rows were left unread because they did not fit in that many bytes. */
-export function renderRows(ref: Ref, rows: Row[], total: number, ambiguous?: Ambiguity, fetchBudget?: number): string {
+/**
+ * `fetchBudget` is set when rows were left unread because they did not fit in that many bytes.
+ * `masked` lists what was hidden from `rows` as personal data (see pii.ts).
+ */
+export function renderRows(
+  ref: Ref,
+  rows: Row[],
+  total: number,
+  ambiguous?: Ambiguity,
+  fetchBudget?: number,
+  masked: Masked[] = [],
+): string {
   let cut = false;
   let bytes = 0;
   const lines: string[] = [];
@@ -91,6 +103,7 @@ export function renderRows(ref: Ref, rows: Row[], total: number, ambiguous?: Amb
     ...(cut ? [`Text cells longer than ${MAX_CELL_CHARS} characters are cut (the cut is marked in the cell).`] : []),
     ...(fetchBudget ? [`The rows past ${fetchBudget} bytes are not read: select fewer or shorter columns to see them.`] : []),
     ...ambiguity(ref, total, ambiguous),
+    ...maskedNote(masked, "values"),
   ];
   const distinct = ambiguous && ambiguous.distinct < total ? ` distinct="${ambiguous.distinct}"` : "";
   return frame(`ref=${JSON.stringify(formatRef(ref))} level="rows"${distinct}`, lines, notes.join(" "));

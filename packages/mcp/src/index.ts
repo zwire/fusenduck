@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// `fusen-mcp [--root <dir>]... [--http [--host <loopback>] [--port <n>]]` : MCP server over stdio,
+// `fusen-mcp [--root <dir>]... [--unmask] [--http [--host <loopback>] [--port <n>]]` : MCP server over stdio,
 // or over Streamable HTTP on a loopback address with a bearer token (FUSEN_MCP_TOKEN, or one
 // generated and printed to stderr). Files are readable only under the roots (default: the current
-// directory). See docs/adr/0001.
+// directory). Values that look like personal data are masked unless --unmask is given. See docs/adr/0001.
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -28,6 +28,7 @@ const parse = () =>
       host: { type: "string" },
       port: { type: "string" },
       help: { type: "boolean", short: "h" },
+      unmask: { type: "boolean" },
     },
   });
 let values: ReturnType<typeof parse>["values"];
@@ -46,7 +47,7 @@ if (!values.http) {
   if (values.host !== undefined || values.port !== undefined) {
     fail("--host and --port need --http");
   }
-  await createServer(roots).connect(new StdioServerTransport());
+  await createServer(roots, undefined, { unmask: values.unmask }).connect(new StdioServerTransport());
 } else {
   const port = values.port === undefined ? 7457 : Number(values.port);
   if (!/^\d+$/.test(values.port ?? "0") || port > 65535) {
@@ -61,7 +62,7 @@ if (!values.http) {
   }
   const token = given || randomBytes(24).toString("base64url");
   try {
-    const { url } = await startHttpServer({ roots, token, port, ...(values.host === undefined ? {} : { host: values.host }) });
+    const { url } = await startHttpServer({ roots, token, port, unmask: values.unmask, ...(values.host === undefined ? {} : { host: values.host }) });
     process.stderr.write(`fusen-mcp: listening on ${url}\n`);
     if (!given) process.stderr.write(`fusen-mcp: token (send as "Authorization: Bearer <token>"): ${token}\n`);
   } catch (error) {
