@@ -1,50 +1,50 @@
 # @fusenduck/tui
 
-TUI `fusen-tui`。端末で Parquet ファイルの表を見て行を選び、選んだ行だけを返す Ref をコピーします。設計は [ADR 0003](../../docs/adr/0003-tui-ink.md) です。画面は [ink](https://github.com/vadimdemedes/ink)(React の端末向け描画)で作り、ファイルを開く・行を読む・Ref を作る部分は Web UI と同じ `View`(`apps/web/src/view.ts`)を使います。
+The TUI `fusen-tui`. Browse a Parquet file as a table in your terminal, select rows, and copy a Ref that returns only the selected rows. The design is in [ADR 0003](../../docs/adr/0003-tui-ink.md). The screen is built with [ink](https://github.com/vadimdemedes/ink) (React rendering for the terminal), and opening files, reading rows and minting Refs use the same `View` as the Web UI (`apps/web/src/view.ts`).
 
 ```sh
 node apps/tui/src/index.ts [file.parquet] [--root <dir>]...
 ```
 
-`--root` の下のファイルだけ開けます(既定は現在のディレクトリ)。ファイルを渡さないと、ルートの下の Parquet ファイルの一覧が出るので、選んで開きます。一覧は Web UI と同じ(`apps/web/src/files.ts`): symlink はたどらず、隠しファイルと隠しフォルダは飛ばし、数が多いときは切って、その旨を出します。画面は標準エラー出力に描くので、標準出力はパイプにできます(終了時の Ref だけが出ます)。標準入力と標準エラー出力が端末でなければ起動しません。
+Only files under `--root` can be opened (default: the current directory). If you pass no file, a list of the Parquet files under the roots appears and you pick one to open. The list is the same as the Web UI's (`apps/web/src/files.ts`): symlinks are not followed, hidden files and folders are skipped, and when there are many files the list is cut and says so. The screen is drawn on standard error, so standard output can be piped (only the Ref printed at exit goes there). It will not start unless standard input and standard error are terminals.
 
-## 操作
+## Controls
 
-### ファイルの一覧
+### File list
 
-| キー | 動き |
+| Key | Action |
 | --- | --- |
-| `↑` `↓`(`k` `j`)、`PgUp` `PgDn` | ファイルを動かす |
-| `Enter` | 開く(開けなければ core の文言を一覧の下に出す) |
-| `r` | 一覧を読み直す |
-| `q`(`Ctrl-C`) | 終了(Ref は出さない) |
+| `↑` `↓` (`k` `j`), `PgUp` `PgDn` | Move through the files |
+| `Enter` | Open (if it cannot be opened, core's message appears under the list) |
+| `r` | Reload the list |
+| `q` (`Ctrl-C`) | Quit (no Ref is printed) |
 
-### 表
+### Table
 
-| キー | 動き |
+| Key | Action |
 | --- | --- |
-| `↑` `↓`(`k` `j`) | 行を動かす |
-| `space` | カーソルの行を選ぶ/外す |
-| `v` | カーソルの行から範囲を始める。そのあと `↑` `↓` で動いた行も選ぶ。`Esc` で範囲を終える |
-| `a` | 選択を空にする |
-| `/` | 行の条件を入力(`Enter` で決定、`Esc` でやめる)。例: `amount > 100`。Ref は選んだ行と条件の両方に合う行なので、条件を変えると選択は空になる |
-| `←` `→` | 表示する列をずらす |
-| `c` | 列を選ぶ画面を開く。`space` で残す/外す、`a` で全部残す、`Enter` か `Esc` で戻る。外した列は表にも Ref にも入らない(1 列は残す)。選んだ行や条件はそのまま効く |
-| `b` | ファイルの一覧に戻る(一覧から開いた場合と、ファイルを渡さずに始めた場合。いまのファイルのエンジンは閉じる) |
-| `n` `p`(`PgDn` `PgUp`) | 次・前のページ |
-| `y` | Ref をコピーする(OSC 52)。作成中なら待ってからコピー |
-| `q`(`Ctrl-C`。条件の入力中も効く) | 終了。最後に出していた Ref を標準出力に 1 行で出す(ファイルが変わったと分かったあとは出さない) |
+| `↑` `↓` (`k` `j`) | Move between rows |
+| `space` | Select or deselect the row under the cursor |
+| `v` | Start a range at the cursor's row. Rows you then move over with `↑` `↓` are selected too. `Esc` ends the range |
+| `a` | Clear the selection |
+| `/` | Enter a row condition (`Enter` to confirm, `Esc` to cancel). Example: `amount > 100`. The Ref means the rows that match both the selection and the condition, so changing the condition clears the selection |
+| `←` `→` | Shift the displayed columns |
+| `c` | Open the column picker. `space` keeps or drops a column, `a` keeps all, `Enter` or `Esc` returns. A dropped column leaves both the table and the Ref (at least one column stays). The selected rows and the condition still apply |
+| `b` | Go back to the file list (when you opened from the list, or started without a file; the current file's engine is closed) |
+| `n` `p` (`PgDn` `PgUp`) | Next and previous page |
+| `y` | Copy the Ref (OSC 52). If it is still being minted, wait and then copy |
+| `q` (`Ctrl-C`; also works while typing a condition) | Quit. Prints the last Ref shown to standard output on one line (not printed once the file is known to have changed) |
 
-OSC 52 を受け付けない端末(tmux の既定など)では、画面の `Ref:` の行か、終了時の出力を使います: `node apps/tui/src/index.ts f.parquet | pbcopy`。
+On terminals that do not accept OSC 52 (tmux by default, for example), use the `Ref:` line on screen or the output at exit: `node apps/tui/src/index.ts f.parquet | pbcopy`.
 
-## 構成
+## Layout
 
-| ファイル | 中身 |
+| File | Contents |
 | --- | --- |
-| `src/index.ts` | 起動の入口(引数、端末の確認、OSC 52 によるコピー(標準エラー出力へ)、終了時にエンジンを閉じて Ref を出す) |
-| `src/shell.ts` | 一覧と表の切り替え。一覧から開いた `View` を呼び出し側に渡し、戻るとき・終了時に閉じる |
-| `src/picker.ts` | ファイルの一覧の画面(`apps/web/src/files.ts` の `listFiles` を使う) |
-| `src/mount.ts` | ink の `render` を呼ぶ薄い層(テストが偽の端末を渡せる) |
-| `src/app.ts` | 画面と操作。ink に依存するのはここだけ |
-| `src/selection.ts` | 選んだ位置の集合と、それを範囲にまとめる処理 |
-| `src/text.ts` | ファイル由来の文字列を端末に出す前の無害化(制御文字、双方向の上書き文字、改行) |
+| `src/index.ts` | Entry point (arguments, terminal checks, copying via OSC 52 (to standard error), closing the engine and printing the Ref at exit) |
+| `src/shell.ts` | Switching between the list and the table. Hands the `View` opened from the list to the caller, and closes it when going back and at exit |
+| `src/picker.ts` | The file list screen (uses `listFiles` from `apps/web/src/files.ts`) |
+| `src/mount.ts` | A thin layer that calls ink's `render` (tests can pass in a fake terminal) |
+| `src/app.ts` | The screen and its controls. The only place that depends on ink |
+| `src/selection.ts` | The set of selected positions and the code that merges it into ranges |
+| `src/text.ts` | Sanitizing strings that come from the file before they reach the terminal (control characters, bidirectional override characters, newlines) |

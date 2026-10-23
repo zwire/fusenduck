@@ -1,27 +1,27 @@
-# セキュリティポリシー
+# Security policy
 
-## 対象
+## Scope
 
-fusenduck は、信用できないデータや信用できない述語・クエリを受け取っても、次を守ることを目指しています。
+Even when it receives untrusted data and untrusted predicates or queries, fusenduck aims to uphold the following.
 
-- 許可したファイル以外を読まないこと、どこにも書かないこと(読み取り専用)。
-- MCP サーバーと `fusen resolve` が、`--root` の外のファイルを開かないこと(Ref は自分でファイルの場所を持つため)。Web UI も `--root` の外のファイルを開きません。`fusen card`・`peek`・`ref` は、手元の人が指定したパスをそのまま開きます。
-- データに紛れた文が、ツールの説明やエラー文としてエージェントに届かないこと。
-- MCP の HTTP サーバーが、ループバックの外や、正しいトークンを持たない相手に応じないこと。
-- Web UI のサーバー(`fusen-web`)が、ループバックの外、トークンを持たない相手、別のオリジンのページに応じないこと。セルの値がページの中でスクリプトとして動かないこと。
+- It reads no file other than the ones allowed, and writes nowhere (read-only).
+- The MCP server and `fusen resolve` do not open files outside `--root` (a Ref carries its own file location, so this matters). The Web UI also does not open files outside `--root`. `fusen card`, `peek` and `ref` open whatever path the person at the keyboard gives them.
+- Text hidden in the data does not reach the agent as a tool description or an error message.
+- The MCP HTTP server does not answer anyone outside loopback, or anyone without the right token.
+- The Web UI server (`fusen-web`) does not answer anyone outside loopback, anyone without the token, or a page from another origin. Cell values do not run as script in the page.
 
-これらを破れる方法、秘密の値が出力やログに漏れる経路、リソースを使い尽くす入力などを見つけたら、報告をお願いします。
+If you find a way to break any of these, a path by which a secret value leaks into output or logs, an input that exhausts resources, or anything similar, please report it.
 
-## 報告の仕方
+## How to report
 
-**公開の issue や pull request には書かないでください。**
+**Please do not write about it in a public issue or pull request.**
 
-GitHub の非公開の脆弱性報告を使ってください: リポジトリの **Security** タブ → **Report a vulnerability**(<https://github.com/zwire/fusenduck/security/advisories/new>)。
+Use GitHub's private vulnerability reporting: the repository's **Security** tab → **Report a vulnerability** (<https://github.com/zwire/fusenduck/security/advisories/new>).
 
-報告には、再現の手順(できれば小さな Parquet ファイルの作り方とコマンド)、期待した動きと実際の動き、使った OS・Node・fusenduck のコミットを書いてください。
+In your report, include the steps to reproduce (ideally how to build a small Parquet file, and the commands), what you expected and what actually happened, and the OS, Node and fusenduck commit you used.
 
-受け取ったら 7 日以内に返事をし、修正の方針と公開の時期を相談します。
+We will reply within 7 days of receiving a report, and then discuss the fix and the timing of disclosure with you.
 
-## 対応するバージョン
+## Supported versions
 
-まだリリースしていません。`main` の最新のコミットだけを対象にします。
+There has been no release yet. Only the latest commit on `main` is covered.

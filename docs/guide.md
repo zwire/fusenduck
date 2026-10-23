@@ -1,10 +1,10 @@
-# fusenduck でいまできること
+# What fusenduck can do today
 
-fusenduck は、Parquet ファイルを読み取り専用で覗き、見た範囲を `fusen://` で始まる 1 本の文字列(Ref)にして AI エージェントへ渡すための道具です。CLI(`fusen`)、MCP サーバー(`fusen-mcp`)、Web UI(`fusen-web`)、TUI(`fusen-tui`)の 4 つの入口があり、どれも同じ core を使います。
+fusenduck lets you look at a Parquet file read-only and turn the part you looked at into a single string that starts with `fusen://` (a Ref), which you can hand to an AI agent. It has four entry points: a CLI (`fusen`), an MCP server (`fusen-mcp`), a Web UI (`fusen-web`) and a TUI (`fusen-tui`). All of them use the same core.
 
-ステータス: 実験的(0.0.0、未公開)。Ref の形は凍結コーパスで守っていますが、まだ正式な互換の約束はしていません。対応するソースは Parquet ファイルだけです。
+Status: experimental (0.0.0, unpublished). The shape of a Ref is protected by a frozen corpus, but there is no formal compatibility promise yet. The only supported source is Parquet files.
 
-ここでは、このガイドの中だけで使う短い呼び名として、CLI を `fusen`、MCP サーバーを `fusen-mcp`、Web UI のサーバーを `fusen-web` と書きます。現時点ではパッケージとして公開しておらず、実際には次のように実行します。
+In this guide only, `fusen` is shorthand for the CLI, `fusen-mcp` for the MCP server and `fusen-web` for the Web UI server. The packages are not published yet, so in practice you run them like this:
 
 ```sh
 alias fusen='node /path/to/fusenduck/packages/cli/src/index.ts'
@@ -12,88 +12,88 @@ alias fusen-mcp='node /path/to/fusenduck/packages/mcp/src/index.ts'
 alias fusen-web='node /path/to/fusenduck/apps/web/src/index.ts'
 ```
 
-## 1. カード: 行の中身を見せずに表の形を知る
+## 1. Card: know the shape of a table without showing its rows
 
 ```sh
 fusen card sales.parquet
 ```
 
-行数、列ごとの型、null 率、min/max、平均、おおよその distinct 数を出します。行の値そのものは出しません。
+This prints the row count and, per column, the type, null rate, min/max, average and approximate distinct count. It never prints the row values themselves.
 
-- 数値は DuckDB の `SUMMARIZE` から作ります。近似の項目(`approx_unique`、`avg`)には「approximate」と書きます。
-- 文字列列の min/max はセルの中身なので、40 文字で切ります(データに紛れた指示文がそのまま出ないように)。
+- Numbers come from DuckDB's `SUMMARIZE`. Approximate fields (`approx_unique`, `avg`) are labeled "approximate".
+- The min/max of a string column is cell content, so it is cut at 40 characters (so that an instruction hidden in the data does not come through verbatim).
 
-## 2. peek: カード・最初の数行・Ref を 1 回で
+## 2. Peek: card, first rows and Ref in one call
 
 ```sh
 fusen peek sales.parquet --rows 3
 ```
 
-初めてのファイルを開いたときの 1 手目です。カード、ファイル順の最初の `--rows` 行(既定 5、最大 50)、ファイル全体を指す Ref をまとめて返します。
+This is the first move on a file you have never opened. It returns the card, the first `--rows` rows in file order (default 5, maximum 50) and a Ref that points at the whole file.
 
-## 3. Ref: 見た範囲を 1 本の文字列にする
+## 3. Ref: turn what you looked at into one string
 
 ```sh
 fusen ref sales.parquet --where "region = 'south'" --columns id,amount
 # → fusen://file/%2F...%2Fsales.parquet?v=6f39162aa843&e=v1.5.6&id=e1e30e92d12d&cols=id,amount&where=region%20%3D%20'south'
 ```
 
-Ref は自分の中にすべてを持ちます。サーバー側にセッションは要らないので、チャットや issue に貼り付けておけば、あとから誰でも同じ行を取り出せます。
+A Ref carries everything it needs. No server-side session is required, so you can paste it into a chat or an issue and anyone can fetch the same rows later.
 
-| 部分 | 意味 |
+| Part | Meaning |
 | --- | --- |
-| `fusen://file/<パス>` | ソースのファイル(絶対パス) |
-| `v=` | データの指紋(行数、ファイルサイズ、Parquet フッターの列統計) |
-| `e=` | Ref を作った DuckDB のバージョン |
-| `id=` | 選択の構文木から作る短いハッシュ。手で書き換えた Ref を見つけるためのもので、署名ではありません |
-| `where=` | 行の選び方(SQL の述語) |
-| `cols=` | 残す列 |
-| `q=` | ファイルを `data` という表として読む SELECT(集計など)。`--query` で指定 |
+| `fusen://file/<path>` | The source file (absolute path) |
+| `v=` | The data fingerprint (row count, file size, Parquet footer column statistics) |
+| `e=` | The DuckDB version that minted the Ref |
+| `id=` | A short hash of the selection's syntax tree. It exists to detect a hand-edited Ref; it is not a signature |
+| `where=` | How to pick rows (a SQL predicate) |
+| `cols=` | The columns to keep |
+| `q=` | A SELECT that reads the file as a table named `data` (aggregations and so on). Set with `--query` |
 
-選択は「何行目から何行目」という座標ではなく、述語で持ちます。行が増えても同じ条件の行を指し続けるためです。
+A selection is held as a predicate, not as coordinates like "rows 10 to 20", so that it keeps pointing at the same rows even when more rows are added.
 
-集計結果も Ref にできます。
+An aggregated result can also be a Ref.
 
 ```sh
 fusen ref sales.parquet --query "SELECT region, sum(amount) AS total FROM data GROUP BY region" --where "total > 0"
 ```
 
-述語とクエリは信用できない入力として扱い、単一の SELECT でなければ実行前に拒否します(`; COPY ...` のような複文など)。
+Predicates and queries are treated as untrusted input and rejected before execution unless they are a single SELECT (multi-statement input such as `; COPY ...` is refused).
 
-## 4. resolve: Ref から行を取り出す
+## 4. Resolve: fetch rows from a Ref
 
 ```sh
 fusen resolve '<Ref>' --limit 3 --root /path/to/data
 ```
 
-- 返すのは最大 `--limit` 行(既定 100、MCP では最大 1000)。見せなかった行の数は必ず `OMITTED:` の一行に書きます。
-- **データが変わっていたら行を返しません。** 指紋が合わないときは、黙って別の行を返す代わりに `DATA_CHANGED` を返し、新しい Ref を作るよう伝えます。
-- `id=` が選択と合わない(誰かが Ref の述語を書き換えた)ときは拒否します。ただし `e=` が実行中の DuckDB のバージョンと違うときは、この検査をしません。
-- 開けるのは `--root` で許可したディレクトリの下のファイルだけです(既定はカレントディレクトリ、複数指定可)。Ref が別の場所を指していても開きません。
+- It returns at most `--limit` rows (default 100, at most 1000 over MCP). The number of rows it did not show is always written on one `OMITTED:` line.
+- **If the data changed, it returns no rows.** When the fingerprint does not match, it returns `DATA_CHANGED` and tells you to mint a new Ref, instead of quietly returning different rows.
+- If `id=` does not match the selection (someone edited the Ref's predicate), it refuses. This check is skipped when `e=` differs from the running DuckDB version.
+- It opens only files under a directory allowed with `--root` (default: the current directory; repeatable). It will not open a file elsewhere even if the Ref points there.
 
-## 5. キー列のない表を行の位置で選ぶ
+## 5. Select rows by position in a table with no key column
 
-ID のような列がない表では、述語に `file_row_number`(0 から数えるファイル内の位置)を書くと、位置で行を選べます。
+For a table without an ID-like column, write `file_row_number` (the 0-based position in the file) in the predicate to select rows by position.
 
 ```sh
 fusen ref events.parquet --where "file_row_number = 0"
 ```
 
-位置で選んでもずれないのは、指紋がファイルの変化を拒むからです。ファイルに同じ名前の列があればそちらが優先されます。`--query` を持つ Ref では使えません。
+Selecting by position stays correct because the fingerprint rejects any change to the file. If the file has a column with the same name, that column wins. It cannot be used in a Ref that has `--query`.
 
-## 6. 同じ行のコピーは「あいまい」と明示する
+## 6. Identical copies of a row are reported as "ambiguous"
 
-まったく同じ内容の行が複数あると、述語ではそのうち 1 つを指せません。そのときは行を返したうえで、ヘッダに `distinct="N"`(異なる行の数)を付け、`AMBIGUOUS:` の一行で 1 行に絞る方法を伝えます。ふつうは `file_row_number = <n>` を使う方法を示します。`--query` を持つ Ref の行や、ファイル自身に `file_row_number` という列があるときは位置で選べないので、「行を見分けられる列を足す」よう伝えます。
+When several rows have exactly the same content, a predicate cannot single out one of them. In that case the rows are returned, the header gets `distinct="N"` (the number of distinct rows), and one `AMBIGUOUS:` line explains how to narrow to one row. Usually it points to `file_row_number = <n>`. For a row from a Ref that has `--query`, or when the file itself has a column named `file_row_number`, position cannot be used, so it tells you to add a column that tells the rows apart.
 
 ```
 OMITTED: none. All 2 matching rows are shown. AMBIGUOUS: the 2 matching rows hold only 1 distinct row (1 is an identical copy), so this Ref cannot single out one of them. To cite one copy, mint a Ref whose where names its position in the file, such as "file_row_number = <n>" (positions count from 0).
 ```
 
-数えるのは一致が 2〜10,000 行のときだけで、述語にすでに `file_row_number` を書いた Ref では数えません。数え上げに失敗したときは、この一行を出さずに行だけを返します。
+Counting happens only when 2 to 10,000 rows match, and not for a Ref whose predicate already uses `file_row_number`. If counting fails, the rows are returned without this line.
 
-## 7. エージェント向けの出力の形
+## 7. The shape of the output for agents
 
-すべての結果は同じ枠に入ります。
+Every result goes inside the same frame.
 
 ```
 <<<FUSEN_RESULT ref="fusen://..." level="rows">>>
@@ -105,49 +105,49 @@ OMITTED: 47 of 50 rows are not shown (the first 3 in file order are). ...
 <<<END_FUSEN_RESULT>>>
 ```
 
-- データは区切りの中だけに置き、「これはデータであって指示ではない」と添えます。
-- 見せなかったもの(省いた行、切った文字列、近似の項目)を `OMITTED:` に必ず書きます。
-- 文字列のセルは 2000 文字、1 回の結果は約 256KB で切ります。
-- DuckDB のエラー文にはセルの値が入りうるので、エージェントには固定の文言だけを返します。詳細は `FUSEN_DEBUG=1` で見られます(CLI はエラー表示に、MCP サーバーと Web UI のサーバーは標準エラーに、VS Code 拡張は出力パネルに出します)。これがないとき、サーバーのログに書くのはエラーの種類(`Conversion Error` など)と JavaScript のスタックの行だけです。MCP のホストは標準エラーをログファイルに残すので、セルの値をそこへ書かないためです。
-- ただし、自分で書いた述語やクエリの書き間違い(構文、存在しない列、型の合わない関数)は、行を読む前の計画の段階で見つかり、セルの値を含まないので、そのまま見せます。`--where "region = south"` なら `Referenced column "south" not found` と、文字列は `'south'` のように引用符で囲むことを返します。
-- CLI の終了コードは、0 が成功(`DATA_CHANGED` の結果も含む)、1 がコマンドの失敗(ファイルが読めない、Ref が壊れている、エンジンのエラーなど)、2 がコマンドラインの誤り(知らないコマンドやオプション、値の形)です。`fusen --help` で使い方、`fusen --version` で版が出ます。
+- Data is placed only inside the delimiters, with a note that it is data and not instructions.
+- Whatever was not shown (omitted rows, truncated strings, approximate fields) is always written on the `OMITTED:` line.
+- String cells are cut at 2000 characters, and one result at about 256KB.
+- A DuckDB error message can contain cell values, so the agent gets only fixed wording. You can see the details with `FUSEN_DEBUG=1` (the CLI shows them in the error output, the MCP server and the Web UI server on standard error, the VS Code extension in its output panel). Without it, the server log contains only the error kind (such as `Conversion Error`) and the JavaScript stack lines. MCP hosts keep standard error in a log file, so cell values must not be written there.
+- Mistakes in a predicate or query you wrote yourself (syntax, a missing column, a function with the wrong types) are caught at the planning stage, before any row is read, and contain no cell values, so they are shown as is. For `--where "region = south"` you get `Referenced column "south" not found` along with a reminder to quote strings like `'south'`.
+- CLI exit codes: 0 is success (including a `DATA_CHANGED` result), 1 is a command failure (unreadable file, broken Ref, engine error and so on), and 2 is a command-line mistake (unknown command or option, malformed value). `fusen --help` prints usage and `fusen --version` prints the version.
 
-### 個人情報のマスク
+### Masking personal data
 
-個人情報らしい値は、既定で `«masked:<種類>»` に置き換えて見せます。対象は resolve と peek の行、カードの min・max・avg です。
+Values that look like personal data are shown as `«masked:<kind>»` by default. This applies to the rows of resolve and peek, and to the min, max and avg of the card.
 
-- **列名で**: 名前が個人情報を示す列(`email`、`phone`・`tel`・`mobile`、`first_name`・`customer_name`・`owner_name` などの人名、`birth_date`・`dob`、`address`・`zip`・`postal_code`、`ssn`・`passport`・`card_number` など。`氏名`・`住所`・`電話番号`・`メールアドレス`・`生年月日` のような日本語の列名も)は、値をすべて伏せます。単なる `name` や `product_name`、データについての列(`is_mobile`、`phone_count`、`email_verified`、`address_id` など)は対象外です。
-- **値の形で**: 文字を持ちうる列(文字列、JSON、LIST・STRUCT・MAP の中も)にあるメールアドレス、電話番号、カード番号(Luhn で確かめたもの)は、その部分だけ伏せます。入れ子の値では、名前が個人情報を示すフィールド(STRUCT と JSON の `{"email": ...}`、MAP のキー `full_name` など)を丸ごと伏せます。カードの min・max が入れ子の値で、そうしたフィールドを含むときは、値全体を伏せます。全角の数字や「＠」も読みます。日時や数値の列は形を見ません。電話番号は国際形式、ハイフンかドットで区切った形、`0` で始まる 10〜11 桁で、空白だけで区切った数字の並び(座標や数の一覧)は電話とみなしません。
-- 伏せたものは `MASKED:` の一行に、列と種類と理由(列名か値か)を書きます。この行はデータの区切りの外にあるので、列名は記号や空白を含まない一語のときだけそのまま書き、それ以外は `column 3` のように位置で書きます。
+- **By column name**: for columns whose name indicates personal data, all values are hidden. That covers `email`; `phone`, `tel` and `mobile`; personal names such as `first_name`, `customer_name` and `owner_name`; `birth_date` and `dob`; `address`, `zip` and `postal_code`; `ssn`, `passport` and `card_number`; and Japanese column names such as `氏名` (name), `住所` (address), `電話番号` (phone number), `メールアドレス` (email address) and `生年月日` (date of birth). A bare `name`, `product_name`, or columns that describe the data (`is_mobile`, `phone_count`, `email_verified`, `address_id` and so on) are not masked.
+- **By value shape**: in columns that can hold text (strings, JSON, and inside LIST, STRUCT and MAP), only the part that is an email address, phone number or card number (checked with Luhn) is hidden. In nested values, a field whose name indicates personal data (`{"email": ...}` in STRUCT and JSON, a MAP key such as `full_name`) is hidden whole. When a card min or max is a nested value that contains such a field, the entire value is hidden. Full-width digits and `＠` are read too. Date-time and numeric columns are not checked for shape. Phone numbers are recognized in international format, as hyphen- or dot-separated groups, and as 10 to 11 digits starting with `0`; a run of digits separated only by spaces (coordinates, a list of numbers) is not treated as a phone number.
+- What was hidden is written on one `MASKED:` line with the column, the kind and the reason (column name or value). That line is outside the data delimiters, so a column name is written as is only when it is a single word with no symbols or spaces; otherwise it is written by position, such as `column 3`.
 
 ```
 OMITTED: none. All 2 matching rows are shown. MASKED: values that look like personal data are hidden: email (email, by column name), note (phone, email, by value). Whoever runs fusenduck can show them with --unmask.
 ```
 
-見せるには、起動する人が `--unmask` を付けます(`fusen card|peek|resolve --unmask`、`fusen-mcp --unmask`)。MCP のツールの引数では外せないので、エージェントが自分で外すことはできません。
+To show them, the person who starts fusenduck adds `--unmask` (`fusen card|peek|resolve --unmask`, `fusen-mcp --unmask`). It cannot be turned off through an MCP tool argument, so an agent cannot unmask for itself.
 
-マスクは表示だけのもので、保証ではありません。Ref の `where` は本当の値で評価するので、`email = '...'` のような述語で値を確かめることはできますし、`--query` で値の形を崩せば(`replace(email, '@', ' at ')` など)形では見つけられません。`read_text` でファイルのバイトを 1 つの文字列として読めば、列名による伏せ字も効きません。Web UI はその場にいる人が見るためのもので、行は伏せません(カードの min・max・avg は伏せます)。
+Masking is a display feature, not a guarantee. A Ref's `where` is evaluated on the real values, so a predicate like `email = '...'` can confirm a value, and if `--query` changes the shape of a value (such as `replace(email, '@', ' at ')`) it will not be found by shape. Reading the file's bytes as one string with `read_text` also defeats masking by column name. The Web UI is meant for the person sitting at it, so it does not mask rows (it does mask the card's min, max and avg).
 
-## 8. MCP サーバー
+## 8. MCP server
 
-エージェントからは MCP の 4 つのツールで同じ操作ができます。
+An agent can do the same operations through four MCP tools.
 
-| ツール | 引数 | 内容 |
+| Tool | Arguments | What it does |
 | --- | --- | --- |
-| `fusen_card` | `path` | カード |
-| `fusen_peek` | `path`, `rows?`(0〜50) | カード・最初の行・Ref |
-| `fusen_ref` | `path`, `query?`, `where?`, `columns?` | Ref を作る |
-| `fusen_resolve` | `ref`, `limit?`(0〜1000) | Ref の行を返す |
+| `fusen_card` | `path` | The card |
+| `fusen_peek` | `path`, `rows?` (0–50) | Card, first rows and Ref |
+| `fusen_ref` | `path`, `query?`, `where?`, `columns?` | Mint a Ref |
+| `fusen_resolve` | `ref`, `limit?` (0–1000) | Return the rows of a Ref |
 
-引数の型と範囲は、ツールのスキーマから生成した [MCP ツールのリファレンス](reference/mcp-tools.md) にあります。
+Argument types and ranges are in the [MCP tools reference](reference/mcp-tools.md), which is generated from the tool schemas.
 
-標準入出力(stdio)で動かすのが基本です。
+Running over standard input and output (stdio) is the default.
 
 ```sh
 fusen-mcp --root /path/to/data
 ```
 
-Claude Code などの設定例:
+An example configuration for Claude Code and similar clients:
 
 ```json
 {
@@ -160,107 +160,107 @@ Claude Code などの設定例:
 }
 ```
 
-HTTP(Streamable HTTP)でも動かせます。
+It also runs over HTTP (Streamable HTTP).
 
 ```sh
-FUSEN_MCP_TOKEN=<16 文字以上> fusen-mcp --http --port 7457 --root /path/to/data
+FUSEN_MCP_TOKEN=<at least 16 characters> fusen-mcp --http --port 7457 --root /path/to/data
 # → http://127.0.0.1:7457/mcp
 ```
 
-- 待ち受けはループバックアドレスだけです。`--host` にそれ以外を渡すと起動しません。
-- すべての要求に `Authorization: Bearer <token>` が要ります。`FUSEN_MCP_TOKEN` を渡さなければ、起動時に生成して標準エラーに表示します。
-- `Host` ヘッダーも確かめるので、DNS リバインディングで外のページから届くことはありません。
-- ブラウザーが付ける `Origin` ヘッダーがあれば、サーバー自身のループバックのオリジン以外は断ります。
-- ツールの呼び出しは同時に 4 つまで走り、16 まで順番を待ちます。それを超えた呼び出しは「the server is busy」で断るので、少し待って送り直してください。
-- 接続を切ると、走っているクエリはその場で止まります(HTTP では要求ごとに別のサーバーが応じるので、MCP の取り消し通知は届きません。止めるには接続を切ってください。stdio では取り消し通知でも止まります)。
+- It listens on loopback addresses only. If you pass anything else to `--host`, it will not start.
+- Every request needs `Authorization: Bearer <token>`. If you do not pass `FUSEN_MCP_TOKEN`, one is generated at startup and printed on standard error.
+- The `Host` header is checked too, so a page elsewhere cannot reach it through DNS rebinding.
+- If a browser sends an `Origin` header, anything other than the server's own loopback origin is refused.
+- Up to 4 tool calls run at once and up to 16 wait in line. A call beyond that is refused with "the server is busy"; wait a moment and send it again.
+- When the connection closes, a running query stops at once. (Over HTTP each request is served by a separate server, so MCP cancellation notices do not arrive; close the connection to stop a query. Over stdio a cancellation notice stops it too.)
 
 ## 9. Web UI
 
-ブラウザで表を見ながら行を選び、Ref をコピーする入口です。
+This is the entry point for looking at a table in a browser, selecting rows and copying a Ref.
 
 ```sh
-pnpm build                         # 初回だけ(SPA を apps/web/dist に出す)
+pnpm build                         # first time only (writes the SPA to apps/web/dist)
 fusen-web --root /path/to/data
 # → fusen-web: opening http://127.0.0.1:<port>/#c=<code> in your browser (the link works once, within 60 seconds)
 ```
 
-1. 既定のブラウザが自動で開きます(macOS は `open`、Windows は `rundll32`、Linux などは `xdg-open`)。開かないとき(SSH の先などディスプレイがないとき、開くコマンドが失敗したとき)はその旨を表示するので、上の URL を自分で開きます。自動で開きたくなければ `--no-open` を付けると、URL を表示するだけになります。
-2. ページの左に `--root` の下の Parquet ファイルの一覧が出ます。上の欄に打った語(空白で区切ると全部を含むもの)で絞り込み、クリックするか、↑↓ で選んで Enter で開きます。`/` でどこからでも絞り込み欄に移り、Esc で絞り込みを消します。フォルダーを足したら Reload を押します。一覧にないファイルは、上の欄にパス(絶対パス、または最初の `--root` からの相対パス)を入れて Open でも開けます。
-3. カードと、100 行ずつの表が出ます。表の `#` はファイル内の位置(0 から)です。200 文字を超えるセルは切って `…` を付け、欄に収まらないセルはマウスを載せると全文が出ます。数値の列は右に揃えます。列が 13 個以上のファイルではカードを畳んで開くので、表がすぐ見えます(見出しの「Columns and statistics」で開閉)。
-4. カードの列のチェックを外すと、その列を Ref から外し(`cols=`)、表からも消します。見出しのチェックで全部の列に戻せます。
+1. Your default browser opens automatically (`open` on macOS, `rundll32` on Windows, `xdg-open` on Linux and others). When it cannot (no display, such as over SSH, or the open command fails), fusen-web says so and you open the URL above yourself. Add `--no-open` if you do not want it to open anything; it then only prints the URL.
+2. The left of the page lists the Parquet files under `--root`. Narrow the list with the box on top (several words separated by spaces must all match), then click, or use ↑↓ and Enter, to open one. `/` jumps to the filter box from anywhere and Esc clears it. Press Reload after adding folders. A file that is not in the list can be opened by typing its path (absolute, or relative to the first `--root`) into the top box and pressing Open.
+3. You get the card and the table, 100 rows at a time. The `#` column of the table is the position in the file (from 0). Cells over 200 characters are cut with `…`, and hovering shows the full text of a cell that does not fit. Numeric columns are right-aligned. For a file with 13 or more columns the card opens collapsed so the table is visible at once (toggle with the "Columns and statistics" heading).
+4. Unchecking a column in the card removes it from the Ref (`cols=`) and hides it in the table. The checkbox in the heading brings all the columns back.
 
-ページの上の段(パス、Ref と Copy、Ref が指す範囲の説明、知らせ)はいつも見えています。表とファイルの一覧はそれぞれの中でスクロールし、表の見出しは上に残ります。
-5. 表の上の Filter rows 欄に SQL の条件(`region = 'south' AND amount > 500` など)を入れて Enter か Apply を押すと、表がその条件に合う行だけになり、合う行の数が出ます。行を選ばずに Copy すれば、条件そのものを `where=` に持つ Ref です。Clear で外します。列名の打ち間違い(そのファイルの列名を並べて示します)や書きかけの条件などは、理由を欄のすぐ下に表示し、それまでの表と条件はそのまま残ります。条件を変えると、それまでの行の選択は外れます(その旨を表示します)。
-6. 行をクリックすると 1 行、Shift+クリックで範囲、Ctrl(⌘)+クリックで行の追加と取り消しです。ページをまたいだ範囲も選べます。条件をかけた表で選んだときは、Ref は位置と条件の両方を持ちます(Shift で選んだ範囲には表に出ていない行もあるため、`(file_row_number BETWEEN 0 AND 9) AND (region = 'south')` の形)。何も選ばず条件もなければファイル全体の Ref です。選択は Clear selection で外せます。
-   キーボードでも選べます。表をクリックするか Tab で表に移り、↑↓(Home/End)で 1 行を選んで動き、Shift+↑↓ で範囲を広げ、Ctrl(⌘)+↑↓ は選ばずに動き、Space でその行を足したり外したりします。Esc で選択を外し、PageDown/PageUp でページを送ります。
-7. Copy を押すと(表にいるときは Ctrl(⌘)+C でも)、上の段に書いた範囲(どの行、どの列)の Ref がクリップボードに入り、ボタンが少しの間「Copied ✓」になります。選んだ行なら `where=file_row_number BETWEEN 10 AND 14 OR file_row_number = 40` の形です。エージェントは `fusen resolve` や MCP でそのまま解決できます。
+The top band of the page (path, Ref and Copy, a description of the range the Ref points at, notices) is always visible. The table and the file list scroll inside their own areas, and the table header stays at the top.
+5. Type a SQL condition (such as `region = 'south' AND amount > 500`) into the Filter rows box above the table and press Enter or Apply. The table then shows only the matching rows, with their count. If you Copy without selecting rows, you get a Ref whose `where=` is the condition itself. Clear removes it. A mistyped column name (the file's column names are listed), an unfinished condition and similar problems show their reason right under the box, and the previous table and condition stay as they were. Changing the condition drops the current row selection (a notice says so).
+6. Click a row to select one row, Shift+click for a range, and Ctrl (⌘)+click to add or remove a row. Ranges can span pages. When you select in a filtered table, the Ref carries both the positions and the condition (a Shift range can include rows that are not on screen, so it takes the form `(file_row_number BETWEEN 0 AND 9) AND (region = 'south')`). With no selection and no condition you get a Ref for the whole file. Clear selection drops the selection.
+   The keyboard works too. Click the table or Tab into it, then ↑↓ (Home/End) selects and moves one row, Shift+↑↓ extends the range, Ctrl (⌘)+↑↓ moves without selecting, and Space adds or removes the current row. Esc clears the selection, and PageDown/PageUp turn the page.
+7. Press Copy (or Ctrl (⌘)+C while in the table) and the Ref for the range described in the top band (which rows, which columns) goes to the clipboard, and the button briefly reads "Copied ✓". For selected rows it looks like `where=file_row_number BETWEEN 10 AND 14 OR file_row_number = 40`. An agent can resolve it directly with `fusen resolve` or over MCP.
 
-- **見たものと Ref が一致します。** ページは開いたときの指紋を持ち、Ref を作るたびにサーバーがファイルの指紋と比べます。違えば Ref を作らず「The file changed since it was opened. Open it again.」と出します。ただし列統計がすべて同じままの書き換えは指紋で見分けられません(ADR 0001)。
-- ファイルが `file_row_number` という列を持つときは、位置で選べないので選択を無効にし、その旨を表示します。条件と列の選択は使えます。
-- 条件は Ref の `where=` と同じ扱いの信用しない SQL です。1 つの単純な条件であることを確かめてから、読み取り専用のエンジンで時間を区切って動かします。表を読む関数(`read_csv` など)と `*`、`COLUMNS(*)` は使えません(前者は束縛の時点でファイルの中身を読み、後者は Ref と表で指す列が変わるため)。理由として表示するのは、行を読む前の構文・束縛・カタログのエラー(列名の打ち間違いなど)だけです。行を読んでから失敗したとき(値の変換の失敗など)は、エンジンのエラー文がセルの値を含みうるので伏せます。
-- 1 回の選択でまとめた範囲は 1,000 個までです。
-- 一覧は名前と大きさだけを読み、中身は読みません。シンボリックリンクはたどらず(ルートの外を指すものも、ルートの中を指すものも出ません)、`.` で始まるファイルとフォルダーは飛ばします。ルートごとに 5,000 ファイル(またはフォルダーの項目 10 万個)で打ち切り、その旨を表示します。
+- **What you saw and the Ref agree.** The page holds the fingerprint from when it opened the file, and the server compares it with the file's fingerprint each time a Ref is minted. If they differ, no Ref is made and you see "The file changed since it was opened. Open it again." A rewrite that leaves every column statistic the same cannot be told apart by the fingerprint (ADR 0001).
+- When a file has a column named `file_row_number`, rows cannot be selected by position, so selection is disabled and the page says so. Conditions and column selection still work.
+- A condition is untrusted SQL, handled like a Ref's `where=`. It is checked to be one simple condition, then run in the read-only engine under a time limit. Table-reading functions (`read_csv` and the like), `*` and `COLUMNS(*)` are not allowed (the former read file contents at bind time; the latter changes which columns the Ref and the table mean). The only reasons shown are syntax, binding and catalog errors found before any row is read (such as a mistyped column name). When it fails after reading rows (a failed value conversion, for example), the engine's message is withheld because it can contain cell values.
+- One selection can be merged into at most 1,000 ranges.
+- The list reads only names and sizes, never contents. Symbolic links are not followed (links pointing outside the root and links pointing inside it are both left out), and files and folders starting with `.` are skipped. Each root is cut off at 5,000 files (or 100,000 folder entries) and the page says so.
 
-守り(詳細は [ADR 0002](adr/0002-web-ui-transport.md)):
+Safeguards (details in [ADR 0002](adr/0002-web-ui-transport.md)):
 
-- 待ち受けはループバックだけで、ポートは既定で OS が選びます(`--port` で固定、`--host` はループバックのみ)。
-- ブラウザを自動で開くとき、URL は開くコマンドの引数になり、同じマシンの他の利用者から見えます。そのため URL に載るのはセッショントークンではなく、1 回だけ・60 秒だけ使える引き換えコードです。ページはそれをトークンに替えてタブの中(sessionStorage)にだけ持ち、アドレスバーから消します。URL を後から共有しても開けません。
-- API の要求はすべて、Host と Origin がサーバー自身であること、本文が JSON であること、トークンを確かめます。CORS には応じません。
-- 応答には厳しい CSP(`frame-ancestors 'none'`、`require-trusted-types-for 'script'` を含む)を付け、セルの値は文字列としてだけ表示します。
-- 同じ利用者の権限で動く他のプロセス(ブラウザ拡張を含む)は守りの外です。
-- Web UI の API は内部用で、契約ではありません(予告なく変わります)。
+- It listens on loopback only, and the OS picks the port by default (`--port` pins it; `--host` accepts loopback only).
+- When the browser is opened automatically, the URL becomes an argument of the open command and is visible to other users on the same machine. So the URL carries not a session token but a redeem code that works once, for 60 seconds. The page exchanges it for a token that lives only inside the tab (sessionStorage) and removes it from the address bar. A URL shared later will not open.
+- Every API request is checked for Host and Origin being the server itself, a JSON body and the token. CORS is not served.
+- Responses carry a strict CSP (including `frame-ancestors 'none'` and `require-trusted-types-for 'script'`), and cell values are displayed only as strings.
+- Other processes running with the same user's privileges (browser extensions included) are outside the protection.
+- The Web UI's API is internal and not a contract (it can change without notice).
 
-### VS Code 拡張
+### VS Code extension
 
-同じ画面を VS Code の中で使えます(`apps/vscode`)。エクスプローラーで `.parquet` ファイルを開くと、カードと表のエディターが開き、選び方と Copy は Web UI と同じです。Copy した Ref は VS Code のクリップボードに入ります。使い方、エラーのときの見え方、開発とパッケージ化の手順は [apps/vscode/README.md](../apps/vscode/README.md) にあります。
+You can use the same screen inside VS Code (`apps/vscode`). Open a `.parquet` file from the Explorer and an editor with the card and table opens; selecting and Copy work as in the Web UI. The copied Ref goes to VS Code's clipboard. Usage, how errors look, and development and packaging steps are in [apps/vscode/README.md](../apps/vscode/README.md).
 
 ```sh
-pnpm build                                              # 初回だけ(拡張とこの OS 向けの DuckDB を apps/vscode/dist に出す)
-code --extensionDevelopmentPath="$PWD/apps/vscode"      # 開発用に拡張を読み込んだ VS Code を開く
-pnpm --filter fusenduck package                         # この OS 向けの .vsix を apps/vscode/out に作る
+pnpm build                                              # first time only (writes the extension and DuckDB for this OS to apps/vscode/dist)
+code --extensionDevelopmentPath="$PWD/apps/vscode"      # open VS Code with the extension loaded for development
+pnpm --filter fusenduck package                         # build a .vsix for this OS in apps/vscode/out
 code --install-extension apps/vscode/out/fusenduck-<target>-0.0.0.vsix
 ```
 
-- ファイルが変わったら、上の Reload で読み直します。
-- エンジンのエラー文は画面には出さず(セルの値を含みうるため)、画面の文には `fusenduck: Show Log` で開くログを見るよう添えます。ログにはエラーの種類とスタックの行だけを書きます(`FUSEN_DEBUG=1` を付けて VS Code を起動すれば、メッセージも)。
-- DuckDB はネイティブなので、`.vsix` は VS Code のプラットフォーム(`linux-x64`、`darwin-arm64`、`win32-x64` など 8 つ)ごとに作ります。CI の `vsix` ジョブが全部を作り、Linux・macOS・Windows ではその OS 向けのものを展開して読み込み、ファイルを開けることを確かめます(`apps/vscode/smoke.ts`。VS Code 本体は起動しません)。
-- 拡張はポートを開きません。画面(webview)は拡張のホストとメッセージでだけやり取りし、エンジンが読めるのは開いたファイルのフォルダーだけです。
-- webview の CSP は、スクリプトをページごとの nonce 付きのものだけ、スタイルと画像を拡張自身のファイルだけに絞り、通信(`connect-src`)をすべて止め、`require-trusted-types-for 'script'` を付けています。
-- Marketplace や Open VSX にはまだ出していません。
+- When the file changes, press Reload at the top to read it again.
+- The engine's error message is not shown on screen (it can contain cell values); the on-screen text points you to the log opened by `fusenduck: Show Log`. The log contains only the error kind and the stack lines (and the message too if you start VS Code with `FUSEN_DEBUG=1`).
+- DuckDB is native, so a `.vsix` is built per VS Code platform (eight of them, such as `linux-x64`, `darwin-arm64` and `win32-x64`). The CI `vsix` job builds all of them, and on Linux, macOS and Windows it unpacks and loads the one for that OS and checks that a file opens (`apps/vscode/smoke.ts`; VS Code itself is not started).
+- The extension opens no port. The screen (webview) talks only to the extension host by messages, and the engine can read only the folder of the file that was opened.
+- The webview CSP allows only scripts with a per-page nonce, styles and images only from the extension's own files, blocks all connections (`connect-src`), and sets `require-trusted-types-for 'script'`.
+- It is not on the Marketplace or Open VSX yet.
 
 ## 9a. TUI
 
 ```sh
 node apps/tui/src/index.ts sales.parquet --root /path/to/data
-node apps/tui/src/index.ts --root /path/to/data     # ファイルを渡さないと、ルートの下の Parquet の一覧から選ぶ
+node apps/tui/src/index.ts --root /path/to/data     # with no file, pick from a list of Parquet files under the root
 ```
 
-端末で表を見て、行を選び、`y` で Ref をコピーします(OSC 52。使えない端末では画面の `Ref:` の行か、`q` で終わるときに標準出力へ出る行を使います)。`space` で 1 行、`v` で範囲、`/` で行の条件、`n` `p` でページ、`←` `→` で列をずらし、`c` で残す列を選び(Ref もその列だけになる)、`b` で一覧に戻る。ファイルを開く・行を読む・Ref を作る処理は Web UI と同じ `View` なので、ルートの制限、問い合わせの時計、切断での中断、ファイルが変わったときの拒否も同じです。ファイルの文字列は制御文字を印に替えてから端末に出します。キーの一覧は `apps/tui/README.md`、設計は ADR 0003 です。
+Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52; on terminals that do not support it, use the `Ref:` line on screen, or the line printed to standard output when you quit with `q`). `space` selects one row, `v` a range, `/` a row condition, `n` and `p` turn the page, `←` and `→` shift the columns, `c` chooses the columns to keep (the Ref then has only those columns), and `b` goes back to the list. Opening a file, reading rows and minting a Ref all go through the same `View` as the Web UI, so the root restriction, the query clock, cancellation on disconnect and the refusal when the file changed are the same. Strings from the file are shown in the terminal only after control characters are replaced with markers. The list of keys is in `apps/tui/README.md` and the design is in ADR 0003.
 
-## 10. 読み取り専用の守り
+## 10. Read-only safety
 
-読み取り専用は SQL の文字列検査ではなく、DuckDB の設定で強制しています。ソースを開いた直後に、開くファイルだけを許す `allowed_paths`、外部アクセスの禁止、ディスクへの書き出し(スピル)の無効化、設定の固定(`lock_configuration`)を必ずかけます。DuckDB はスピル先のディレクトリ(既定は作業ディレクトリの `.tmp`)を外部アクセスの禁止中でも読み書きさせるため、スピルは使いません。開いたファイル以外の読み取り、`COPY TO`、`ATTACH`、設定の解除がどれも拒否されることを、セキュリティテスト(`pnpm test:security`)で毎回確かめています。
+Read-only is enforced by DuckDB settings, not by inspecting SQL strings. Right after a source is opened, these are always applied: `allowed_paths` allowing only the file being opened, a ban on external access, spilling to disk disabled, and the configuration locked (`lock_configuration`). DuckDB lets the spill directory (by default `.tmp` in the working directory) be read and written even while external access is banned, so spilling is not used. The security tests (`pnpm test:security`) check every time that reading any other file, `COPY TO`, `ATTACH` and unlocking the configuration are all refused.
 
-コストの上限もあります。resolve の前に、ファイル全体の圧縮バイト数(Parquet のメタデータ)が 512MB を超えるなら止め、実行が 10 秒を超えたら打ち切ります。エンジンのメモリは 512MB までです。行はエンジンの中で一度作ってから大きさを測り、合計 8MB 分までしか読み出さず、それを超える行は `OMITTED:` に「読んでいない」と書きます(長いセルを作るクエリで、表示の前にメモリを使い尽くさないため)。データカード(card、peek)はファイルの全行を読むので、30 秒を超えたら「data card stopped after 30000 ms」で打ち切ります。
+There are cost limits too. Before a resolve, it stops if the whole file's compressed size (from the Parquet metadata) is over 512MB, and it aborts a run that takes over 10 seconds. The engine's memory is capped at 512MB. Rows are built inside the engine first and measured, and at most 8MB in total is read out; rows beyond that are noted on the `OMITTED:` line as not read (so a query that builds long cells cannot exhaust memory before display). The data card (card, peek) reads every row of the file, so it is aborted after 30 seconds with "data card stopped after 30000 ms".
 
-## 11. 品質の守り(開発者向け)
+## 11. Quality safeguards (for developers)
 
-| 仕組み | コマンド | 守るもの |
+| Mechanism | Command | What it protects |
 | --- | --- | --- |
-| lint | `pnpm lint` | ESLint(typescript-eslint) |
-| Ref の凍結コーパス | `pnpm contract:check` | `tests/contract/refs/` の Ref が、同じ項目に読めて同じ文字列に戻ること。エージェントがすでに持っている Ref を壊す変更はここで落ちる |
-| bench | `pnpm bench` | 100 万行の Parquet で、カード作成 1 秒以内、カード描画と 11 行の描画が各 1,000 トークン以内。Web UI は開く 1 秒、100 行のページ 0.2 秒、Ref の作成 0.1 秒、SPA 50KB 以内(`bench/budgets.json`)。超えたら exit 1 |
-| 再現性 | `pnpm repro:check` | HEAD のきれいな clone が lockfile から入り、ビルドでき、同じフィクスチャを同じバイトで書き、ここで作った golden の Ref を同じ文字列に解決すること(同じマシンの上での比較で、マシン間の比較ではない)。結果の表は `.scratch/repro/report.md`(CI ではジョブのサマリー) |
-| 契約リファレンス | `pnpm docs:reference` | `docs/reference/mcp-tools.md` を MCP ツールのスキーマから作り直す。古いままだと `pnpm test` が落ちる |
-| ブラウザのテスト | `pnpm test:e2e` | Chromium(playwright-core)で Web UI と VS Code 拡張の webview を動かし、コピーした Ref が選んだ行だけを返すこと、CSP、書き換え後の拒否などを確かめる(webview は拡張のホストの処理につなぐが、VS Code 本体は起動しない) |
-| CI | GitHub Actions | Linux・macOS・Windows × Node 22・24 で lint、typecheck、テスト、契約チェック。bench、ブラウザのテスト、repro:check は Linux で回し、bench と repro:check の表をジョブのサマリーに出す。VS Code 拡張の `.vsix` をプラットフォームごとに作り、各 OS で自分向けのものを読み込んで確かめる |
+| lint | `pnpm lint` | ESLint (typescript-eslint) |
+| Frozen Ref corpus | `pnpm contract:check` | That the Refs in `tests/contract/refs/` still parse to the same fields and serialize back to the same string. A change that breaks a Ref an agent already holds fails here |
+| bench | `pnpm bench` | On a 1M-row Parquet file: the card in 1 second, and the card rendering and an 11-row rendering within 1,000 tokens each. For the Web UI: open in 1 second, a 100-row page in 0.2 seconds, minting a Ref in 0.1 seconds, and the SPA within 50KB (`bench/budgets.json`). Exits 1 when exceeded |
+| Reproducibility | `pnpm repro:check` | That a clean clone of HEAD installs from the lockfile, builds, writes the same fixtures byte for byte, and resolves the golden Refs made here to the same strings (a comparison on one machine, not across machines). The result table is in `.scratch/repro/report.md` (the job summary in CI) |
+| Contract reference | `pnpm docs:reference` | Regenerates `docs/reference/mcp-tools.md` from the MCP tool schemas. If it goes stale, `pnpm test` fails |
+| Browser tests | `pnpm test:e2e` | Runs the Web UI and the VS Code extension's webview in Chromium (playwright-core) and checks that a copied Ref returns only the selected rows, the CSP, refusal after a rewrite, and more (the webview is wired to the extension host's handlers, but VS Code itself is not started) |
+| CI | GitHub Actions | lint, typecheck, tests and the contract check on Linux, macOS and Windows × Node 22 and 24. bench, browser tests and repro:check run on Linux, and the bench and repro:check tables go to the job summary. The VS Code extension's `.vsix` is built per platform, and each OS loads its own to check it |
 
-## まだできないこと
+## What it cannot do yet
 
-- Parquet 以外のソース(CSV、データベース、S3/HTTP)。
-- ファイルを移動したあとの Ref の解決。
-- npm への公開、`fusen` コマンドとしてのインストール、VS Code 拡張の公開(いまは開発用に読み込むか、CI や手元で作った `.vsix` を入れる)。
-- Web UI でのクエリ付き Ref(列の選択と条件はできますが、`q=` の集計はまだです)。
-- Ref の文法のリファレンスの生成(MCP ツールの形は生成済み。Ref の文法はこのガイドと `tests/contract/refs` の凍結コーパスが拠り所です)。
+- Sources other than Parquet (CSV, databases, S3/HTTP).
+- Resolving a Ref after the file has been moved.
+- Publishing to npm, installing as the `fusen` command, and publishing the VS Code extension (for now, load it for development, or install a `.vsix` built in CI or locally).
+- Refs with a query in the Web UI (column selection and conditions work, but `q=` aggregations do not yet).
+- A generated reference for the Ref grammar (the MCP tool shapes are generated; for the Ref grammar, this guide and the frozen corpus in `tests/contract/refs` are the source of truth).
 
-設計の経緯は [ADR 0001](adr/0001-engine-ref-rendering.md)、構想は [vision.md](vision.md) にあります。
+For the history of the design see [ADR 0001](adr/0001-engine-ref-rendering.md), and for the vision see [vision.md](vision.md).

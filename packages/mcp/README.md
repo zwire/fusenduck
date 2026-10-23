@@ -1,26 +1,26 @@
 # @fusenduck/mcp
 
-MCP サーバー `fusen-mcp`。まだ公開していないので、リポジトリから `node packages/mcp/src/index.ts` で実行します。
+The MCP server `fusen-mcp`. It is not published yet, so run it from the repository with `node packages/mcp/src/index.ts`.
 
 ```
 fusen-mcp [--root <dir>]... [--http [--host <loopback>] [--port <n>]]
 fusen-mcp --help
 ```
 
-コマンドラインの誤りは exit 2、サーバーが起動できなかったとき(ポートが使用中など)は exit 1 です。
+A command-line mistake exits with 2, and a server that could not start (port already in use, for example) exits with 1.
 
-## ツール
+## Tools
 
-引数の型と範囲の一覧は、スキーマから生成した [docs/reference/mcp-tools.md](../../docs/reference/mcp-tools.md) にあります。
+The argument types and ranges are listed in [docs/reference/mcp-tools.md](../../docs/reference/mcp-tools.md), generated from the schemas.
 
-| ツール | 引数 | 内容 |
+| Tool | Arguments | What it does |
 | --- | --- | --- |
-| `fusen_card` | `path` | data card。行の値は返さない |
-| `fusen_peek` | `path`, `rows?`(0〜50、既定 5) | カード、最初の行、ファイル全体の Ref |
-| `fusen_ref` | `path`, `query?`, `where?`, `columns?` | 選択を表す `fusen://` の Ref |
-| `fusen_resolve` | `ref`, `limit?`(0〜1000、既定 100) | Ref の行。データが変わっていたら `DATA_CHANGED` |
+| `fusen_card` | `path` | The data card. No row values are returned |
+| `fusen_peek` | `path`, `rows?` (0–50, default 5) | The card, the first rows and a Ref for the whole file |
+| `fusen_ref` | `path`, `query?`, `where?`, `columns?` | A `fusen://` Ref that stands for the selection |
+| `fusen_resolve` | `ref`, `limit?` (0–1000, default 100) | The rows of a Ref. `DATA_CHANGED` if the data changed |
 
-読めるファイルは `--root` の下だけです(既定はカレントディレクトリ、複数指定可)。ツールの説明文は固定で、データはツールの結果の区切りの中にだけ出ます。エンジンのエラー文は伏せ、標準エラーにはエラーの種類とスタックの行だけを書きます(セルの値を含みうる全文は `FUSEN_DEBUG=1` のときだけ)。
+Only files under `--root` can be read (default: the current directory; repeatable). Tool descriptions are fixed, and data appears only between the delimiters of a tool result. Engine error messages are withheld, and standard error gets only the error kind and the stack lines (the full text, which can contain cell values, only with `FUSEN_DEBUG=1`).
 
 ## stdio
 
@@ -28,15 +28,15 @@ fusen-mcp --help
 node packages/mcp/src/index.ts --root /path/to/data
 ```
 
-## HTTP(Streamable HTTP)
+## HTTP (Streamable HTTP)
 
 ```sh
-FUSEN_MCP_TOKEN=<16 文字以上> node packages/mcp/src/index.ts --http --port 7457 --root /path/to/data
+FUSEN_MCP_TOKEN=<at least 16 characters> node packages/mcp/src/index.ts --http --port 7457 --root /path/to/data
 # → http://127.0.0.1:7457/mcp
 ```
 
-- 待ち受けはループバック(`127.0.0.1`、`::1`、`localhost`)だけ。既定は `127.0.0.1:7457`。
-- すべての要求に `Authorization: Bearer <token>` が要ります。`FUSEN_MCP_TOKEN` がなければ起動時に生成して標準エラーに表示します。
-- `Host` ヘッダーも確かめ、DNS リバインディングを防ぎます。
+- It listens on loopback only (`127.0.0.1`, `::1`, `localhost`). The default is `127.0.0.1:7457`.
+- Every request needs `Authorization: Bearer <token>`. Without `FUSEN_MCP_TOKEN`, one is generated at startup and printed on standard error.
+- The `Host` header is checked too, which prevents DNS rebinding.
 
-詳しくは [docs/guide.md](../../docs/guide.md)。
+See [docs/guide.md](../../docs/guide.md) for more.

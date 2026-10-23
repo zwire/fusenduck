@@ -1,71 +1,71 @@
 # fusenduck for VS Code
 
-`.parquet` ファイルを開くと、表を見ながら行を選び、選んだ行だけを返す **Ref** をコピーできるエディターが開きます。Ref は `fusen://` で始まる 1 本の文字列で、AI エージェントは `fusen resolve` や MCP サーバー(`fusen_resolve`)でそのまま同じ行を取り出せます。画面は fusenduck の Web UI と同じです。
+Opening a `.parquet` file gives you an editor where you can look at the table, select rows, and copy a **Ref** that returns only the selected rows. A Ref is a single string starting with `fusen://`, and an AI agent can fetch exactly the same rows from it with `fusen resolve` or the MCP server (`fusen_resolve`). The screen is the same as fusenduck's Web UI.
 
-ステータス: 実験的(0.0.0、Marketplace と Open VSX には未公開)。
+Status: experimental (0.0.0, not published on the Marketplace or Open VSX).
 
-## 使い方
+## Usage
 
-1. エクスプローラーで `.parquet` ファイルを開きます(ダブルクリックで fusenduck のエディターになります。別のビューアーで開きたいときは、右クリックの「Open With…」)。
-2. 上にカード(行数、列の型、null 率、min/max)、下に 100 行ずつの表が出ます。`#` はファイル内の位置(0 から)です。
-3. 行を選びます。クリックで 1 行、Shift+クリックで範囲、Ctrl(⌘)+クリックで追加と取り消し。ページをまたいでも選べます。
-4. 必要なら絞ります。カードの列のチェックを外すとその列を Ref から外し、Filter rows 欄に SQL の条件(`region = 'south' AND amount > 500` など)を入れて Enter で、条件に合う行だけにします。
-5. **Copy** を押すと Ref がクリップボードに入ります。何も選ばなければ、ファイル全体(条件があれば条件に合う行)の Ref です。
+1. Open a `.parquet` file from the Explorer (double-clicking opens the fusenduck editor; to use another viewer, right-click and choose "Open With…").
+2. The card (row count, column types, null rates, min/max) is on top, and the table, 100 rows at a time, is below. `#` is the position in the file (from 0).
+3. Select rows. Click selects one row, Shift+click a range, and Ctrl (⌘)+click adds or removes a row. You can select across pages.
+4. Narrow things down if you need to. Unchecking a column in the card removes it from the Ref, and typing a SQL condition (such as `region = 'south' AND amount > 500`) into the Filter rows box and pressing Enter keeps only the rows that match.
+5. Press **Copy** and the Ref goes to the clipboard. If you select nothing, it is a Ref for the whole file (or for the rows that match the condition, if there is one).
 
-ファイルが書き換わったら、上の **Reload** で読み直します。開いたあとにファイルが変わると、Ref を作らずに「The file changed since it was opened. Open it again.」と出ます(見たものと違う行を指す Ref は作りません)。
+If the file is rewritten, press **Reload** at the top to read it again. If the file changes after you opened it, no Ref is made and you see "The file changed since it was opened. Open it again." (a Ref that points at different rows from the ones you saw is never made).
 
-## コマンドと設定
+## Commands and settings
 
-| コマンド | すること |
+| Command | What it does |
 | --- | --- |
-| `fusenduck: Show Log` | 出力パネルの fusenduck のログを開きます。エラーの種類(`Conversion Error` など)とスタックの行がここに出ます |
+| `fusenduck: Show Log` | Opens the fusenduck log in the Output panel. The error kind (such as `Conversion Error`) and the stack lines appear here |
 
-設定項目はありません。
+There are no settings.
 
-## うまくいかないとき
+## Troubleshooting
 
-- **「Details are withheld because they can contain values from the source.」と出る**: エンジンのエラー文はセルの値を含みうるので、画面には出しません。ログ(`fusenduck: Show Log`)にはセルの値を載せず、エラーの種類とスタックの行だけを書きます。メッセージまで見たいときは、環境変数 `FUSEN_DEBUG=1` を付けて VS Code を起動します(メッセージにはセルの値が入りえます)。
-- **「fusenduck could not load its DuckDB engine.」と出る**: 拡張に入っている DuckDB を読み込めませんでした。多いのは、別の OS や CPU 向けのビルドを入れたときです(ほかに、glibc が古い、セキュリティソフトがライブラリを止めた、など)。理由はログにあります(読み込みの失敗はインストールの問題でデータの話ではないので、メッセージ全体を書きます)。いまの環境向けのビルドを入れ直し、ウィンドウを再読み込み(`Developer: Reload Window`)します。
-- **「fusenduck opens files on this computer's disk only.」と出る**: Git の差分の左側など、ディスク上のファイルではないものは開けません。エクスプローラーからファイルを開きます。
-- **Filter rows の理由**: 列名の打ち間違いなどは理由をそのまま表示し、それまでの表と条件は残ります。表を読む関数(`read_csv` など)、`*`、`COLUMNS(*)` は使えません。
+- **"Details are withheld because they can contain values from the source."**: The engine's error message can contain cell values, so it is not shown on screen. The log (`fusenduck: Show Log`) contains no cell values, only the error kind and the stack lines. To see the message too, start VS Code with the environment variable `FUSEN_DEBUG=1` (the message can contain cell values).
+- **"fusenduck could not load its DuckDB engine."**: The DuckDB bundled in the extension could not be loaded. The usual cause is installing a build for another OS or CPU (other causes: an old glibc, security software blocking the library). The reason is in the log (a load failure is an installation problem, not a data problem, so the full message is written). Install the build for your current environment and reload the window (`Developer: Reload Window`).
+- **"fusenduck opens files on this computer's disk only."**: Things that are not files on disk, such as the left side of a Git diff, cannot be opened. Open the file from the Explorer.
+- **Filter rows reasons**: A mistyped column name and similar mistakes show their reason as is, and the previous table and condition stay. Table-reading functions (such as `read_csv`), `*` and `COLUMNS(*)` cannot be used.
 
-## 守り
+## Safety
 
-- 読み取り専用です。エンジン(DuckDB)が読めるのは開いたファイルのフォルダーだけで、外部アクセスとディスクへの書き出しを止めています。
-- ポートを開きません。画面(webview)は拡張とメッセージでだけやり取りします。webview の CSP は、スクリプトをページごとの nonce 付きのものだけ、スタイルを拡張自身のファイルだけに絞り、通信をすべて止めています。
-- セルの値は文字列としてだけ表示します。Copy でクリップボードに入れられるのは Ref だけです。
-- ワークスペースを信頼していない(Restricted Mode)ときも動きます。拡張はワークスペースの設定やスクリプトを読まず、ファイルを読み取り専用で開くだけだからです。
+- It is read-only. The engine (DuckDB) can read only the folder of the file you opened, and external access and writing to disk are switched off.
+- It opens no port. The screen (webview) talks to the extension only by messages. The webview's CSP allows only scripts with a per-page nonce and styles only from the extension's own files, and blocks all connections.
+- Cell values are displayed only as strings. The only thing Copy can put on the clipboard is a Ref.
+- It also works when the workspace is not trusted (Restricted Mode), because the extension does not read workspace settings or scripts and only opens files read-only.
 
-## 対応プラットフォーム
+## Supported platforms
 
-DuckDB はネイティブのライブラリなので、`.vsix` は VS Code のプラットフォームごとに分かれます: `win32-x64`、`win32-arm64`、`darwin-x64`、`darwin-arm64`、`linux-x64`、`linux-arm64`、`alpine-x64`、`alpine-arm64`。VS Code 1.95 以降。
+DuckDB is a native library, so the `.vsix` is split per VS Code platform: `win32-x64`, `win32-arm64`, `darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64`, `alpine-x64` and `alpine-arm64`. VS Code 1.95 or later.
 
-## 開発
+## Development
 
-リポジトリの直下で:
+From the repository root:
 
 ```sh
 pnpm install
-pnpm build                                              # apps/vscode/dist に拡張、webview、この OS 向けの DuckDB を出す
-code --extensionDevelopmentPath="$PWD/apps/vscode"      # 拡張を読み込んだ VS Code を開く
-pnpm --filter fusenduck package                         # apps/vscode/out/fusenduck-<target>-<version>.vsix を作る
-pnpm --filter fusenduck package --target win32-x64   # 別のプラットフォーム向け(DuckDB はレジストリから取り、pnpm-lock.yaml の integrity と照合)
-node apps/vscode/smoke.ts apps/vscode/out/fusenduck-linux-x64-0.0.0.vsix  # .vsix を展開して読み込み、ファイルを開けるか確かめる
-code --install-extension apps/vscode/out/fusenduck-linux-x64-0.0.0.vsix   # 作った .vsix を入れる
+pnpm build                                              # writes the extension, the webview and DuckDB for this OS to apps/vscode/dist
+code --extensionDevelopmentPath="$PWD/apps/vscode"      # open VS Code with the extension loaded
+pnpm --filter fusenduck package                         # build apps/vscode/out/fusenduck-<target>-<version>.vsix
+pnpm --filter fusenduck package --target win32-x64   # for another platform (DuckDB is fetched from the registry and checked against the integrity in pnpm-lock.yaml)
+node apps/vscode/smoke.ts apps/vscode/out/fusenduck-linux-x64-0.0.0.vsix  # unpack and load the .vsix and check that a file opens
+code --install-extension apps/vscode/out/fusenduck-linux-x64-0.0.0.vsix   # install the .vsix you built
 ```
 
-別のプラットフォーム向けに `package` したあとは `dist/native` がそのプラットフォームの DuckDB になっているので、開発に戻るときは `pnpm build` を流し直します。
+After running `package` for another platform, `dist/native` holds that platform's DuckDB, so run `pnpm build` again when you return to development.
 
-| ファイル | 中身 |
+| File | Contents |
 | --- | --- |
-| `src/extension.ts` | 読み取り専用のカスタムエディター(`*.parquet`)と `fusenduck: Show Log`。DuckDB は最初のエディターで読み込み、読み込めなければそのエディターに理由を出す |
-| `src/host.ts` | webview からのメッセージ(`init`、`open`、`rows`、`ref`、`copy`)に答える。`apps/web` の `View` を使い、開けるのはそのエディターのファイルだけ |
-| `src/html.ts` | Web UI の `index.html` に webview 用の CSP と nonce を入れる。開けないときのメッセージのページ |
-| `webview/main.ts` | Web UI の SPA を、ホストへのメッセージで動く `Api` で起動する |
-| `webview/vscode.css` | VS Code のテーマの色とフォント |
-| `build.ts` | esbuild でホスト側(core、Web UI の `View`、DuckDB の JavaScript)を `dist/extension.cjs` に 1 本にまとめ、`dist/webview.js` を作る。DuckDB のネイティブ部分は `dist/native` に置く |
-| `engine.ts` | VS Code のプラットフォームと DuckDB のバイナリの対応。バイナリを `dist/native` に置く |
-| `package.ts` | `dist` と README、LICENSE、同梱した JavaScript のライセンス(`ThirdPartyNotices.txt`)だけを別のフォルダーに並べ、vsce で `.vsix` にする |
-| `smoke.ts` | `.vsix` を、VS Code の代わりの小さな `vscode` モジュールで読み込んで動かす。読み込みは DuckDB をまだ読んでいない別プロセスで行う(読み込み済みの libduckdb が使い回され、入れ忘れが隠れないように) |
+| `src/extension.ts` | The read-only custom editor (`*.parquet`) and `fusenduck: Show Log`. DuckDB is loaded in the first editor, and if it cannot be loaded, that editor shows the reason |
+| `src/host.ts` | Answers the webview's messages (`init`, `open`, `rows`, `ref`, `copy`). Uses `apps/web`'s `View`, and can open only that editor's file |
+| `src/html.ts` | Puts the webview CSP and nonce into the Web UI's `index.html`. Also the page for the message shown when a file cannot be opened |
+| `webview/main.ts` | Starts the Web UI's SPA with an `Api` that works through messages to the host |
+| `webview/vscode.css` | VS Code's theme colors and fonts |
+| `build.ts` | Uses esbuild to bundle the host side (core, the Web UI's `View`, DuckDB's JavaScript) into one `dist/extension.cjs`, and builds `dist/webview.js`. DuckDB's native part goes in `dist/native` |
+| `engine.ts` | The mapping between VS Code platforms and DuckDB binaries. Places the binary in `dist/native` |
+| `package.ts` | Lays out only `dist`, the README, the LICENSE and the licenses of the bundled JavaScript (`ThirdPartyNotices.txt`) in a separate folder, and builds the `.vsix` with vsce |
+| `smoke.ts` | Loads and runs the `.vsix` against a small stand-in `vscode` module. The load happens in a separate process that has not read DuckDB yet (so a reused, already-loaded libduckdb does not hide a missing file) |
 
-設計は [ADR 0002](../../docs/adr/0002-web-ui-transport.md)、Ref と条件の詳しい扱いは [docs/guide.md](../../docs/guide.md) にあります。
+The design is in [ADR 0002](../../docs/adr/0002-web-ui-transport.md), and the details of how Refs and conditions are handled are in [docs/guide.md](../../docs/guide.md).
