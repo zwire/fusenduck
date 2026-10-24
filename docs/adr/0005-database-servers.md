@@ -1,6 +1,6 @@
 # ADR 0005: Read Postgres and MySQL servers through named connections
 
-- Status: Accepted (2026-10-24, takumi approved the record and asked to merge)
+- Status: Accepted (2026-10-24, takumi approved the record and asked to merge); sections 2, 3 and 6 amended 2026-10-24 after the CI probe (see "Probe results")
 - Date: 2026-10-24
 - Verdict: go (design only; no code in this change)
 
@@ -38,7 +38,7 @@ password_env = "FUSEN_WAREHOUSE_PASSWORD"   # where the secret is read from; nev
 
 The profile names the source of the secret: `password_env`, or the standard client file for the kind when it is absent (`~/.pgpass`, host-matched by libpq; for MySQL `~/.my.cnf` is read for the **password only**, and its host, socket, plugin, init-command, local-infile and ssl options are ignored). Ambient client variables that change the target or options (`PGHOST`, `PGSERVICE`, `PGOPTIONS`, `PGSSLROOTCERT`, `PGSYSCONFDIR`, `MYSQL_HOST` and the like) are ignored for these connections.
 
-The secret is read when the connection is opened and handed to the extension through a DuckDB secret, not a string a query can read back. It is never written to a Ref, a card, a log line, the spill directory or MCP output. Error text follows ADR 0001: the agent gets fixed wording, and driver text (scrubbed of host, user and password) goes to stderr only under the debug switch. Accepted: the secret is in the process environment and visible to anything with that process's rights.
+The secret is read when the connection is opened and handed to the extension through a DuckDB secret (`CREATE SECRET ... (TYPE postgres, ...)`, then `ATTACH '' ... (SECRET name)`), never inside the ATTACH string. The probe showed the string form is readable by an untrusted query (`duckdb_databases().path`, `duckdb_settings()`, `PRAGMA database_list`), while the secret form appeared in none of the catalog functions tried. It is never written to a Ref, a card, a log line, the spill directory or MCP output. Error text follows ADR 0001: the agent gets fixed wording, and driver text (scrubbed of host, user and password) goes to stderr only under the debug switch. Accepted: the secret is in the process environment and visible to anything with that process's rights.
 
 The canary test sets a distinctive password and fails if it, the host or the connection string appears in the output of `card`, `ref`, `resolve`, the MCP tools, logs or error messages (including a failed login), **and** in the result of untrusted queries after the lock: `duckdb_databases()`, `duckdb_secrets()`, `duckdb_settings()`, `duckdb_extensions()`, `EXPLAIN`, `PRAGMA`.
 
@@ -48,7 +48,8 @@ The canary test sets a distinctive password and fails if it, the host or the con
    - Postgres: table and column privileges (`has_any_column_privilege` for INSERT/UPDATE/DELETE/TRUNCATE on every table in `pg_class`), `CREATE` and `TEMP` on the database and on every schema, `rolsuper`, `rolcreaterole`, `rolcreatedb`, `rolbypassrls`, and membership of `pg_write_all_data`, `pg_write_server_files`, `pg_read_server_files` and `pg_execute_server_program`.
    - MySQL: `SHOW GRANTS FOR CURRENT_USER() USING <active roles>` is parsed; anything beyond `SELECT` (plus `USAGE`) on the connected database is refused, including `ALL PRIVILEGES`, `FILE`, `SUPER`, `PROCESS`, `GRANT OPTION` and wildcard grants that reach other databases. MariaDB is checked separately or refused.
    - Stated limits: the check cannot prove that no `SECURITY DEFINER` function or large-object function writes. A DBA who grants EXECUTE on such functions defeats it. The role is checked at open and can be granted more later; this is accepted, and the session setting below narrows it.
-2. **Session (second line, only once verified)**. The mechanism is the connection option the extension supports (Postgres: `options=-c default_transaction_read_only=on` and the extension's own read-only attach, which begins `BEGIN READ ONLY`; MySQL: an init command or the extension's read-only option), not a `SET` issued after connecting. Which option works for which extension version is confirmed by the first slice's test; until it is, this layer is not claimed. A session setting can be reset by an allowed statement, so it never replaces the role.
+2. **Read-only transaction (second line, verified)**. An `ATTACH ... (READ_ONLY)` makes the extension open every transaction as `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`, so even `postgres_execute` and a writable role were refused by the server in the probe, and the same transaction gives the single snapshot section 5 needs. The `options=-c default_transaction_read_only=on` form is also accepted and may be added as a further line.
+   Original wording, kept for the record: **Session (second line, only once verified)**. The mechanism is the connection option the extension supports (Postgres: `options=-c default_transaction_read_only=on` and the extension's own read-only attach, which begins `BEGIN READ ONLY`; MySQL: an init command or the extension's read-only option), not a `SET` issued after connecting. Which option works for which extension version is confirmed by the first slice's test; until it is, this layer is not claimed. A session setting can be reset by an allowed statement, so it never replaces the role.
 3. **Functions that write**: `postgres_execute`, `postgres_query`, `mysql_execute` and `mysql_query` are ordinary table functions that do not obey the external-access setting. The security suite must show a query cannot call them (refused by the lock, or by blocking those names), and that, if one runs, the server still refuses the write.
 
 Evidence is a refused write at rung 3 of the add-source ladder: a Postgres and a MySQL container in CI. Tests assert which layer fired: (a) the session layer disabled, a write is refused by the role alone; (b) a write-capable role is refused at open; (c) a write-capable role with only the session layer is not accepted as read-only.
@@ -77,13 +78,21 @@ DuckDB has no per-host allow list (only `allowed_paths` and `allowed_directories
 
 Order against `engine.ts` (today `allowed_paths`, `memory_limit`, `threads`, `temp_directory`, `enable_external_access=false`, bind the view, `lock_configuration=true`): for a database adapter the extension is loaded and the connection is made **before** `enable_external_access=false`, with only trusted engine statements running in that window; then the view over the one table is bound, external access is switched off and the configuration locked. Statements from a query run only afterwards.
 
+**Function guard (added after the probe).** The lock does not stop the scanner functions: after `enable_external_access=false` and `lock_configuration=true`, `postgres_scan('host=other ...')` still connects to the host it is given, and `postgres_query` runs on the attached server (inside a read-only transaction). A `CREATE SECRET` is also still accepted after the lock. So for database adapters every untrusted statement is checked before it runs:
+
+- it must be a single `SELECT` that `json_serialize_sql` accepts (every other statement type, `ATTACH`, `CALL`, `PRAGMA`, `COPY`, is refused by the parse step: "Only SELECT statements can be serialized");
+- the parse tree is walked in full (CTEs, subqueries, lateral joins, `IN` lists) and a table function that is not on a short allow list (`range`, `generate_series`, `unnest`) is refused. Names are compared in the tree's own form, which the probe showed is lower-cased and unqualified for plain, quoted and schema-qualified calls; a relation other than `data` is refused;
+- catalog functions (`duckdb_*`, `pragma_*`, `postgres_*`, `mysql_*`, `sqlite_*`) are never on the allow list.
+
+This guard is defence in depth, not the only line: the server-side role and the read-only transaction still stop a write, and the single `host:port` is only the connection the engine makes. What the guard cannot show is every way a future DuckDB version names a network-reaching function, so the first slice pins the DuckDB and extension versions and adds a test that lists the table functions of the loaded extensions and fails when a new network-capable one appears that is not refused.
+
 TLS: the default is `sslmode=verify-full` (MySQL: the equivalent require-and-verify mode) for any non-loopback host; weaker modes need an explicit profile key and the card shows a warning.
 
 Host pinning: fusenduck resolves the host itself, refuses loopback, link-local, private, unspecified, IPv4-mapped IPv6 and metadata addresses unless the profile sets `allow_private = true` (default false), and passes the resolved IP (`hostaddr=` for Postgres; the IP for MySQL, keeping the name for certificate checks) so the checked address is the one connected to.
 
 Limits: one connection (the scan is configured not to open parallel connections), plus connect, statement and lock timeouts set on the connection, because the query clock's interrupt may not stop a blocked network read. The open watchdog covers a blackholed connect.
 
-**Assumptions the first slice proves before anything else (a spike-style test, not a claim):** (1) a connection made before the lock keeps working after `enable_external_access=false` and `lock_configuration=true`; (2) after the lock a query cannot `ATTACH`, `DETACH`-then-reattach, open a second server connection, or reach `postgres_query`-style functions; (3) the extension honours the single-connection setting and the read-only connection option. Mind ADR 0004: a read-only `ATTACH` can be detached by an untrusted statement after the lock, which is why DuckDB files are opened as the engine's own database; the same care applies here, and the result decides between the engine-owned attach and the fallback. The fallback is to run the database adapter in a separate process whose engine holds the connection and exposes only the one view; a failing assumption returns to this ADR as "explore further", never as a loosening of the lock.
+**Assumptions (probe results are in "Probe results" below; the first slice turns them into tests):** (1) a connection made before the lock keeps working after `enable_external_access=false` and `lock_configuration=true`; (2) after the lock a query cannot `ATTACH`, `DETACH`-then-reattach, open a second server connection, or reach `postgres_query`-style functions; (3) the extension honours the single-connection setting and the read-only connection option. Mind ADR 0004: a read-only `ATTACH` can be detached by an untrusted statement after the lock, which is why DuckDB files are opened as the engine's own database; the same care applies here, and the result decides between the engine-owned attach and the fallback. The fallback is to run the database adapter in a separate process whose engine holds the connection and exposes only the one view; a failing assumption returns to this ADR as "explore further", never as a loosening of the lock.
 
 ## Ref (contract change, expand only)
 
@@ -134,6 +143,31 @@ Budgets: the card reads the count, key maximum, schema and N sample rows only, w
 - ADR 0004 sections 5 and 6 (the frame this ADR fills in) and `packages/core/src/engine.ts` (`allowed_paths`, `enable_external_access`, `lock_configuration` order).
 - No spike was run: the engine behaviour in section 6 is an assumption that the first slice tests first.
 - Spike code stays in `.scratch` and is not imported; the adapter is written fresh in `packages/core`.
+
+## Probe results (CI, PR #45, Postgres 16, DuckDB 1.5.6)
+
+Observed by `tests/integration/db-probe.ts`, which reports and does not assert:
+
+| Question | Observed |
+| --- | --- |
+| Connection made before the lock still works after it | Yes (read 100,000 rows after `lock_configuration=true`) |
+| Connections held with `threads=4` | 1 |
+| `ATTACH` after the lock | Refused ("Attaching Postgres databases is disabled through configuration") |
+| `DETACH` after the lock | Allowed (it only removes the data; re-attach is refused) |
+| `INSTALL` after the lock | Refused (file system disabled) |
+| `postgres_scan('host=other ...')` after the lock | **Connects** (refused only because nothing listened there) |
+| `postgres_query` after the lock | Runs, in a read-only transaction |
+| `postgres_execute` / `INSERT`, SELECT-only role | Refused by the server / by the READ_ONLY attach |
+| `postgres_execute` / `INSERT`, writable role, READ_ONLY attach | Refused by the server's read-only transaction; the table was not created |
+| `CREATE SECRET` after the lock | **Accepted** |
+| Password in the ATTACH string | **Readable** from `duckdb_databases().path`, `duckdb_settings()` and `PRAGMA database_list` |
+| Password when a secret is used | Not found in those, `duckdb_secrets()` or `duckdb_views()` |
+| Role-check queries | Run; the writable role is flagged (1), the SELECT-only role is clean (0) |
+| Parse tree (`json_serialize_sql`) | Names the function for plain, quoted, schema-qualified, CTE, subquery, lateral and `IN` forms; refuses `ATTACH`, `CALL`, `PRAGMA`, `COPY` |
+
+What this changed: the connection-then-lock model holds for the connection itself, but not for the scanner functions, hence the function guard; the credential goes through a secret; and the read-only transaction is a verified second line.
+
+Still open for the first slice: whether a secret created after the lock can be used by a query to reach another host (the guard refuses the functions that would use it, but this is to be tested), and how the fallback (a separate process) would be built if the guard proves too brittle.
 
 ## Open questions
 
