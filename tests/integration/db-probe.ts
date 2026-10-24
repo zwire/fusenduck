@@ -112,5 +112,82 @@ await observe("4b role check: database and role flags", async () =>
 await observe("4c role check on the writable role (should flag)", async () =>
   psql("fusen_rw", rwPassword, "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.relkind in ('r','p') and n.nspname not in ('pg_catalog','information_schema') and (has_any_column_privilege(c.oid,'INSERT,UPDATE') or has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE'))"));
 
+// 5. Where the password shows when it is in the connection string, and whether a secret avoids that.
+const leaks = async (q: (sql: string) => Promise<Record<string, unknown>[]>, password: string) => {
+  const found: string[] = [];
+  for (const [name, sql] of [["duckdb_databases", "SELECT * FROM duckdb_databases()"], ["duckdb_secrets", "SELECT * FROM duckdb_secrets()"], ["duckdb_settings", "SELECT * FROM duckdb_settings()"], ["database_list", "PRAGMA database_list"], ["duckdb_extensions", "SELECT * FROM duckdb_extensions()"], ["duckdb_views", "SELECT * FROM duckdb_views()"]] as const) {
+    try {
+      for (const row of await q(sql)) for (const [column, value] of Object.entries(row)) if (JSON.stringify(value)?.includes(password)) found.push(`${name}.${column}`);
+    } catch (error) {
+      found.push(`${name}: error ${(error as Error).message.slice(0, 60)}`);
+    }
+  }
+  return found.length ? `LEAKS in ${found.join(", ")}` : "no password in any of them";
+};
+{
+  const e = await engine("fusen_ro", roPassword);
+  await e.c.run("LOAD postgres");
+  await e.attach();
+  await lockdown(e.c);
+  await observe("5a password in the ATTACH string: where it shows", () => leaks(e.q, roPassword));
+}
+{
+  const instance = await DuckDBInstance.create(":memory:");
+  const c = await instance.connect();
+  const q = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
+  await c.run("LOAD postgres");
+  await observe("5b CREATE SECRET + ATTACH with the secret", async () => {
+    await c.run(`CREATE SECRET pgs (TYPE postgres, HOST ${lit(host)}, PORT ${port}, DATABASE ${lit(db)}, USER 'fusen_ro', PASSWORD ${lit(roPassword)})`);
+    await c.run("ATTACH '' AS pg (TYPE postgres, SECRET pgs, READ_ONLY)");
+  });
+  await observe("5c secret route: view, lock, read", async () => {
+    await c.run("CREATE TEMP VIEW data AS SELECT * FROM pg.public.items");
+    await c.run("SET enable_external_access=false");
+    await c.run("SET lock_configuration=true");
+    return q("SELECT count(*) AS n FROM data");
+  });
+  await observe("5d secret route: where the password shows", () => leaks(q, roPassword));
+  await observe("5e secret route: postgres_scan with the secret name from a query", () => q("SELECT * FROM postgres_scan('', 'public', 'items')"));
+  await observe("5f secret route: CREATE SECRET after the lock", () => c.run("CREATE SECRET evil (TYPE postgres, HOST '127.0.0.1', PORT 1)"));
+}
+
+// 6. What a parse tree shows, for a guard on functions that reach a server.
+{
+  const instance = await DuckDBInstance.create(":memory:");
+  const c = await instance.connect();
+  await c.run("LOAD postgres");
+  const names = (node: unknown, out: Set<string> = new Set()): Set<string> => {
+    if (Array.isArray(node)) node.forEach((n) => names(n, out));
+    else if (node && typeof node === "object") {
+      for (const [key, value] of Object.entries(node)) {
+        if ((key === "function_name" || key === "table_name") && typeof value === "string") out.add(value);
+        else names(value, out);
+      }
+    }
+    return out;
+  };
+  const cases: Record<string, string> = {
+    plain: "SELECT * FROM postgres_scan('h','public','t')",
+    quoted: 'SELECT * FROM "POSTGRES_SCAN"(\'h\',\'public\',\'t\')',
+    qualified: "SELECT * FROM main.postgres_scan('h','public','t')",
+    cte: "WITH x AS (SELECT * FROM postgres_query('pg','select 1')) SELECT * FROM x",
+    subquery: "SELECT (SELECT count(*) FROM mysql_scan('h','d','t'))",
+    lateral: "SELECT * FROM data, LATERAL (SELECT * FROM postgres_scan('h','public','t')) y",
+    in_list: "SELECT * FROM data WHERE id IN (SELECT i FROM postgres_query('pg','select 1 as i'))",
+    attach: "ATTACH 'host=x' AS z (TYPE postgres)",
+    call: "CALL postgres_execute('pg','select 1')",
+    pragma: "PRAGMA database_list",
+    copy: "COPY (SELECT 1) TO 'x.csv'",
+    secrets: "SELECT * FROM duckdb_secrets()",
+  };
+  for (const [name, sql] of Object.entries(cases)) {
+    await observe(`6 parse tree: ${name}`, async () => {
+      const rows = await (await c.runAndReadAll(`SELECT json_serialize_sql(${lit(sql)}) AS j`)).getRowObjectsJson();
+      const tree = JSON.parse(String(rows[0]!.j));
+      return tree.error ? `parse error: ${String(tree.error_message).slice(0, 80)}` : `names: ${[...names(tree)].join(",")}`;
+    });
+  }
+}
+
 const table = `## ADR 0005 database probe\n\n| Observation | Result |\n| --- | --- |\n${lines.join("\n")}\n`;
 if (process.env.GITHUB_STEP_SUMMARY) (await import("node:fs")).appendFileSync(process.env.GITHUB_STEP_SUMMARY, table);
