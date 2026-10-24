@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { FusenError } from "./errors.ts";
 import { createQuery, type Row } from "./run.ts";
 import { ident, lit } from "./sql.ts";
+import { openMysqlEngine } from "./mysql.ts";
 import { isServerSource, openServerEngine, serverOptions } from "./server.ts";
 import { createAdapter, isPattern, kindOf, type SourceAdapter, type SourceOptions } from "./source.ts";
 import { copySqlite, type SqliteCopy } from "./sqlite.ts";
@@ -149,6 +150,7 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
  */
 export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal; kind?: string; options?: SourceOptions } = {}): Promise<Engine> {
   // A table of a database server is named postgres://connection/schema.table and has no file to resolve.
+  if (/^mysql:\/\//.test(source) || opts.kind === "mysql") return openMysqlEngine(source, { ...(opts.signal ? { signal: opts.signal } : {}), options: opts.options ?? serverOptions(source) });
   if (isServerSource(source) || opts.kind === "postgres") return openServerEngine(source, { ...(opts.signal ? { signal: opts.signal } : {}), options: opts.options ?? serverOptions(source) });
   // A database file is named with its table: file.duckdb#table.
   // A file that exists under the whole name is the file.

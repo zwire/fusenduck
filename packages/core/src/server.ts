@@ -12,14 +12,14 @@ import type { SourceAdapter, SourceOptions } from "./source.ts";
  * A table of a database server (docs/adr/0005). The source is named `postgres://<connection>/<schema>.<table>`;
  * the Ref carries the connection's name and the table, never the server's address or a password.
  */
-export const isServerSource = (source: string): boolean => /^postgres:\/\//.test(source);
+export const isServerSource = (source: string): boolean => /^(postgres|mysql):\/\//.test(source);
 
 const PART = /^[^."\\\0*?]{1,63}$/;
-const CONNECTION = /^[a-z][a-z0-9_-]{0,31}$/;
+export const CONNECTION = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** The options a server Ref carries, from `postgres://conn/schema.table`. */
 export function serverOptions(source: string): SourceOptions {
-  const match = /^postgres:\/\/([^/]+)\/(.+)$/.exec(source);
+  const match = /^(?:postgres|mysql):\/\/([^/]+)\/(.+)$/.exec(source);
   if (!match) throw new FusenError("a database source is written postgres://<connection>/<schema>.<table>");
   return { conn: match[1]!, table: match[2]! };
 }
@@ -44,14 +44,14 @@ interface Relation {
 }
 
 /** How many rows are counted exactly; a larger table is estimated, so the card does not scan it twice. */
-const EXACT_COUNT_MAX = 100_000;
+export const EXACT_COUNT_MAX = 100_000;
 /** Seconds the one connection may take to be made, and milliseconds the server may spend on a statement or a lock. */
-const CONNECT_TIMEOUT_SECONDS = 10;
+export const CONNECT_TIMEOUT_SECONDS = 10;
 const STATEMENT_TIMEOUT_MS = 60_000;
 /** Rows read from each end of the key for the sample hash. */
-const SAMPLE_ROWS = 50;
+export const SAMPLE_ROWS = 50;
 /** Rows read at each of the key-range boundaries (a quarter, a half and three quarters of the way from the smallest key to the largest). */
-const BOUNDARY_ROWS = 20;
+export const BOUNDARY_ROWS = 20;
 
 const pg = (sql: string): string => `SELECT * FROM postgres_query('pg', ${lit(sql)})`;
 
@@ -112,7 +112,7 @@ export function serverAdapter(options: SourceOptions, relation?: Relation): Sour
 }
 
 /** Removes what must not leave the process from a driver's message. */
-const scrub = (text: string, secrets: string[]): string => secrets.filter(Boolean).reduce((out, secret) => out.replaceAll(secret, "***"), text);
+export const scrub = (text: string, secrets: string[]): string => secrets.filter(Boolean).reduce((out, secret) => out.replaceAll(secret, "***"), text);
 
 /** What the role may do, as one row; every count must be zero and every flag false. */
 const ROLE_CHECK = `SELECT

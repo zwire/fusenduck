@@ -132,6 +132,57 @@ jobs:
           FUSEN_PG_ADMIN_PASSWORD: admin
         run: pnpm exec vitest run tests/integration/postgres.test.ts
 
+  mysql-probe:
+    # Observes how DuckDB's mysql extension behaves under the engine's lock (docs/adr/0005 section 6).
+    # The probe reports; the MySQL source tests gate this job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: admin
+          MYSQL_DATABASE: probe
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -padmin" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      FUSEN_MY_RO_PASSWORD: ro-secret-canary-7f3a
+      FUSEN_MY_RW_PASSWORD: rw-secret-canary-91c2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create the roles and a table
+        run: |
+          mysql -h 127.0.0.1 -uroot -padmin --ssl-mode=DISABLED probe <<SQL
+          set session cte_max_recursion_depth = 200000;
+          create table items (id bigint primary key, name varchar(100));
+          insert into items select n, concat('item ', n) from (with recursive s(n) as (select 1 union all select n + 1 from s where n < 100000) select n from s) t;
+          create user 'fusen_ro'@'%' identified by '$FUSEN_MY_RO_PASSWORD';
+          create user 'fusen_rw'@'%' identified by '$FUSEN_MY_RW_PASSWORD';
+          grant select on probe.* to 'fusen_ro'@'%';
+          grant select, insert, update, delete, create, drop on probe.* to 'fusen_rw'@'%';
+          SQL
+      - name: Copy the server's CA certificate
+        run: docker cp "$(docker ps -q --filter ancestor=mysql:8.4 | head -1)":/var/lib/mysql/ca.pem "$RUNNER_TEMP/mysql-ca.pem"
+      - run: node tests/integration/mysql-probe.ts
+        env:
+          FUSEN_MY_CA: ${{ runner.temp }}/mysql-ca.pem
+      - run: pnpm extensions:fetch
+      - name: MySQL source tests
+        env:
+          FUSEN_MY_HOST: 127.0.0.1
+          FUSEN_MY_PORT: "3306"
+          FUSEN_MY_DB: probe
+          FUSEN_MY_ADMIN_PASSWORD: admin
+          FUSEN_MY_CA: ${{ runner.temp }}/mysql-ca.pem
+        run: pnpm exec vitest run tests/integration/mysql.test.ts
+
   repro:
     # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs
     # to the same text as this checkout (pnpm repro:check). The report goes to the job summary.

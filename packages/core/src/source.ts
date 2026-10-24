@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import type { Engine, Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
+import { mysqlAdapter } from "./mysql.ts";
 import { serverAdapter } from "./server.ts";
 
 /** A source that names several files: a wildcard (`*`, `?`) in the file name, never in a directory. */
@@ -418,7 +419,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
 }
 
 /** The kinds a Ref may name in `src=`. */
-export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb", "sqlite", "postgres"];
+export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb", "sqlite", "postgres", "mysql"];
 
 /** The kind a file name suggests. Anything not recognised is Parquet, as every source was before kinds existed. */
 export function kindOf(path: string): string {
@@ -440,6 +441,7 @@ export function createAdapter(name = "parquet", options?: SourceOptions): Source
     return parquet;
   }
   if (name === "postgres") return serverAdapter(options ?? {});
+  if (name === "mysql") return mysqlAdapter(options ?? {});
   if (name === "duckdb" || name === "sqlite") {
     if (!options || Object.keys(options).length === 0) return databaseAdapter({}, false, undefined, name);
     checkKeys(name, options, ["table"]);
