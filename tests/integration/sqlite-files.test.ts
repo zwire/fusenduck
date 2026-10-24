@@ -167,15 +167,80 @@ describe("a SQLite file", () => {
   });
 
   it("leaves nothing in the temporary folder once the engine is closed, or when opening fails", async () => {
-    const before = readdirSync(join(dir, "..")).filter((n) => n.startsWith("fusenduck-sqlite-"));
-    const engine = await openSource(`${many}#people`);
-    const during = readdirSync(join(dir, "..")).filter((n) => n.startsWith("fusenduck-sqlite-"));
-    expect(during.length).toBe(before.length + 1);
-    engine.close();
-    await openSource(`${many}#nothere`).catch(() => undefined);
-    await openSource(many).catch(() => undefined);
-    expect(readdirSync(join(dir, "..")).filter((n) => n.startsWith("fusenduck-sqlite-"))).toEqual(before);
+    // A temporary folder of its own, so other tests' engines do not count.
+    const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+    const own = tempDir();
+    process.env.TMPDIR = process.env.TEMP = process.env.TMP = own;
+    const only = join(dir, "quoted.sqlite");
+    writeSqlite(only, { extra: (db) => db.exec('DROP TABLE other; DROP TABLE people; CREATE TABLE "a""b"(x INTEGER)') });
+    try {
+      const engine = await openSource(`${many}#people`);
+      expect(readdirSync(own).filter((n) => n.startsWith("fusenduck-sqlite-")).length).toBe(1);
+      engine.close();
+      await openSource(`${many}#nothere`).catch(() => undefined);
+      await openSource(many).catch(() => undefined);
+      // The only table has a name that is refused after the copy was made.
+      await expect(openSource(only)).rejects.toThrow(/double quote/);
+      expect(readdirSync(own)).toEqual([]);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
+
+  it("does not count SQLite's bookkeeping tables, so an AUTOINCREMENT table opens by itself", async () => {
+    const file = join(dir, "auto.sqlite");
+    writeSqlite(file, { extra: (db) => db.exec("DROP TABLE other; DROP TABLE people; CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT); INSERT INTO t(v) VALUES ('a'); ANALYZE") });
+    const engine = await openSource(file);
+    try {
+      expect(engine.adapter.options).toEqual({ table: "t" });
+    } finally {
+      engine.close();
+    }
+  });
+
+  it("opens the other tables of a file with a view the scanner cannot prepare, and says nothing of the view", async () => {
+    const file = join(dir, "oddview.sqlite");
+    writeSqlite(file, { extra: (db) => db.exec("CREATE VIEW v AS WITH RECURSIVE c(x) AS (SELECT hex(randomblob(4)) UNION ALL SELECT x FROM c LIMIT 3) SELECT x FROM c") });
+    const engine = await openSource(`${file}#people`);
+    engine.close();
+    const error = await failure(openSource(`${file}#v`));
+    expect(error.message).not.toMatch(/randomblob|WITH RECURSIVE/);
+  });
+
+  it("reads a column that holds text in an INTEGER column as text, and never puts a value in an error", async () => {
+    const file = join(dir, "mixed.sqlite");
+    writeSqlite(file, { extra: (db) => db.exec("CREATE TABLE m(a INTEGER); INSERT INTO m VALUES (1), ('SECRET-VALUE-XYZ')") });
+    const engine = await openSource(`${file}#m`);
+    try {
+      expect((await engine.query("SELECT a FROM data ORDER BY a")).map((r) => r.a)).toEqual(["1", "SECRET-VALUE-XYZ"]);
+    } finally {
+      engine.close();
+    }
+  });
+
+  it("gives a large table with a text column the same fingerprint every time it is opened", async () => {
+    const file = join(dir, "large.sqlite");
+    const db = new DatabaseSync(file);
+    db.exec("CREATE TABLE big(id INTEGER, note TEXT)");
+    const insert = db.prepare("INSERT INTO big VALUES (?, ?)");
+    db.exec("BEGIN");
+    for (let i = 0; i < 1_500_000; i++) insert.run(i, `note ${i} ${"x".repeat(i % 40)}`);
+    db.exec("COMMIT");
+    db.close();
+    const prints = new Set<string>();
+    for (let i = 0; i < 3; i++) {
+      const engine = await openSource(file);
+      try {
+        prints.add(await engine.adapter.fingerprint(engine));
+      } finally {
+        engine.close();
+      }
+    }
+    expect(prints.size).toBe(1);
+  }, 120_000);
 
   describe("without the shipped extension", () => {
     const original = extensionDirectory();

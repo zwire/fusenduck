@@ -78,10 +78,45 @@ async function copyFile(from: string, to: string, limit: number, required: boole
   }
 }
 
+/** SQLite folds the case of ASCII letters only. */
+const ascii = (name: string): string => name.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+/** At most this many copies run at once: each reads a whole file and writes a table. */
+const MAX_COPIES = 2;
+let copying = 0;
+const waiting: (() => void)[] = [];
+async function slot(signal?: AbortSignal): Promise<() => void> {
+  while (copying >= MAX_COPIES) {
+    await new Promise<void>((resolve) => waiting.push(resolve));
+    if (signal?.aborted) throw new FusenError("the request was cancelled");
+  }
+  copying++;
+  return () => {
+    copying--;
+    waiting.shift()?.();
+  };
+}
+
 export async function copySqlite(path: string, wanted: string | undefined, signal?: AbortSignal): Promise<SqliteCopy> {
+  const done = await slot(signal);
+  try {
+    return await copyOne(path, wanted, signal);
+  } finally {
+    done();
+  }
+}
+
+async function copyOne(path: string, wanted: string | undefined, signal?: AbortSignal): Promise<SqliteCopy> {
   if (signal?.aborted) throw new FusenError("the request was cancelled");
   const dir = mkdtempSync(join(tmpdir(), "fusenduck-sqlite-"));
-  const remove = () => rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  // A folder that cannot be removed now (Windows holds a file a moment longer) must not hide the error that led here.
+  const remove = () => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    } catch {
+      // Left in the temporary folder, private to its owner.
+    }
+  };
   const copy = join(dir, "sqlite.duckdb");
   let instance: DuckDBInstance | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -107,7 +142,15 @@ export async function copySqlite(path: string, wanted: string | undefined, signa
       await connection.run(`LOAD ${lit(bundledExtension("sqlite_scanner", String(engine.v), String(engine.p)))}`);
       await connection.run(`ATTACH ${lit(join(dir, "src.sqlite"))} AS src (TYPE sqlite, READ_ONLY)`);
       await connection.run(`ATTACH ${lit(copy)} AS dst`);
-      const names = (await probe("SELECT table_name FROM information_schema.tables WHERE table_catalog = 'src' AND table_schema = 'main' ORDER BY table_name")).map((r) => String(r.table_name));
+      // From the catalog, without reading any table. SQLite's own bookkeeping tables (sqlite_sequence, sqlite_stat1) are not data.
+      const listed = async (sql: string) => (await probe(sql)).map((r) => String(r.name));
+      const names = await listed("SELECT table_name AS name FROM duckdb_tables() WHERE database_name = 'src' AND schema_name = 'main'");
+      try {
+        names.push(...(await listed("SELECT view_name AS name FROM duckdb_views() WHERE database_name = 'src' AND schema_name = 'main' AND NOT internal")));
+      } catch {
+        // A view that DuckDB cannot parse (SQLite accepts SQL that DuckDB does not) must not make the tables of the file unreadable; it is left out.
+      }
+      names.splice(0, names.length, ...names.filter((n) => !/^sqlite_/i.test(n)).sort());
       let table: string;
       if (wanted === undefined) {
         if (names.length === 0) throw new FusenError("this SQLite file has no tables");
@@ -118,11 +161,21 @@ export async function copySqlite(path: string, wanted: string | undefined, signa
         table = names[0]!;
       } else {
         // SQLite compares table names without regard to case, so does the lookup; the Ref keeps the file's spelling.
-        const found = names.find((n) => n === wanted) ?? names.find((n) => n.toLowerCase() === wanted.toLowerCase());
+        const found = names.find((n) => n === wanted) ?? names.find((n) => ascii(n) === ascii(wanted));
         if (found === undefined) throw new FusenError(`this database has no table named "${showName(wanted)}"`);
         table = found;
       }
-      await connection.run(`CREATE TABLE dst.main.${ident(table)} AS SELECT * FROM src.main.${ident(table)}`);
+      const copyTable = () => connection.run(`CREATE TABLE dst.main.${ident(table)} AS SELECT * FROM src.main.${ident(table)}`);
+      try {
+        await copyTable();
+      } catch (error) {
+        // SQLite types a value, not a column: an INTEGER column can hold text. The scanner then cannot give the column one
+        // type, so the table is read again with every column as text, which is what is in the file.
+        if (!/Mismatch Type|Conversion Error|Invalid Input/i.test(String(error))) throw error;
+        await connection.run(`DROP TABLE IF EXISTS dst.main.${ident(table)}`);
+        await connection.run("SET sqlite_all_varchar=true");
+        await copyTable();
+      }
       await connection.run("DETACH src");
       await connection.run("DETACH dst");
       return { path: copy, table, remove };
@@ -142,7 +195,9 @@ export async function copySqlite(path: string, wanted: string | undefined, signa
     if (/interrupt/i.test(message)) throw new FusenError(`copying the SQLite table took more than ${SQLITE_COPY_TIMEOUT_MS / 1000} s`);
     if (/memory/i.test(message)) throw new FusenError("the SQLite table is too large to copy within the engine's memory limit");
     if (/not a database|malformed|encrypted/i.test(message)) throw new FusenError("this file is not a readable SQLite database");
-    throw error;
+    // Anything else can quote the file's contents (a value, the SQL of a view): fixed wording, the cause on request.
+    if (process.env.FUSEN_DEBUG === "1") throw error;
+    throw new FusenError("this SQLite table could not be copied to be read (FUSEN_DEBUG=1 shows the cause, which can quote values from the file)");
   } finally {
     instance?.closeSync();
   }

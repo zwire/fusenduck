@@ -167,7 +167,12 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   let copy: SqliteCopy | undefined;
   if (adapter.name === "sqlite") {
     copy = await copySqlite(path, opts.options?.table, signal);
-    adapter = createAdapter("sqlite", { table: copy.table });
+    try {
+      adapter = createAdapter("sqlite", { table: copy.table });
+    } catch (error) {
+      copy.remove();
+      throw error;
+    }
   }
   const databasePath = copy?.path ?? path;
   let instance: DuckDBInstance;

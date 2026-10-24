@@ -391,6 +391,12 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
       return clash ? "SELECT * FROM data" : `SELECT * FROM ${from()}`;
     },
     async fingerprint(engine) {
+      if (name === "sqlite") {
+        // The copy's storage layout (segment boundaries of text columns) varies from one copy to the next, so a SQLite table
+        // is fingerprinted by its content: the row count and an order-independent hash of the rows.
+        const rows = await engine.query(`SELECT count(*)::VARCHAR AS n, coalesce(bit_xor(hash(__fusen_row)), 0)::VARCHAR AS h FROM ${from()} AS __fusen_row`);
+        return createHash("sha256").update(`sqlite:${table}:${String(rows[0]?.n)}:${String(rows[0]?.h)}`).digest("hex").slice(0, 12);
+      }
       const count = await engine.query(`SELECT count(*)::VARCHAR AS n FROM ${from()}`);
       const layout = await engine.query(
         `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, column_id::VARCHAR, column_path, segment_id::VARCHAR, segment_type,

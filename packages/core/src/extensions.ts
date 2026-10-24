@@ -61,19 +61,19 @@ export function bundledExtension(name: string, version: string, platform: string
   if (!pinned) throw new FusenError(`this kind of source needs the ${name} extension, which fusenduck does not ship for DuckDB ${version} on ${platform}`);
   const path = extensionFile(extensionDirectory(), name, version, platform);
   const missing = new FusenError(`the ${name} extension is not in this installation: run "pnpm extensions:fetch" (it is fetched at build time, never at run time)`);
-  let size: number;
+  let key: string;
   try {
     const fd = openSync(path, "r");
     try {
-      size = fstatSync(fd).size;
+      const s = fstatSync(fd);
+      // Any write to the file moves its change time, which a user cannot set back, so a rewritten file is hashed again.
+      key = `${path}:${s.size}:${s.ino}:${s.mtimeMs}:${s.ctimeMs}`;
     } finally {
       closeSync(fd);
     }
   } catch {
     throw missing;
   }
-  // The pin is checked again whenever the file changed; a file that is the same size and was rewritten is caught by the hash on the first load of the process.
-  const key = `${path}:${size}`;
   if (verified.get(key) !== pinned.sha256) {
     if (sha256File(path) !== pinned.sha256) throw new FusenError(`the ${name} extension file does not match the hash fusenduck pins for it, so it is not loaded: run "pnpm extensions:fetch"`);
     verified.set(key, pinned.sha256);
