@@ -124,6 +124,32 @@ export function loadProfile(name: string, opts: { path?: string; env?: NodeJS.Pr
   return profileOf(name, table);
 }
 
+/**
+ * The connections the file defines, by name and kind, for a screen that offers them. A profile that does not pass
+ * the checks of loadProfile is left out; a missing file is no connections. Nothing but the name and the kind leaves here.
+ */
+export function listConnections(opts: { path?: string; env?: NodeJS.ProcessEnv } = {}): { name: string; kind: string }[] {
+  const path = opts.path ?? connectionsPath(opts.env);
+  if (!existsSync(path)) return [];
+  if (process.platform !== "win32") {
+    const info = statSync(path);
+    if (info.uid !== process.getuid?.() || (info.mode & 0o022) !== 0) return [];
+  }
+  const found: { name: string; kind: string }[] = [];
+  try {
+    for (const [name, table] of parseToml(readFileSync(path, "utf8"))) {
+      try {
+        if (NAME.test(name)) found.push({ name, kind: profileOf(name, table).kind });
+      } catch {
+        // Not usable as written: loadProfile says why when it is opened.
+      }
+    }
+  } catch {
+    return [];
+  }
+  return found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
 /** The password from the profile's variable, or for Postgres the matching line of `~/.pgpass` (the password only). */
 export function readPassword(profile: Profile, env: NodeJS.ProcessEnv = process.env): string {
   if (profile.passwordEnv) {

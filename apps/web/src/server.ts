@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { describeError, FusenError, logLine, SourceChanged } from "@fusenduck/core";
+import { describeError, FusenError, listConnections, logLine, SourceChanged } from "@fusenduck/core";
 import { listFiles } from "./files.ts";
 import { tablesOf, View } from "./view.ts";
 
@@ -131,7 +131,7 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
     const body = await readJson(req);
     switch (path) {
       case "/api/files":
-        return listFiles(options.roots);
+        return { ...(await listFiles(options.roots)), connections: listConnections() };
       case "/api/tables":
         return { tables: await tablesOf(body.path as string, options.roots, signal) };
       case "/api/open": {

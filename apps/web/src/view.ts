@@ -5,6 +5,7 @@ import {
   checkPredicate,
   DEFAULT_TIMEOUT_MS,
   fingerprint,
+  isServerSource,
   FusenError,
   ManyTables,
   mintRefWith,
@@ -41,7 +42,7 @@ export interface Opened {
    * so it is selected by a column), or a file with its own column named file_row_number.
    */
   selectable: boolean;
-  /** The kind of source: parquet, csv, ndjson, json, duckdb or sqlite. */
+  /** The kind of source: parquet, csv, ndjson, json, duckdb, sqlite, postgres or mysql. */
   kind: string;
   /** The files behind the source: more than one when it was opened as a pattern. */
   files: number;
@@ -136,6 +137,9 @@ export function layoutPredicate(ranges: Range[], layout: Layout): string {
 /** The most table names offered for one database file. */
 export const MAX_TABLES = 500;
 
+/** Whether rows of this kind of source are tables, selected by a column and not by position. */
+export const isDatabaseKind = (kind: string): boolean => kind === "duckdb" || kind === "sqlite" || kind === "postgres" || kind === "mysql";
+
 /**
  * The tables of a DuckDB or SQLite file in the main schema, for the person to choose from. The file is opened read-only
  * like any source; a file with one table opens as it is.
@@ -162,7 +166,7 @@ export async function tablesOf(path: string, roots: string[], signal?: AbortSign
  * that keeps all three (a restored modified time) is not noticed by a page.
  */
 function signature(kind: string, files: string[]): string | undefined {
-  if (kind === "parquet" || kind === "duckdb") return undefined;
+  if (kind === "parquet" || kind === "duckdb" || kind === "postgres" || kind === "mysql") return undefined;
   try {
     return JSON.stringify(files.map((f) => {
       const s = statSync(f);
@@ -218,14 +222,15 @@ export class View {
    */
   static async open(path: string, roots: string[]): Promise<View> {
     if (typeof path !== "string" || path.trim() === "") throw new FusenError("give the path of a file");
-    const engine = await openSource(resolve(roots[0] ?? process.cwd(), path), { roots });
+    // A table of a database server (mysql://connection/table) names a connection, not a path.
+    const engine = await openSource(isServerSource(path) ? path : resolve(roots[0] ?? process.cwd(), path), { roots });
     try {
       const described = await engine.query("DESCRIBE SELECT * FROM data");
       const columns = described.map((c) => String(c.column_name));
       const database = engine.adapter.database;
       // A real column of that name shadows the position in a predicate (docs/adr/0001), and DuckDB
       // compares identifiers without case. A database table has no position to select by.
-      const selectable = !database && !columns.some((c) => c.toLowerCase() === "file_row_number");
+      const selectable = !database && !engine.adapter.server && !columns.some((c) => c.toLowerCase() === "file_row_number");
       // Looked at before the bytes are hashed, so a rewrite in between is not taken for the hashed bytes.
       const before = signature(engine.adapter.name, engine.files);
       const fp = await fingerprint(engine);
@@ -429,7 +434,7 @@ export class View {
       const picked = Array.isArray(ranges) && ranges.length > 0;
       if (picked && !this.opened.selectable) {
         throw new FusenError(
-          this.opened.kind === "duckdb" || this.opened.kind === "sqlite"
+          isDatabaseKind(this.opened.kind)
             ? "rows of a database table are selected by a column, such as where id = 5, not by position"
             : "this file has its own column named file_row_number, so rows cannot be selected by position",
         );

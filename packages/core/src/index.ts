@@ -9,3 +9,5 @@ export { mintRef, mintRefWith, resolveRef, SourceChanged, type MintOptions, peek
 export { FusenError, describeError, logLine } from "./errors.ts";
 export { type Masked } from "./pii.ts";
 export { setExtensionDirectory } from "./extensions.ts";
+export { listConnections } from "./connections.ts";
+export { isServerSource } from "./server.ts";

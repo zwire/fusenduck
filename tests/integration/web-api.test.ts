@@ -385,3 +385,30 @@ describe.skipIf(process.platform === "win32")("Web UI entry point: opening the b
     expect(stderr).toMatch(/could not open a browser \(\S*open exited with 1\); open the URL above yourself within 60 seconds/);
   });
 });
+
+describe("Web UI server: database connections", () => {
+  it("offers the connections by name and kind, and never an address, user or password", async () => {
+    const dir = tempDir();
+    const path = join(dir, "connections.toml");
+    writeFileSync(path, `[shop]\nkind = "mysql"\nhost = "db.internal.example"\nport = 3306\ndbname = "shopdb"\nuser = "reader_x"\nsslmode = "required"\npassword_env = "FUSEN_SHOP_PW"\n`);
+    chmodSync(path, 0o600);
+    const saved = process.env.FUSEN_CONNECTIONS;
+    process.env.FUSEN_CONNECTIONS = path;
+    const handle = await startWebServer({ roots: [dir] });
+    try {
+      const base = new URL(handle.url).origin;
+      const token = String((await call(base, "/api/session", { code: codeOf(handle.url) })).body.token);
+      const files = await call(base, "/api/files", {}, { token });
+      expect(files.body.connections).toEqual([{ name: "shop", kind: "mysql" }]);
+      expect(JSON.stringify(files.body)).not.toMatch(/db\.internal|shopdb|reader_x|FUSEN_SHOP_PW/);
+      // A table of a connection that does not exist says so, as a message the page can show.
+      const opened = await call(base, "/api/open", { path: "mysql://nope/items" }, { token });
+      expect(opened.status).not.toBe(200);
+      expect(String(opened.body.error)).toMatch(/no connection named "nope"/);
+    } finally {
+      await handle.close();
+      if (saved === undefined) delete process.env.FUSEN_CONNECTIONS;
+      else process.env.FUSEN_CONNECTIONS = saved;
+    }
+  });
+});

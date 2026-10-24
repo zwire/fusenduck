@@ -71,6 +71,11 @@
     ],
     "commands": [
       {
+        "command": "fusenduck.openTable",
+        "title": "Open Database Table…",
+        "category": "fusenduck"
+      },
+      {
         "command": "fusenduck.showLog",
         "title": "Show Log",
         "category": "fusenduck"

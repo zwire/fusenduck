@@ -52,6 +52,8 @@ export interface ListedFile {
 export interface Listed {
   roots: { root: string; files: ListedFile[]; truncated: boolean }[];
   truncated: boolean;
+  /** The database connections (names and kinds only) the person has defined; a table is opened through one. */
+  connections?: { name: string; kind: string }[];
 }
 
 export interface Api {

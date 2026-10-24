@@ -112,12 +112,13 @@ function checkbox(label: string, checked: boolean, column?: string): HTMLInputEl
 
 function showCard(opened: Opened): void {
   const slash = Math.max(opened.source.lastIndexOf("/"), opened.source.lastIndexOf("\\"));
-  const name = opened.source.slice(slash + 1);
+  const server = opened.kind === "postgres" || opened.kind === "mysql";
+  const name = server ? (opened.table ?? "") : opened.source.slice(slash + 1);
   const source = $("source");
-  const suffix = opened.table === undefined ? "" : ` #${opened.table}`;
+  const suffix = opened.table === undefined || server ? "" : ` #${opened.table}`;
   source.textContent = `${name}${suffix} — ${plural(opened.card.rows, "row")}`;
   source.title = opened.source;
-  $("source-dir").textContent = `in ${opened.source.slice(0, slash + 1)}`;
+  $("source-dir").textContent = server ? `in the ${opened.kind} connection ${opened.source.split("/")[2] ?? ""}` : `in ${opened.source.slice(0, slash + 1)}`;
   document.title = `${name} — fusenduck`;
   $<HTMLDetailsElement>("card-details").open = opened.card.columns.length <= CARD_OPEN_COLUMNS;
   const table = $<HTMLTableElement>("card");
@@ -212,7 +213,7 @@ function showSelection(): void {
     tr.setAttribute("aria-selected", String(on));
   }
   const how = !file.selectable
-    ? file.kind === "duckdb" || file.kind === "sqlite"
+    ? ["duckdb", "sqlite", "postgres", "mysql"].includes(file.kind)
       ? " This is a database table, so its rows are selected by a column, not by position: use the filter, e.g. id = 5."
       : " This file has its own column named file_row_number, so rows cannot be selected by position; use the filter instead."
     : ranges.length
@@ -409,6 +410,19 @@ function showFiles(): void {
   const items: HTMLLIElement[] = [];
   let matched = 0;
   shown = [];
+  // The connections a database table is opened through come first; choosing one asks for the table's name.
+  for (const c of listed.connections ?? []) {
+    if (!words.every((w) => c.name.toLowerCase().includes(w))) continue;
+    const entry: ListedFile = { path: `${c.kind}://${c.name}/`, name: c.name, kind: "connection", size: 0, modified: 0 };
+    const li = document.createElement("li");
+    li.id = `file-${shown.length}`;
+    li.dataset.index = String(shown.length);
+    li.setAttribute("role", "option");
+    li.title = `A ${c.kind} connection from connections.toml`;
+    li.append(span("name", c.name), span("dir", ""), span("kind", `${c.kind} connection`), span("size", ""));
+    shown.push(entry);
+    items.push(li);
+  }
   for (const { root, files } of listed.roots) {
     // Every listed name ends in an extension, so the extension would match a "q" or a "p" in every file.
     const hits = files.filter((f) => words.every((w) => f.name.toLowerCase().replace(/\.\w+$/, "").includes(w)));
@@ -495,6 +509,14 @@ async function loadFiles(): Promise<void> {
  * opened as file#table); one with a single table opens directly.
  */
 async function openListed(f: ListedFile): Promise<void> {
+  if (f.kind === "connection") {
+    // The table is named by the person: connection, then table (or schema.table for Postgres).
+    pathInput.value = f.path;
+    pathInput.focus();
+    pathInput.setSelectionRange(f.path.length, f.path.length);
+    $("hint").textContent = `Type the table after ${f.path} (for Postgres schema.table, e.g. public.items), then Open.`;
+    return;
+  }
   if ((f.kind !== "duckdb" && f.kind !== "sqlite") || !api) return open(f.path);
   if (tablesOpen.has(f.path)) {
     tablesOpen.delete(f.path);
