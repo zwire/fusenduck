@@ -55,18 +55,29 @@ CSV and JSON have no metadata to read, so the fingerprint is a hash of the bytes
 - Local files and globs: the resolved paths (or directories, with `COPY TO` and `ATTACH` still refused by the engine, as ADR 0001 requires).
 - Extensions (Excel, Avro, Iceberg, ...): bundled and version-pinned, or the format is refused. No extension is downloaded at run time.
 - ATTACH of a DuckDB or SQLite file: read-only, one path, with a security test that a write is refused.
-- Network and database servers: a separate ADR before any code. They need a host allow list, credentials read from the user's environment or standard client files and never stored or printed (a canary test must show it appears in no Ref, log or output), and a read-only role on the database side, proven by a refused write.
+- Network and database servers (Postgres, MySQL, through DuckDB's scanner extensions): a separate ADR before any code. See "Databases through DuckDB" below.
 
 The existing security tests (reading other files, `COPY TO`, `ATTACH`, unlocking the configuration, spill directory, row-size limits, query clock) run against every adapter, not only Parquet.
 
-### 6. Order
+### 6. Databases through DuckDB
+
+Databases are in scope when DuckDB can read them (DuckDB files, SQLite, and Postgres/MySQL through DuckDB's extensions). They are adapters like any other and must declare the same four things.
+
+- **Read**: a read-only `ATTACH` of exactly one database, with the scanner extension bundled and version-pinned. No extension is downloaded at run time.
+- **Row address**: a key predicate only. A table without a primary key supports queries but not row selection, and says so.
+- **Fingerprint**: no footer exists, so it is built from the row count, the maximum of a key or update-time column when one exists, and a bounded sample hash. The Ref states that the fingerprint detects change but does not guarantee reproducibility.
+- **Ref**: carries a connection profile name, not a host, user or password. The profile is resolved from the user's own environment (environment variables or standard client files). Credentials are never stored, printed or put in a Ref; a canary test must show they appear in no Ref, log line or output.
+- **Allow**: a host allow list fixed at open time, and a read-only role on the database side, proven by a refused write at rung 3 of the add-source ladder (a database container in CI), not only by our own guard.
+- **Order inside this step**: SQLite and DuckDB files first (a single local file, safe to test); Postgres and MySQL only after their own ADR on profiles, credentials and the role.
+
+### 7. Order
 
 1. Adapter layer with Parquet only. Behaviour must not change; the frozen Ref corpus and all tests pass untouched.
 2. CSV/TSV and NDJSON/JSON (this is the first slice below).
 3. Multiple files, globs and Hive partitions.
 4. Extension-based formats.
-5. DuckDB and SQLite files.
-6. Remote files and database servers (own ADR).
+5. DuckDB and SQLite files (read-only ATTACH).
+6. Remote files, and Postgres/MySQL servers (own ADR first).
 
 ## First slice
 
@@ -90,7 +101,7 @@ Steps 1 and 2. Acceptance tests (evidence is command output):
 - Passing any DuckDB table function through: the Ref could not be reproduced and the allow list could not be fixed up front.
 - Auto-detecting CSV settings at resolve time: the same Ref could return different types on different DuckDB versions.
 - Using modification time as the fingerprint: it breaks on copies and misses some edits.
-- Starting with databases: no stable row address, a weak fingerprint, and the safeguards would have to change first.
+- Starting with databases: no stable row address, a weak fingerprint, and the safeguards would have to change first. They stay in scope, later in the order.
 
 ## Open questions
 
