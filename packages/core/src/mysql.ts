@@ -5,7 +5,7 @@ import type { Engine } from "./engine.ts";
 import { bundledExtension } from "./extensions.ts";
 import { FusenError } from "./errors.ts";
 import { createQuery, type Row } from "./run.ts";
-import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions } from "./server.ts";
+import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions, STATEMENT_TIMEOUT_MS } from "./server.ts";
 import { ident, lit } from "./sql.ts";
 import type { SourceAdapter, SourceOptions } from "./source.ts";
 
@@ -36,7 +36,41 @@ interface Relation {
   integerKey: boolean;
 }
 
-const ONE = (sql: string): string => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
+/**
+ * A statement of ours, sent to the server as it is written. The extension has no timeout for the secret or the attach, a
+ * SET cannot be sent through it, and DuckDB's interrupt does not reach a statement the server is still working on
+ * (probe, docs/adr/0005, "What the first slice does not do yet"), so the statement carries its own limit as an optimizer hint: the server stops it.
+ */
+export const serverStatement = (sql: string, ms = STATEMENT_TIMEOUT_MS): string => {
+  if (!Number.isInteger(ms) || ms < 1 || ms > 4_294_967_295) throw new FusenError("a statement time limit is a whole number of milliseconds, at most 4294967295");
+  const hinted = sql.replace(/^\s*select\s/i, `select /*+ MAX_EXECUTION_TIME(${ms}) */ `);
+  // A statement that does not begin with select would run without the limit, silently.
+  if (hinted === sql) throw new FusenError("a statement sent to the server must begin with select, so that it can carry its time limit");
+  return hinted;
+};
+
+/**
+ * Runs a statement of ours on the server. The server's own words for a stopped statement are told as that; the
+ * extension's generic "Failed to fetch result row" is told so only when the statement ran as long as the limit, since
+ * a dropped connection reads the same.
+ */
+async function ran(engine: Engine, sql: string): Promise<Row[]> {
+  const started = Date.now();
+  try {
+    return await engine.query(ONE(sql));
+  } catch (error) {
+    const text = String(error);
+    const stopped =
+      /maximum statement execution time|Query execution was interrupted/i.test(text) ||
+      (/Failed to fetch result row/i.test(text) && Date.now() - started >= STATEMENT_TIMEOUT_MS * 0.9);
+    if (stopped) {
+      throw new FusenError(`the server stopped the statement at its limit of ${STATEMENT_TIMEOUT_MS / 1000} s (a very large table, or a busy server); try again or ask the DBA`);
+    }
+    throw error;
+  }
+}
+
+const ONE = (sql: string, ms?: number): string => `SELECT * FROM mysql_query('my', ${lit(serverStatement(sql, ms))})`;
 
 export function mysqlAdapter(options: SourceOptions, relation?: Relation): SourceAdapter {
   const { table } = checkOptions(options);
@@ -78,14 +112,14 @@ export function mysqlAdapter(options: SourceOptions, relation?: Relation): Sourc
         ${edge("asc", SAMPLE_ROWS)} as head, ${edge("desc", SAMPLE_ROWS)} as tail, ${middle.length ? `concat_ws('|', ${middle.join(", ")})` : "''"} as mid,
         database() as db, @@server_uuid as sys`;
       // One statement, so the count, the key and the samples come from one snapshot (the attach is a READ ONLY transaction).
-      const row = (await engine.query(ONE(sql)))[0] ?? {};
+      const row = (await ran(engine, sql))[0] ?? {};
       return createHash("sha256")
         .update(`mysql:${["n", "maxkey", "cols", "head", "tail", "mid", "db", "sys"].map((k) => String(row[k])).join(":")}`)
         .digest("hex")
         .slice(0, 12);
     },
     async scanBytes(engine) {
-      const row = (await engine.query(ONE(`select data_length + index_length as bytes from information_schema.tables where table_schema = database() and table_name = ${lit(table)}`)))[0];
+      const row = (await ran(engine, `select data_length + index_length as bytes from information_schema.tables where table_schema = database() and table_name = ${lit(table)}`))[0];
       return Number(row?.bytes ?? 0);
     },
   };
@@ -101,7 +135,18 @@ const ROLE_CHECK = `select
   (select count(*) from information_schema.schema_privileges where privilege_type <> 'SELECT' or is_grantable <> 'NO') as schema_privileges,
   (select count(*) from information_schema.table_privileges where privilege_type <> 'SELECT' or is_grantable <> 'NO') as table_privileges,
   (select count(*) from information_schema.column_privileges where privilege_type <> 'SELECT' or is_grantable <> 'NO') as column_privileges,
-  current_role() as active_role`;
+  current_role() as active_role,
+  version() as server_version`;
+
+/** The time limit is an optimizer hint, which MariaDB and MySQL before 5.7.8 ignore: without it a statement would have no limit. */
+export function versionProblem(version: unknown): string | undefined {
+  const text = String(version ?? "");
+  if (/mariadb/i.test(text)) return "MariaDB ignores the statement time limit fusenduck sends, so it is not supported";
+  const [major = 0, minor = 0, patch = 0] = (/^(\d+)\.(\d+)\.(\d+)/.exec(text) ?? []).slice(1).map(Number);
+  if (!major) return "the server did not say which version it is";
+  if (major < 5 || (major === 5 && (minor < 7 || (minor === 7 && patch < 8)))) return `MySQL ${text} is older than 5.7.8 and ignores the statement time limit fusenduck sends`;
+  return undefined;
+}
 
 export function roleProblems(row: Row): string[] {
   const found: string[] = [];
@@ -177,11 +222,15 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
     }
     if (opts.signal?.aborted) throw new FusenError("the request was cancelled");
     let problems: string[];
+    let version: string | undefined;
     try {
-      problems = roleProblems((await server(ROLE_CHECK))[0] ?? {});
+      const row = (await server(ROLE_CHECK))[0] ?? {};
+      problems = roleProblems(row);
+      version = versionProblem(row.server_version);
     } catch (error) {
       throw failed("could not check the role", error);
     }
+    if (version) throw new FusenError(`connection "${conn}": ${version}`);
     if (problems.length) {
       throw new FusenError(`connection "${conn}": the database role must only be able to read, but ${problems.join(" and ")}. Use a role with SELECT only.`);
     }

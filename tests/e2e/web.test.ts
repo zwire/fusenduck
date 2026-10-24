@@ -30,7 +30,9 @@ describe("Web UI in Chromium", () => {
   const open = async (path: string) => {
     await page.fill("#path", path);
     await page.click("#open");
-    await page.waitForFunction((p) => document.getElementById("source")?.title === p, path);
+    // Opening a file that is already open shows the same title and rows at once, so wait for the
+    // open itself to end ("Opening…" is said as the click is handled): the page is reset when it does.
+    await page.waitForFunction((p) => document.getElementById("source")?.title === p && document.getElementById("status")?.textContent !== "Opening…", path);
     await page.waitForSelector("#rows tbody tr");
   };
   const row = (pos: number) => page.locator(`#rows tbody tr[data-pos="${pos}"]`);

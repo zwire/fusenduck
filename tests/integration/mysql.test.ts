@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { serverStatement } from "../../packages/core/src/mysql.ts";
 import { View } from "../../apps/web/src/view.ts";
 import { buildCard, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 
@@ -149,6 +150,26 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
       expect(ref).not.toContain(RO);
     } finally {
       await view.close();
+    }
+  });
+
+  it("puts a limit on its own statements: the server stops a long one", async () => {
+    expect(serverStatement("select 1")).toBe("select /*+ MAX_EXECUTION_TIME(60000) */ 1");
+    expect(() => serverStatement("with x as (select 1) select * from x")).toThrow(/must begin with select/);
+    expect(() => serverStatement("select 1", 0)).toThrow(/whole number/);
+    const engine = await openSource("mysql://ro/items");
+    try {
+      const heavy = "select sum(a.id * b.id) as s from items a join items b on a.id % 1000 = b.id % 1000";
+      const sent = (text: string) => `SELECT * FROM mysql_query('my', '${text}')`;
+      const started = Date.now();
+      expect((await engine.query(sent(heavy)))[0]).toBeDefined();
+      // The same statement takes longer than the limit below, so only the limit can be why it fails.
+      expect(Date.now() - started).toBeGreaterThan(150);
+      const limited = Date.now();
+      await expect(engine.query(sent(serverStatement(heavy, 100)))).rejects.toThrow(/Failed to fetch result row/);
+      expect(Date.now() - limited).toBeLessThan(2000);
+    } finally {
+      engine.close();
     }
   });
 

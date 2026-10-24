@@ -219,6 +219,120 @@ for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_id
   }
 }
 
+// 11. Can the server be made to stop a long statement? (No timeout option is known for the secret or the attach.)
+{
+  const slow = "select count(*) as n from items a join items b join items c";
+  const through = (sql: string) => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
+  const e = await engine("fusen_ro", roPassword);
+  await e.attach();
+  await observe("11a duckdb settings that mention mysql", async () => e.q("select name from duckdb_settings() where name like '%mysql%' or name like '%timeout%'"));
+  await observe("11b SET SESSION max_execution_time through mysql_query", async () => e.q(through("set session max_execution_time = 1000")));
+  await observe("11c max_execution_time seen by 8 later statements (one connection or several?)", async () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 8; i++) seen.add(JSON.stringify(await e.q(through("select @@session.max_execution_time as t, connection_id() as id"))));
+    return [...seen];
+  });
+  await observe("11d a slow statement through mysql_query after that SET: how long, what error", async () => {
+    const start = Date.now();
+    try {
+      await e.q(through(slow));
+      return `finished in ${Date.now() - start} ms`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message}`;
+    }
+  });
+  for (const key of ["CONNECT_TIMEOUT 5", "READ_TIMEOUT 5", "TIMEOUT 5", "INIT_COMMAND 'set session max_execution_time=1000'"]) {
+    const x = await engine("fusen_ro", roPassword, `, ${key}`);
+    await observe(`11e secret key ${key}`, async () => {
+      await x.attach();
+      return x.q(through("select @@session.max_execution_time as t"));
+    });
+  }
+  const slept = await engine("fusen_ro", roPassword);
+  await slept.attach();
+  await observe("11f interrupt of a blocked statement (select sleep(8)): how long until it returns", async () => {
+    const start = Date.now();
+    setTimeout(() => slept.c.interrupt(), 1000);
+    try {
+      await slept.q(through("select sleep(8) as s"));
+      return `finished in ${Date.now() - start} ms`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message}`;
+    }
+  });
+}
+
+// 12. Hints, the extension's settings, and a kill from another connection.
+{
+  const through = (alias: string, sql: string) => `SELECT * FROM mysql_query('${alias}', ${lit(sql)})`;
+  const timed = async (fn: () => Promise<unknown>) => {
+    const start = Date.now();
+    try {
+      const value = await fn();
+      return `finished in ${Date.now() - start} ms ${JSON.stringify(value).slice(0, 120)}`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message}`;
+    }
+  };
+  const e = await engine("fusen_ro", roPassword);
+  await e.attach();
+  const names = (await e.q("select name from duckdb_settings() where name like 'mysql%' order by name")).map((r) => String((r as { name: string }).name));
+  for (let i = 0; i < names.length; i += 8) say(`12a mysql settings ${i / 8 + 1}`, names.slice(i, i + 8).join(" "));
+  await observe("12b hint MAX_EXECUTION_TIME(1000) on select sleep(5)", async () => timed(() => e.q(through("my", "select /*+ MAX_EXECUTION_TIME(1000) */ sleep(5) as s"))));
+  const heavy = "select sum(a.id * b.id) as s from items a join items b on a.id % 1000 = b.id % 1000";
+  await observe("12c the heavy join without a hint", async () => timed(() => e.q(through("my", heavy))));
+  await observe("12d the heavy join with MAX_EXECUTION_TIME(300)", async () => timed(() => e.q(through("my", heavy.replace("select", "select /*+ MAX_EXECUTION_TIME(300) */")))));
+  await observe("12e hint on a scan-shaped statement through the view's own scan (no hint possible): count over my.items", async () => timed(() => e.q("select count(*) as n from my.items")));
+
+  // A second, separate attach used only to kill the first one's statement.
+  const k = await engine("fusen_ro", roPassword);
+  await k.attach();
+  const killer = await DuckDBInstance.create(":memory:");
+  const kc = await killer.connect();
+  await kc.run("INSTALL mysql");
+  await kc.run("LOAD mysql");
+  await kc.run(`CREATE SECRET mys (TYPE mysql, HOST ${lit(host)}, PORT ${port}, DATABASE ${lit(db)}, USER 'fusen_ro', PASSWORD ${lit(roPassword)})`);
+  await kc.run("ATTACH '' AS my2 (TYPE mysql, SECRET mys)");
+  await observe("12f KILL QUERY through mysql_execute on a writable attach, as the SELECT-only role", async () => {
+    const running = timed(() => k.q(through("my", "select sleep(8) as s")));
+    await new Promise((r) => setTimeout(r, 1000));
+    const ids = (await (await kc.runAndReadAll(through("my2", "select id from information_schema.processlist where info like '%sleep(8)%' and info not like '%processlist%'"))).getRowObjectsJson()) as { id: string }[];
+    const killed = await kc.run(`CALL mysql_execute('my2', ${lit(`KILL QUERY ${Number(ids[0]?.id)}`)})`).then(() => "kill sent", (error) => `kill failed: ${(error as Error).message}`);
+    return `${killed}; ids ${JSON.stringify(ids)}; the statement: ${await running}`;
+  });
+}
+
+// 13. The extension's own timeout and hint settings.
+{
+  const through = (sql: string) => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
+  const timed = async (fn: () => Promise<unknown>) => {
+    const start = Date.now();
+    try {
+      const value = await fn();
+      return `finished in ${Date.now() - start} ms ${JSON.stringify(value).slice(0, 120)}`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message.slice(0, 200)}`;
+    }
+  };
+  const heavy = "select sum(a.id * b.id) as s from items a join items b on a.id % 1000 = b.id % 1000";
+  const e = await engine("fusen_ro", roPassword);
+  await observe("13a the settings, with defaults and descriptions", async () =>
+    e.q("select name, value, description from duckdb_settings() where name like 'mysql_query_timeout%' or name like 'mysql_hint%' or name = 'mysql_pool_wait_timeout_millis'"),
+  );
+  await e.c.run("SET mysql_query_timeout_enabled=true");
+  await e.c.run("SET mysql_query_timeout_min_ms=300");
+  await e.c.run("SET mysql_query_timeout_max_ms=300");
+  await e.attach();
+  await observe("13b heavy join through mysql_query with the extension's timeout at 300 ms", async () => timed(() => e.q(through(heavy))));
+  await observe("13c select sleep(5) through mysql_query with the timeout", async () => timed(() => e.q(through("select sleep(5) as s"))));
+  await e.c.run("SET mysql_debug_show_queries=true");
+  await observe("13d a scan with the timeout on (the statement it sends is printed above this line)", async () => timed(() => e.q("select count(*) as n from my.items where id < 10")));
+  await observe("13e a scan with a filter the server cannot do quickly: where name like '%99%'", async () => timed(() => e.q("select count(*) as n from my.items where name like '%99%'")));
+  await e.c.run("SET mysql_debug_show_queries=false");
+  await e.c.run("SET mysql_query_timeout_enabled=false");
+  await observe("13f the same heavy join with the timeout off again", async () => timed(() => e.q(through(heavy))));
+}
+
 const summary = process.env.GITHUB_STEP_SUMMARY;
 if (summary) {
   const { appendFileSync } = await import("node:fs");

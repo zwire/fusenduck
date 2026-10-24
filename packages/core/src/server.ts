@@ -47,7 +47,7 @@ interface Relation {
 export const EXACT_COUNT_MAX = 100_000;
 /** Seconds the one connection may take to be made, and milliseconds the server may spend on a statement or a lock. */
 export const CONNECT_TIMEOUT_SECONDS = 10;
-const STATEMENT_TIMEOUT_MS = 60_000;
+export const STATEMENT_TIMEOUT_MS = 60_000;
 /** Rows read from each end of the key for the sample hash. */
 export const SAMPLE_ROWS = 50;
 /** Rows read at each of the key-range boundaries (a quarter, a half and three quarters of the way from the smallest key to the largest). */
