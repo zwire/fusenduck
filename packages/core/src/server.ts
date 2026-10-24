@@ -41,7 +41,10 @@ interface Relation {
 }
 
 /** How many rows are counted exactly; a larger table is estimated, so the card does not scan it twice. */
-const EXACT_COUNT_MAX = 5_000_000;
+const EXACT_COUNT_MAX = 100_000;
+/** Seconds the one connection may take to be made, and milliseconds the server may spend on a statement or a lock. */
+const CONNECT_TIMEOUT_SECONDS = 10;
+const STATEMENT_TIMEOUT_MS = 60_000;
 /** Rows read from each end of the key for the sample hash. */
 const SAMPLE_ROWS = 50;
 
@@ -80,12 +83,12 @@ export function serverAdapter(options: SourceOptions, relation?: Relation): Sour
         ${keys.length ? `(SELECT row(${order})::text FROM ${stored} ORDER BY ${keys.map((k) => `${ident(k)} DESC`).join(", ")} LIMIT 1)` : "''"} AS maxkey,
         (SELECT md5(string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text, ',' ORDER BY a.attnum))
            FROM pg_attribute a WHERE a.attrelid = ${regclass}::regclass AND a.attnum > 0 AND NOT a.attisdropped) AS cols,
-        ${sample("ASC")} AS head, ${sample("DESC")} AS tail, current_database() AS db, system_identifier::text AS sys
-        FROM pg_control_system()`;
+        ${sample("ASC")} AS head, ${sample("DESC")} AS tail, current_database() AS db,
+        (SELECT oid FROM pg_database WHERE datname = current_database())::text AS sys`;
       // One statement, so the count, the key and the sample come from one snapshot (the attach is a READ ONLY transaction).
       const row = (await engine.query(pg(sql)))[0] ?? {};
       return createHash("sha256")
-        .update(`postgres:${["n", "maxkey", "cols", "head", "tail", "db", "sys"].map((k) => String(row[k])).join(":")}`)
+        .update(`postgres:${exact ? "exact" : "estimate"}:${["n", "maxkey", "cols", "head", "tail", "db", "sys"].map((k) => String(row[k])).join(":")}`)
         .digest("hex")
         .slice(0, 12);
     },
@@ -103,12 +106,12 @@ const scrub = (text: string, secrets: string[]): string => secrets.filter(Boolea
 /** What the role may do, as one row; every count must be zero and every flag false. */
 const ROLE_CHECK = `SELECT
   (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE c.relkind IN ('r','p','v','m','f') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+     WHERE c.relkind IN ('r','p','v','m','f','S') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_%'
        AND (has_any_column_privilege(c.oid, 'INSERT,UPDATE') OR has_table_privilege(c.oid, 'INSERT,UPDATE,DELETE,TRUNCATE')))::int AS writable_tables,
   has_database_privilege(current_database(), 'CREATE') AS database_create,
   (SELECT count(*) FROM pg_namespace n WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_%'
      AND has_schema_privilege(n.oid, 'CREATE'))::int AS creatable_schemas,
-  coalesce((SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolbypassrls FROM pg_roles WHERE rolname = current_user), true) AS powerful_role,
+  coalesce((SELECT bool_or(r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolbypassrls) FROM pg_roles r WHERE pg_has_role(current_user, r.oid, 'member')), true) AS powerful_role,
   coalesce((SELECT bool_or(pg_has_role(current_user, r.oid, 'member')) FROM pg_roles r
      WHERE r.rolname IN ('pg_write_all_data','pg_write_server_files','pg_read_server_files','pg_execute_server_program')), false) AS predefined_role`;
 
@@ -128,6 +131,11 @@ function roleProblems(row: Row): string[] {
  */
 export async function openServerEngine(source: string, opts: { signal?: AbortSignal; options?: SourceOptions } = {}): Promise<Engine> {
   const options = opts.options ?? serverOptions(source);
+  // A Ref's source text and its settings name one table; if they disagree, neither is trusted.
+  if (isServerSource(source)) {
+    const named = serverOptions(source);
+    if (named.conn !== options.conn || named.table !== options.table) throw new FusenError("the source and the settings of this Ref name different tables");
+  }
   const { conn, schema, table } = checkOptions(options);
   const profile: Profile = loadProfile(conn);
   if (profile.kind !== "postgres") throw new FusenError(`connection "${conn}" is not a Postgres connection`);
@@ -136,13 +144,16 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
   const instance = await DuckDBInstance.create(":memory:");
   const connection = await instance.connect();
   const release = () => {
-    connection.closeSync();
-    instance.closeSync();
+    try {
+      connection.closeSync();
+    } finally {
+      instance.closeSync();
+    }
   };
   const probe = async (sql: string): Promise<Row[]> => (await connection.runAndReadAll(sql)).getRowObjectsJson() as Row[];
   const debug = process.env.FUSEN_DEBUG === "1";
   const failed = (what: string, error: unknown): FusenError =>
-    new FusenError(`${what} for connection "${conn}"${debug ? `: ${scrub(String(error), [password, profile.host, address])}` : " (FUSEN_DEBUG=1 shows the driver's message)"}`);
+    new FusenError(`${what} for connection "${conn}"${debug ? `: ${scrub(String(error), [password, profile.host, address, profile.user, profile.dbname])}` : " (FUSEN_DEBUG=1 shows the driver's message)"}`);
   try {
     await connection.run("SET memory_limit='512MB'");
     await connection.run("SET threads=4");
@@ -159,10 +170,21 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
       await connection.run(
         `CREATE SECRET fusen_pg (TYPE postgres, HOST ${lit(profile.host)}, PORT ${profile.port}, DATABASE ${lit(profile.dbname)}, USER ${lit(profile.user)}, PASSWORD ${lit(password)})`,
       );
-      await connection.run(`ATTACH ${lit(`hostaddr=${address} sslmode=${profile.sslmode}`)} AS pg (TYPE postgres, SECRET fusen_pg, READ_ONLY)`);
+      // libpq fills in whatever the string leaves out from PG* variables of the environment (PGHOST, PGSERVICE, PGOPTIONS,
+      // PGSSLROOTCERT ...); the profile alone decides, so they are set aside while the one connection is made.
+      const set = Object.entries(process.env).filter(([name]) => /^PG/i.test(name));
+      for (const [name] of set) delete process.env[name];
+      try {
+        await connection.run(
+          `ATTACH ${lit(`hostaddr=${address} sslmode=${profile.sslmode} connect_timeout=${CONNECT_TIMEOUT_SECONDS} options='-c statement_timeout=${STATEMENT_TIMEOUT_MS} -c lock_timeout=${STATEMENT_TIMEOUT_MS} -c idle_in_transaction_session_timeout=${STATEMENT_TIMEOUT_MS}'`)} AS pg (TYPE postgres, SECRET fusen_pg, READ_ONLY)`,
+        );
+      } finally {
+        for (const [name, value] of set) process.env[name] = value;
+      }
     } catch (error) {
       throw failed("could not connect", error);
     }
+    if (opts.signal?.aborted) throw new FusenError("the request was cancelled");
     let problems: string[];
     try {
       problems = roleProblems((await probe(pg(ROLE_CHECK)))[0] ?? {});
@@ -176,7 +198,7 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
     try {
       const rows = await probe(
         pg(`SELECT c.relkind::text AS kind, c.reltuples::float8::text AS tuples,
-              (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM pg_index i
+              (SELECT string_agg(a.attname, chr(31) ORDER BY k.ord) FROM pg_index i
                  CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
                  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
                 WHERE i.indrelid = c.oid AND i.indisprimary) AS keys
@@ -186,7 +208,7 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
       const row = rows[0];
       if (!row) throw new FusenError(`connection "${conn}" has no table "${schema}.${table}"`);
       if (row.kind !== "r" && row.kind !== "p") throw new FusenError(`"${schema}.${table}" is not a table (views, materialized views and foreign tables are not supported)`);
-      relation = { keys: row.keys ? String(row.keys).split(",") : [], tuples: Number(row.tuples) };
+      relation = { keys: row.keys ? String(row.keys).split("\u001f") : [], tuples: Number(row.tuples) };
     } catch (error) {
       if (error instanceof FusenError) throw error;
       throw failed("could not read the table", error);

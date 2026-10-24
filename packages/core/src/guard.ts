@@ -17,17 +17,13 @@ const refused = (what: string) => new FusenError(`a query over a database may no
 type Node = Record<string, unknown>;
 const isNode = (value: unknown): value is Node => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Every name a CTE gives, so that a reference to it is not mistaken for a reference to another relation. */
-function cteNames(node: unknown, out: Set<string>): void {
-  if (Array.isArray(node)) {
-    for (const item of node) cteNames(item, out);
-  } else if (isNode(node)) {
-    const map = node.cte_map;
-    if (isNode(map) && Array.isArray(map.map)) for (const entry of map.map) if (isNode(entry) && typeof entry.key === "string") out.add(entry.key);
-    for (const value of Object.values(node)) cteNames(value, out);
-  }
-}
+/** Table expressions that are never allowed, wherever the parse tree nests them. */
+const DENIED_TABLE_REFS = new Set(["PIVOT", "SHOW_REF", "DELIM_GET", "COLUMN_DATA", "CTE"]);
 
+/** Scalar functions that read the engine or its host; the list is a floor, the rest is the lock's job. */
+const DENIED_SCALARS = new Set(["getenv", "current_setting", "nextval", "currval", "query", "query_table"]);
+
+/** `ctes` holds the CTE names visible at this point: a CTE is in scope only inside the SELECT that defines it. */
 function walk(node: unknown, ctes: Set<string>, relation: string): void {
   if (Array.isArray(node)) {
     for (const item of node) walk(item, ctes, relation);
@@ -35,6 +31,16 @@ function walk(node: unknown, ctes: Set<string>, relation: string): void {
   }
   if (!isNode(node)) return;
   const kind = node.type;
+  const map = node.cte_map;
+  if (isNode(map) && Array.isArray(map.map) && map.map.length) {
+    ctes = new Set(ctes);
+    for (const entry of map.map) if (isNode(entry) && typeof entry.key === "string") ctes.add(entry.key);
+  }
+  if (typeof kind === "string" && DENIED_TABLE_REFS.has(kind)) throw refused(`a ${kind} table expression`);
+  if (kind === "FUNCTION") {
+    const name = String(node.function_name ?? "");
+    if (DENIED_SCALARS.has(name) || /^(read_|duckdb_|pragma_|postgres_|mysql_|sqlite_)/.test(name)) throw refused(`the function ${name}`);
+  }
   if (node.from_table !== undefined && isNode(node.from_table) && !ALLOWED_TABLE_REFS.has(String(node.from_table.type))) {
     throw refused(`a ${String(node.from_table.type)} table expression`);
   }
@@ -67,7 +73,5 @@ export async function guardServerQuery(sql: string, probe: Probe, relation = "da
   if (!isNode(tree) || tree.error) throw new FusenError("a query over a database must be a single SELECT statement");
   const statements = Array.isArray(tree.statements) ? tree.statements : [];
   if (statements.length !== 1) throw new FusenError("a query over a database must be a single SELECT statement");
-  const ctes = new Set<string>();
-  cteNames(statements, ctes);
-  walk(statements, ctes, relation);
+  walk(statements, new Set(), relation);
 }

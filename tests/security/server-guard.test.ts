@@ -41,6 +41,11 @@ describe("the guard on queries over a database server (docs/adr/0005 section 6)"
     ["another relation", "SELECT * FROM pg.public.items", /another schema or catalog/],
     ["a catalog table", "SELECT * FROM information_schema.tables", /another schema or catalog/],
     ["a table that is not data", "SELECT * FROM items", /items/],
+    ["a catalog relation named by a CTE in another scope", "SELECT * FROM (WITH duckdb_databases AS (SELECT 1) SELECT 1) a, duckdb_databases", /duckdb_databases/],
+    ["pragma_database_list behind a CTE of the same name", "SELECT * FROM (WITH pragma_database_list AS (SELECT 1) SELECT 1) a, pragma_database_list", /pragma_database_list/],
+    ["a PIVOT inside a join", "SELECT * FROM (SELECT 1) t, data PIVOT (count(*) FOR id IN (1))", /PIVOT/],
+    ["a scalar that reads the host", "SELECT getenv('HOME') FROM data", /getenv/],
+    ["current_setting", "SELECT current_setting('s') FROM data", /current_setting/],
   ])("refuses %s", async (_name, sql, message) => {
     await refuses(sql, message);
   });

@@ -169,6 +169,18 @@ What this changed: the connection-then-lock model holds for the connection itsel
 
 Still open for the first slice: whether a secret created after the lock can be used by a query to reach another host (the guard refuses the functions that would use it, but this is to be tested), and how the fallback (a separate process) would be built if the guard proves too brittle.
 
+## What the first slice does not do yet
+
+Recorded after the first slice (the Postgres adapter, PR #46) and its independent review, so the ADR above is read as the target, not as a claim about the code:
+
+- The extension is loaded from the local install and `autoinstall`/`autoload` are off; the sha256 pin of section 4 is **not** implemented.
+- The role check does not refuse `TEMP` (PUBLIC has it by default and it only reaches session-local tables; the read-only transaction covers it). It does refuse write access to sequences and membership of a role with superuser, create-role, create-db or bypass-RLS rights.
+- The fingerprint samples the first and last 50 rows by primary key, not key-range boundaries, and uses only a primary key (no unique-index key, no update-time column). A change in the middle of a table that leaves the count, last key and columns unchanged is not noticed. Above 100,000 rows the count is `reltuples` (an estimate), and the mode is part of the hash.
+- Timeouts: connect 10 s, and `statement_timeout`/`lock_timeout` 60 s on the connection; a query blocked on the network is stopped by the server's timeout, not by the interrupt.
+- The TLS warning on the card for a weak `sslmode` is not shown; the default is `verify-full`.
+- `isPrivateAddress` covers the common ranges, not every reserved block; the pin by `hostaddr` means the checked address is the one used.
+- MySQL, and the Web UI, VS Code extension and TUI for a server source, are not done.
+
 ## Open questions
 
 - How the extension is bundled and pinned per OS (shared with SQLite); until then the digest pin in section 4 is the guard.
