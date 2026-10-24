@@ -210,6 +210,7 @@ describe("TUI: pick a file from the roots", () => {
   const outside = tempDir();
   let stop = () => {};
   let tracked: View[] = [];
+  let savedConnections: string | undefined;
   beforeAll(async () => {
     mkdirSync(join(dir, "sub"));
     mkdirSync(join(dir, ".hidden"));
@@ -222,7 +223,12 @@ describe("TUI: pick a file from the roots", () => {
     // A name that carries a bidi override (a control character cannot be in a Windows file name).
     await writeCustomers(join(dir, `esc${String.fromCharCode(0x202e)}x.parquet`), 5);
     // The list of the person's own connections.toml is not part of these tests.
+    savedConnections = process.env.FUSEN_CONNECTIONS;
     process.env.FUSEN_CONNECTIONS = join(dir, "no-connections.toml");
+  });
+  afterAll(() => {
+    if (savedConnections === undefined) delete process.env.FUSEN_CONNECTIONS;
+    else process.env.FUSEN_CONNECTIONS = savedConnections;
   });
   afterEach(async () => {
     stop();
@@ -294,9 +300,11 @@ describe("TUI: pick a file from the roots", () => {
 
 describe("TUI: pick a database connection and then a table", () => {
   const dir = tempDir();
-  const saved = { ...process.env };
+  const keys = ["FUSEN_CONNECTIONS", "FUSEN_TUI_TEST_PASSWORD"] as const;
+  let saved: Record<string, string | undefined> = {};
   let stop = () => {};
   beforeAll(() => {
+    saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
     const path = join(dir, "connections.toml");
     // A server nothing listens on: the list of connections is shown, and choosing one says why it could not be read.
     writeFileSync(path, `[nowhere]\nkind = "mysql"\nhost = "127.0.0.1"\nport = 1\ndbname = "x"\nuser = "u"\nsslmode = "required"\npassword_env = "FUSEN_TUI_TEST_PASSWORD"\nallow_private = true\n`, { mode: 0o600 });
@@ -305,7 +313,10 @@ describe("TUI: pick a database connection and then a table", () => {
   });
   afterEach(() => stop());
   afterAll(() => {
-    process.env = saved;
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
   });
 
   it("lists the connections with the files, says why a connection cannot be read, and goes back with b", async () => {

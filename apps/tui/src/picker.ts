@@ -1,4 +1,4 @@
-import { createElement as h, useEffect, useState, type ReactElement } from "react";
+import { createElement as h, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { Box, Text, useInput, useWindowSize } from "ink";
 import { listConnections, listTables } from "@fusenduck/core";
 import { listFiles, MAX_FILES, type Listed, type ListedFile } from "@fusenduck/web/files";
@@ -41,6 +41,7 @@ interface Tables {
   name: string;
   kind: string;
   tables: string[] | null;
+  truncated?: boolean;
   error?: string;
 }
 
@@ -50,6 +51,17 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
   const [cursor, setCursor] = useState(0);
   const [reload, setReload] = useState(0);
   const [connection, setConnection] = useState<Tables | null>(null);
+  /** The read of the tables in flight: leaving the screen or choosing again cancels it, and only the newest may answer. */
+  const reading = useRef<AbortController | null>(null);
+  // connections.toml is read again with `r`, not at every key.
+  const connections = useMemo(() => listConnections(), [reload]);
+  const leave = () => {
+    reading.current?.abort();
+    reading.current = null;
+    setConnection(null);
+    setCursor(0);
+  };
+  useEffect(() => () => reading.current?.abort(), []);
 
   useEffect(() => {
     let current = true;
@@ -73,7 +85,7 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
     }
   } else {
     // Connections come first, as in the Web UI: choosing one lists its tables.
-    for (const c of listConnections()) {
+    for (const c of connections) {
       const file: ListedFile = { path: `${c.kind}://${c.name}/`, name: c.name, kind: "connection", size: 0, modified: 0 };
       lines.push({ file });
       files.push(file);
@@ -91,10 +103,7 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
   useInput((input, key) => {
     if (input === "q" || (key.ctrl && input === "c")) quit();
     else if (opening) return;
-    else if (connection && (input === "b" || key.escape || key.leftArrow)) {
-      setConnection(null);
-      setCursor(0);
-    }
+    else if (connection && (input === "b" || key.escape || key.leftArrow)) leave();
     else if (key.upArrow || input === "k") setCursor(Math.max(0, at - 1));
     else if (key.downArrow || input === "j") setCursor(Math.min(Math.max(0, files.length - 1), at + 1));
     else if (key.pageUp) setCursor(Math.max(0, at - 10));
@@ -102,11 +111,19 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
     else if (input === "r") setReload((n) => n + 1);
     else if (key.return && files[at]?.kind === "connection") {
       const { name, path } = files[at]!;
-      setConnection({ name, kind: path.slice(0, path.indexOf(":")), tables: null });
+      const kind = path.slice(0, path.indexOf(":"));
+      reading.current?.abort();
+      const mine = new AbortController();
+      reading.current = mine;
+      setConnection({ name, kind, tables: null });
       setCursor(0);
-      listTables(path)
-        .then((found) => setConnection((now) => (now?.name === name ? { name, kind: now.kind, tables: found.tables } : now)))
-        .catch((error: unknown) => setConnection((now) => (now?.name === name ? { name, kind: now.kind, tables: [], error: error instanceof Error ? error.message : String(error) } : now)));
+      const answer = (next: Tables) => {
+        if (reading.current === mine) setConnection(next);
+      };
+      listTables(path, mine.signal).then(
+        (found) => answer({ name, kind, tables: found.tables, truncated: found.truncated }),
+        (error: unknown) => answer({ name, kind, tables: [], error: error instanceof Error ? error.message : String(error) }),
+      );
     } else if (key.return && files[at]) open(files[at]);
   });
 
@@ -119,10 +136,10 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
   const count = files.filter((f) => f.kind !== "connection").length;
   const status = connection
     ? connection.error !== undefined
-      ? `${connection.name}: ${connection.error}`
+      ? plain(`${connection.name}: ${connection.error}`)
       : connection.tables === null
         ? `${connection.name}: reading the tables…`
-        : `${connection.kind} connection ${connection.name}: ${files.length} table${files.length === 1 ? "" : "s"}`
+        : plain(`${connection.kind} connection ${connection.name}: ${files.length} table${files.length === 1 ? "" : "s"}${connection.truncated ? " (the list is cut; some tables are not listed)" : ""}`)
     : listed === null
       ? "reading…"
       : `${count} file${count === 1 ? "" : "s"}${listed.truncated ? ` (the list is cut at ${MAX_FILES} per root or a limit on folder entries; some files are not listed)` : ""}`;

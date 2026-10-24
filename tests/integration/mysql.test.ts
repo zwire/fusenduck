@@ -189,10 +189,10 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
   });
 
   it("the TUI lists the connections, then the connection's tables, and opens the one picked", async () => {
-    const tui = driveTui(null, undefined, [process.cwd()]);
+    const tui = driveTui(null, undefined, [mkdtempSync(join(tmpdir(), "fusen-my-tui-"))]);
     try {
       await tui.until((s) => s.includes("mysql connection"), "the connections");
-      // Sorted: bad, pinned, ro, rw, unverified, wrongca.
+      // Sorted: bad, pinned, ro, rw, wrongca (`unverified` is not a valid profile and is left out).
       await tui.press(KEY.down, KEY.down, KEY.enter);
       await tui.until((s) => s.includes("pick a table") && s.includes("items") && s.includes("nokey"), "the tables");
       await tui.press(KEY.enter);
