@@ -32,6 +32,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The shipped DuckDB extensions, fetched against packages/core/extensions.lock.json (a hash that differs fails the job).
+      - run: pnpm extensions:fetch
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
@@ -50,6 +52,7 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm extensions:fetch
       # Fails when any number is over its budget in bench/budgets.json; the table goes to the job summary.
       - run: |
           set -o pipefail

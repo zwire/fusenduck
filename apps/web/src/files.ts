@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { join, relative, sep } from "node:path";
 import { kindOf } from "@fusenduck/core";
 
-// The files the UI offers to open: the Parquet, CSV, JSON and DuckDB files under each root, found by walking the root's
+// The files the UI offers to open: the Parquet, CSV, JSON, DuckDB and SQLite files under each root, found by walking the root's
 // folders. Only names and stat are read, never contents. No symlink is followed (a link could lead
 // out of the root, or round in a loop), and hidden files and folders are skipped. Opening still goes
 // through core's own check of the roots, so this list only saves typing a path.
@@ -15,7 +15,7 @@ export const MAX_FILES = 5000;
 export const MAX_ENTRIES = 100_000;
 
 // The names a kind is recognised by (kindOf in core); anything else is not listed.
-const OPENABLE = /\.(parquet|csv|tsv|ndjson|jsonl|json|duckdb|ddb)$/i;
+const OPENABLE = /\.(parquet|csv|tsv|ndjson|jsonl|json|duckdb|ddb|sqlite|sqlite3|db3)$/i;
 
 // The JavaScript realpath, as core uses (realpathSync) to check the roots. The native one can give
 // another spelling of the same folder (its case on disk on macOS, a subst drive's target on Windows),
@@ -27,7 +27,7 @@ export interface ListedFile {
   path: string;
   /** The path from the root, with / between folders. */
   name: string;
-  /** The kind of source its name says: parquet, csv, ndjson, json or duckdb. */
+  /** The kind of source its name says: parquet, csv, ndjson, json, duckdb or sqlite. */
   kind: string;
   size: number;
   /** Last modified, in milliseconds since the epoch. */

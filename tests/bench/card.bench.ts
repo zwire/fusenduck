@@ -7,6 +7,7 @@ import { buildCard, mintRef, openSource, renderCard, resolveRef } from "../../pa
 import { View } from "../../apps/web/src/view.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 import { DuckDBInstance } from "@duckdb/node-api";
+import { DatabaseSync } from "node:sqlite";
 import { buildSpa } from "../helpers/web.ts";
 import { compare, table, type Numbers } from "./budgets.ts";
 
@@ -58,7 +59,30 @@ const csvMs = await time(async () => {
   }
 });
 
+// A SQLite file is copied before it is read (docs/adr/0004), twice here: to open and to mint. 1,000,000 rows.
+const sqliteFile = join(dir, "big.sqlite");
+{
+  const db = new DatabaseSync(sqliteFile);
+  db.exec("CREATE TABLE data(id INTEGER, region TEXT, amount REAL, status TEXT, note TEXT)");
+  const insert = db.prepare("INSERT INTO data VALUES (?, ?, ?, ?, ?)");
+  db.exec("BEGIN");
+  for (let i = 1; i <= 1_000_000; i++) insert.run(i, ["north", "south", "east", "west"][i % 4]!, ((i * 7919) % 100000) / 100, i % 11 === 0 ? null : "ok", `note ${i}`);
+  db.exec("COMMIT");
+  db.close();
+}
+const sqliteBytes = statSync(sqliteFile).size;
+const sqliteMs = await time(async () => {
+  const sqliteEngine = await openSource(sqliteFile);
+  try {
+    await buildCard(sqliteEngine);
+    await mintRef(sqliteFile, { where: "id <= 11" });
+  } finally {
+    sqliteEngine.close();
+  }
+});
+
 const numbers = {
+  sqlite_open_card_mint_ms: sqliteMs,
   csv_open_card_mint_ms: csvMs,
   card_build_ms: cardMs,
   card_render_tokens: tokens(renderCard(card, file)),
@@ -69,6 +93,7 @@ const numbers = {
   web_spa_bytes: spaBytes,
 };
 console.log(`csv open+card+mint: ${csvMs} ms; csv file: ${csvBytes} bytes`);
+console.log(`sqlite open+card+mint: ${sqliteMs} ms; sqlite file: ${sqliteBytes} bytes`);
 rmSync(dir, { recursive: true, force: true });
 const rows = compare(numbers, budgets);
 console.log(table(rows));

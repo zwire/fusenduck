@@ -1,4 +1,4 @@
-// The fusenduck extension: Parquet files open by default (CSV, JSON and DuckDB files through Open With…)
+// The fusenduck extension: Parquet files open by default (CSV, JSON, DuckDB and SQLite files through Open With…)
 // in a read-only editor that shows the Web UI (docs/adr/0002)
 // in a webview. The webview talks to this extension host by messages (src/host.ts); nothing listens
 // on a port.
@@ -42,6 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
       let host: HostModule;
       try {
         host = await loadHost();
+        host.setExtensionDirectory(vscode.Uri.joinPath(dist, "extensions").fsPath);
       } catch (error) {
         const platform = `${process.platform}-${process.arch}`;
         webview.html = messagePage(

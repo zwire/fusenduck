@@ -3,6 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
 import { createAdapter, isPattern, kindOf, type SourceAdapter, type SourceOptions } from "./source.ts";
+import { copySqlite, type SqliteCopy } from "./sqlite.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
 export { ident, lit };
@@ -147,13 +148,13 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
 export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal; kind?: string; options?: SourceOptions } = {}): Promise<Engine> {
   // A database file is named with its table: file.duckdb#table.
   // A file that exists under the whole name is the file.
-  const named = existsSync(source) ? null : /^(.+?\.(?:duckdb|ddb))#(.+)$/i.exec(source);
+  const named = existsSync(source) ? null : /^(.+?\.(?:(duckdb|ddb)|(?:sqlite3?|db3)))#(.+)$/i.exec(source);
   if (named && !opts.options?.table) {
     source = named[1]!;
-    opts = { ...opts, kind: opts.kind ?? "duckdb", options: { ...opts.options, table: named[2]! } };
+    opts = { ...opts, kind: opts.kind ?? (named[2] ? "duckdb" : "sqlite"), options: { ...opts.options, table: named[3]! } };
   }
   const multi = isPattern(source);
-  if (multi && (opts.kind ?? kindOf(source)) === "duckdb") throw new FusenError("a database file is opened alone, not as a pattern");
+  if (multi && ["duckdb", "sqlite"].includes(opts.kind ?? kindOf(source))) throw new FusenError("a database file is opened alone, not as a pattern");
   const resolved = multi ? resolvePattern(source, opts.roots) : (() => { const p = resolveWithin(source, opts.roots); return { source: p, files: [p] }; })();
   const path = resolved.files[0]!;
   const { signal } = opts;
@@ -162,17 +163,37 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   const cancelled = () => new FusenError("the request was cancelled");
   if (signal?.aborted) throw cancelled();
   // A database file is the engine's own database, opened read-only, so nothing can be written or attached read-write.
-  const created = DuckDBInstance.create(adapter.database ? path : ":memory:", adapter.database ? { access_mode: "READ_ONLY" } : {});
-  const instance = await (adapter.database ? watchOpen(path, created) : created);
-  const connection: DuckDBConnection = await instance.connect();
+  // A SQLite file is copied (one table) into a DuckDB file of ours first, which is what the engine opens (see copySqlite).
+  let copy: SqliteCopy | undefined;
+  if (adapter.name === "sqlite") {
+    copy = await copySqlite(path, opts.options?.table, signal);
+    try {
+      adapter = createAdapter("sqlite", { table: copy.table });
+    } catch (error) {
+      copy.remove();
+      throw error;
+    }
+  }
+  const databasePath = copy?.path ?? path;
+  let instance: DuckDBInstance;
+  let connection: DuckDBConnection;
+  try {
+    const created = DuckDBInstance.create(adapter.database ? databasePath : ":memory:", adapter.database ? { access_mode: "READ_ONLY" } : {});
+    instance = await (adapter.database ? watchOpen(path, created) : created);
+    connection = await instance.connect();
+  } catch (error) {
+    copy?.remove();
+    throw error;
+  }
   // The engine is released when opening fails, once a read of the file that is still running has ended.
   let binding: Promise<unknown> | undefined;
   const release = () => {
     connection.closeSync();
     instance.closeSync();
+    copy?.remove();
   };
   try {
-    await connection.run(`SET allowed_paths=[${adapter.allowedPaths(resolved.files).map(lit).join(", ")}]`);
+    await connection.run(`SET allowed_paths=[${(copy ? [copy.path] : adapter.allowedPaths(resolved.files)).map(lit).join(", ")}]`);
     // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
     await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
     await connection.run("SET threads=4");
@@ -253,6 +274,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     close(): void {
       connection.closeSync();
       instance.closeSync();
+      copy?.remove();
     },
   };
 }
