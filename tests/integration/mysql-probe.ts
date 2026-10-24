@@ -145,7 +145,7 @@ const leaks = async (q: (sql: string) => Promise<Record<string, unknown>[]>, pas
     e.q(`SELECT * FROM mysql_query('my', ${lit("select group_concat(column_name order by seq_in_index) as keys from information_schema.statistics where table_schema = database() and table_name = 'items' and index_name = 'PRIMARY'")})`));
   await observe("6d sample hash (md5 of group_concat of rows), 50 rows from each end", () =>
     e.q(`SELECT * FROM mysql_query('my', ${lit("select md5(group_concat(json_object('id', id, 'name', name) order by id separator ';')) as head from (select * from items order by id asc limit 50) x")})`));
-  await observe("6e a view, is it in information_schema.tables", () => mysql("fusen_ro", roPassword, "select count(*) from information_schema.tables where table_schema = 'probe' and table_type = 'VIEW'"));
+  await observe("6e a view, is it in information_schema.tables", async () => mysql("fusen_ro", roPassword, "select count(*) from information_schema.tables where table_schema = 'probe' and table_type = 'VIEW'"));
 }
 
 const summary = process.env.GITHUB_STEP_SUMMARY;
