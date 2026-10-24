@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ident, lit, type Engine } from "./engine.ts";
-import { createAdapter, SOURCE_KINDS, type SourceOptions } from "./source.ts";
+import { createAdapter, isPattern, SOURCE_KINDS, type SourceOptions } from "./source.ts";
 import { FusenError } from "./errors.ts";
 
 export interface Ref {
@@ -98,7 +98,12 @@ function parseRefUnchecked(text: string): Ref {
 
 // A query sits alone on its lines inside parentheses, like a predicate (see whereClause).
 const base = (ref: Pick<Ref, "source" | "query" | "where" | "src" | "options">): string =>
-  ref.query ? `\n${ref.query}\n` : createAdapter(ref.src, ref.options).baseQuery(ref.source, positional(ref));
+  ref.query
+    ? `\n${ref.query}\n`
+    : isPattern(ref.source)
+      ? // Several files are read through the views the engine made, which carry the filename and the position.
+        `SELECT * FROM ${positional(ref) ? "data_pos" : "data"}`
+      : createAdapter(ref.src, ref.options).baseQuery(ref.source, positional(ref));
 
 /**
  * A predicate that names `file_row_number` selects rows by their position in the file, which lets

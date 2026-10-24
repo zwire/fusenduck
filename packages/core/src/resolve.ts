@@ -168,7 +168,7 @@ async function countCopies(
     // A file with its own file_row_number column reads that column in a predicate, not the position.
     const own = ref.query
       ? []
-      : await engine.query(`SELECT 1 FROM (DESCRIBE ${engine.adapter.baseQuery(engine.source)}) WHERE column_name = '${engine.adapter.rowPosition}'`);
+      : await engine.query(`SELECT 1 FROM (DESCRIBE SELECT * FROM data) WHERE column_name = '${engine.adapter.rowPosition}'`);
     return { distinct: Number(n), byPosition: !ref.query && own.length === 0 };
   } catch {
     return undefined;

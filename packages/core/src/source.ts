@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import { constants, statSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { basename } from "node:path";
 import type { Engine, Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { lit } from "./sql.ts";
+
+/** A source that names several files: a wildcard (`*`, `?`) in the file name, never in a directory. */
+export const isPattern = (source: string): boolean => /[*?]/.test(source.split(/[\\/]/).pop() ?? "");
+
+/** A SQL list of the files, which the engine reads as one table. */
+const list = (files: string[]): string => `[${files.map(lit).join(", ")}]`;
 
 /** The read settings of a source, as a Ref carries them (`opt.<name>=<value>`, docs/adr/0004). */
 export type SourceOptions = Record<string, string>;
@@ -26,10 +33,12 @@ export interface SourceAdapter {
    * Settings a Ref already carries are never detected again, so the same Ref reads the same on any machine.
    */
   resolve(path: string, probe: Probe): Promise<SourceAdapter>;
-  /** The table expression that reads `path`. */
-  read(path: string): string;
+  /** The table expression that reads the files. With several, each row also carries the `filename` it came from. */
+  read(files: string[], multi?: boolean): string;
   /** The paths the engine may read for this source, fixed at open time before the configuration is locked. */
-  allowedPaths(path: string): string[];
+  allowedPaths(files: string[]): string[];
+  /** For several files: every row with its `filename` and `file_row_number` (its position within that file). */
+  positionView(files: string[]): string;
   /** The column that exposes a row's position in the source, which a predicate may name. */
   readonly rowPosition: string;
   /** The base query of a source, with the row position when a predicate selects by it. */
@@ -38,6 +47,31 @@ export interface SourceAdapter {
   fingerprint(engine: Engine): Promise<string>;
   /** How many bytes a scan of the whole source reads. */
   scanBytes(engine: Engine): Promise<number>;
+}
+
+/**
+ * The fingerprint of a source that may be several files: one file keeps the fingerprint it always had; several
+ * are the list of files with each file's own, so a file added, removed, renamed or changed gives another value.
+ */
+async function perFile(engine: Engine, one: (path: string) => Promise<string>): Promise<string> {
+  if (!engine.multi) return one(engine.files[0]!);
+  const parts: [string, string][] = [];
+  // By file name: the files share one directory, and the same files elsewhere keep the same fingerprint.
+  for (const path of engine.files) parts.push([basename(path), await one(path)]);
+  return createHash("sha256").update(`files:${JSON.stringify(parts)}`).digest("hex").slice(0, 12);
+}
+
+async function parquetFingerprint(engine: Engine, path: string): Promise<string> {
+  const rows = await engine.query(`SELECT num_rows::VARCHAR AS n FROM parquet_file_metadata(${lit(path)})`);
+  const stats = await engine.query(
+    `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, path_in_schema, stats_min, stats_max,
+                                                  stats_null_count::VARCHAR, stats_distinct_count::VARCHAR,
+                                                  total_compressed_size::VARCHAR, total_uncompressed_size::VARCHAR))::VARCHAR,
+                           ';' ORDER BY row_group_id, column_id)) AS h
+     FROM parquet_metadata(${lit(path)})`,
+  );
+  const size = statSync(path).size;
+  return createHash("sha256").update(`${String(rows[0]?.n)}:${size}:${String(stats[0]?.h)}`).digest("hex").slice(0, 12);
 }
 
 /**
@@ -52,29 +86,21 @@ export const parquet: SourceAdapter = {
   name: "parquet",
   options: {},
   resolve: async () => parquet,
-  read: (path) => `read_parquet(${lit(path)})`,
-  allowedPaths: (path) => [path],
+  read: (files, multi = false) => (multi ? `read_parquet(${list(files)}, filename=true)` : `read_parquet(${lit(files[0]!)})`),
+  allowedPaths: (files) => files,
+  positionView: (files) => `SELECT * FROM read_parquet(${list(files)}, filename=true, file_row_number=true)`,
   rowPosition: "file_row_number",
   baseQuery(path, withPosition = false) {
-    return withPosition ? `SELECT *, ${this.rowPosition} FROM ${this.read(path)}` : `SELECT * FROM ${this.read(path)}`;
+    return withPosition ? `SELECT *, ${this.rowPosition} FROM ${this.read([path])}` : `SELECT * FROM ${this.read([path])}`;
   },
-  async fingerprint(engine) {
-    const rows = await engine.query(`SELECT num_rows::VARCHAR AS n FROM parquet_file_metadata(${lit(engine.source)})`);
-    const stats = await engine.query(
-      `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, path_in_schema, stats_min, stats_max,
-                                                  stats_null_count::VARCHAR, stats_distinct_count::VARCHAR,
-                                                  total_compressed_size::VARCHAR, total_uncompressed_size::VARCHAR))::VARCHAR,
-                           ';' ORDER BY row_group_id, column_id)) AS h
-     FROM parquet_metadata(${lit(engine.source)})`,
-    );
-    const size = statSync(engine.source).size;
-    return createHash("sha256").update(`${String(rows[0]?.n)}:${size}:${String(stats[0]?.h)}`).digest("hex").slice(0, 12);
-  },
+  fingerprint: (engine) => perFile(engine, (path) => parquetFingerprint(engine, path)),
   async scanBytes(engine) {
-    const meta = await engine.query(
-      `SELECT sum(total_compressed_size)::VARCHAR AS bytes FROM parquet_metadata(${lit(engine.source)})`,
-    );
-    return Number(meta[0]?.bytes ?? 0);
+    let total = 0;
+    for (const path of engine.files) {
+      const meta = await engine.query(`SELECT sum(total_compressed_size)::VARCHAR AS bytes FROM parquet_metadata(${lit(path)})`);
+      total += Number(meta[0]?.bytes ?? 0);
+    }
+    return total;
   },
 };
 
@@ -135,7 +161,7 @@ interface TextKind {
   /** Normalizes and validates settings from a Ref (throws a FusenError); returns them as they will be stored. */
   validate(options: SourceOptions): SourceOptions;
   /** The table function call with every setting spelled out. */
-  call(path: string, options: SourceOptions): string;
+  call(files: string[], options: SourceOptions, multi: boolean): string;
   detect(path: string, probe: Probe): Promise<SourceOptions>;
 }
 
@@ -173,10 +199,10 @@ const csvKind: TextKind = {
   },
   // Nothing is left to detection at read time: what the sniffer would have decided is in the Ref, and the
   // two NULL rules (an empty field, and a quoted empty field) are spelled out rather than left to defaults.
-  call: (path, o) =>
-    `read_csv(${lit(path)}, auto_detect=false, delim=${lit(o.delim!)}, quote=${lit(o.quote!)}, escape=${lit(o.escape!)}, header=${o.header}, ` +
+  call: (files, o, multi) =>
+    `read_csv(${multi ? list(files) : lit(files[0]!)}, auto_detect=false, delim=${lit(o.delim!)}, quote=${lit(o.quote!)}, escape=${lit(o.escape!)}, header=${o.header}, ` +
     `nullstr='', allow_quoted_nulls=true${o.skip ? `, skip=${o.skip}` : ""}${o.dateformat ? `, dateformat=${lit(o.dateformat)}` : ""}` +
-    `${o.timestampformat ? `, timestampformat=${lit(o.timestampformat)}` : ""}, columns=${columnMap(parseColumns(o.columns!))})`,
+    `${o.timestampformat ? `, timestampformat=${lit(o.timestampformat)}` : ""}${multi ? ", filename=true" : ""}, columns=${columnMap(parseColumns(o.columns!))})`,
   async detect(path, probe) {
     const rows = await probe(`SELECT Delimiter, Quote, Escape, HasHeader, Columns, SkipRows, DateFormat, TimestampFormat FROM sniff_csv(${lit(path)}, sample_size=-1)`);
     const r = rows[0];
@@ -204,7 +230,8 @@ const jsonKind = (name: string, format: string): TextKind => ({
     if (options.columns === undefined) throw new FusenError(`${name} sources need opt.columns`);
     return { columns: JSON.stringify(parseColumns(options.columns)) };
   },
-  call: (path, o) => `read_json(${lit(path)}, format=${lit(format)}, columns=${columnMap(parseColumns(o.columns!))})`,
+  call: (files, o, multi) =>
+    `read_json(${multi ? list(files) : lit(files[0]!)}, format=${lit(format)}${multi ? ", filename=true" : ""}, columns=${columnMap(parseColumns(o.columns!))})`,
   async detect(path, probe) {
     const rows = await probe(`DESCRIBE SELECT * FROM read_json(${lit(path)}, format=${lit(format)}, sample_size=-1)`);
     if (rows.length === 0) throw new FusenError(`cannot work out the columns of ${path}`);
@@ -224,19 +251,28 @@ function textAdapter(kind: TextKind, options: SourceOptions, detected: boolean):
     async resolve(path, probe) {
       return detected ? adapter : textAdapter(kind, kind.validate(await kind.detect(path, probe)), true);
     },
-    read: (path) => kind.call(path, options),
-    allowedPaths: (path) => [path],
+    read: (files, multi = false) => kind.call(files, options, multi),
+    allowedPaths: (files) => files,
+    // One read per file, joined in file order: a position counted with a window over all files would not keep
+    // the rows of a file in order (the engine reads files in parallel).
+    positionView: (files) =>
+      files
+        .map((file) => `SELECT *, row_number() OVER () - 1 AS ${adapter.rowPosition} FROM ${kind.call([file], options, true)}`)
+        .join(" UNION ALL "),
     rowPosition: "file_row_number",
     baseQuery(path, withPosition = false) {
       return withPosition
-        ? `SELECT *, row_number() OVER () - 1 AS ${this.rowPosition} FROM ${this.read(path)}`
-        : `SELECT * FROM ${this.read(path)}`;
+        ? `SELECT *, row_number() OVER () - 1 AS ${this.rowPosition} FROM ${this.read([path])}`
+        : `SELECT * FROM ${this.read([path])}`;
     },
     async fingerprint(engine) {
       const canonical = JSON.stringify(Object.keys(options).sort().map((k) => [k, options[k]]));
-      return createHash("sha256").update(`${kind.name}:${canonical}:${await hashFile(engine.source)}`).digest("hex").slice(0, 12);
+      const total = engine.files.reduce((sum, path) => sum + statSync(path).size, 0);
+      if (total > FINGERPRINT_MAX_BYTES) throw new FusenError(`the files weigh ${total} bytes, over the ${FINGERPRINT_MAX_BYTES} a text source may have to be fingerprinted`);
+      const content = await perFile(engine, hashFile);
+      return createHash("sha256").update(`${kind.name}:${canonical}:${content}`).digest("hex").slice(0, 12);
     },
-    scanBytes: async (engine) => statSync(engine.source).size,
+    scanBytes: async (engine) => engine.files.reduce((sum, path) => sum + statSync(path).size, 0),
   };
   return adapter;
 }

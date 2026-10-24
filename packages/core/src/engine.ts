@@ -1,8 +1,8 @@
-import { closeSync, constants, lstatSync, openSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative } from "node:path";
+import { closeSync, constants, lstatSync, openSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
-import { createAdapter, kindOf, type SourceAdapter, type SourceOptions } from "./source.ts";
+import { createAdapter, isPattern, kindOf, type SourceAdapter, type SourceOptions } from "./source.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
 export { ident, lit };
@@ -10,8 +10,12 @@ export { ident, lit };
 export type Row = Record<string, unknown>;
 
 export interface Engine {
-  /** The absolute path of the one file this engine may read. */
+  /** The absolute path of the file this engine may read, or the pattern (`/data/*.csv`) that names several. */
   readonly source: string;
+  /** The files behind `source`, real paths, sorted. One unless `source` is a pattern. */
+  readonly files: string[];
+  /** Whether `source` is a pattern. Then `data` has a `filename` column and positions are within each file. */
+  readonly multi: boolean;
   /** How this kind of source is read, fingerprinted and addressed (docs/adr/0004). */
   readonly adapter: SourceAdapter;
   /** Runs one statement and returns its rows as JSON-safe objects (BIGINT and DECIMAL arrive as strings). */
@@ -45,17 +49,61 @@ function resolveWithin(source: string, roots: string[] | undefined): string {
   } catch {
     throw denied;
   }
-  if (roots) {
-    const real = roots.flatMap((root) => {
-      try {
-        return [realpathSync(root)];
-      } catch {
-        return [];
-      }
-    });
-    if (!real.some((root) => inside(root, path))) throw denied;
-  }
+  if (roots && !realRoots(roots).some((root) => inside(root, path))) throw denied;
   return path;
+}
+
+const realRoots = (roots: string[]): string[] =>
+  roots.flatMap((root) => {
+    try {
+      return [realpathSync(root)];
+    } catch {
+      return [];
+    }
+  });
+
+/** The most files one pattern may name: the fingerprint and the allow list grow with them. */
+export const MAX_FILES = 256;
+
+/**
+ * The files a pattern names, in name order. A wildcard (`*` for any run, `?` for one character) is allowed in the
+ * file name only: the directory is literal, and nothing below it is searched. Each match is checked like a single
+ * file (real path, regular file, inside the directory and the roots); a match that is not, such as a link out, is
+ * left out, so the pattern cannot be used to reach it. Files starting with a dot match only a pattern that does.
+ */
+function resolvePattern(source: string, roots: string[] | undefined): { source: string; files: string[] } {
+  const denied = new FusenError(roots ? `the source is not readable or is outside the allowed roots: ${source}` : `cannot read ${source}`);
+  const name = basename(source);
+  if (/[*?]/.test(dirname(source))) throw new FusenError("a wildcard is allowed in the file name only, not in a directory");
+  let directory: string;
+  let names: string[];
+  try {
+    directory = realpathSync(resolve(dirname(source)));
+    names = readdirSync(directory);
+  } catch {
+    throw denied;
+  }
+  const escaped = [...name].map((c) => (c === "*" ? "[^/\\\\]*" : c === "?" ? "[^/\\\\]" : c.replace(/[.+^${}()|[\]\\]/g, "\\$&"))).join("");
+  const matches = new RegExp(`^${escaped}$`);
+  const allowed = roots ? realRoots(roots) : undefined;
+  if (allowed && !allowed.some((root) => root === directory || inside(root, directory))) throw denied;
+  const files: string[] = [];
+  for (const entry of names.filter((n) => matches.test(n) && (name.startsWith(".") || !n.startsWith("."))).sort()) {
+    try {
+      const real = realpathSync(join(directory, entry));
+      if (!statSync(real).isFile()) continue;
+      // A match stays in the pattern's own directory, so a link out of it is left out whatever the roots are,
+      // and the same pattern names the same files over the CLI and over MCP.
+      if (!inside(directory, real)) continue;
+      if (allowed && !allowed.some((root) => inside(root, real))) continue;
+      files.push(real);
+    } catch {
+      continue;
+    }
+    if (files.length > MAX_FILES) throw new FusenError(`the pattern names more than ${MAX_FILES} files`);
+  }
+  if (files.length === 0) throw new FusenError(`no file matches ${source}`);
+  return { source: join(directory, name), files };
 }
 
 /** How long the engine may take to bind its file. A local Parquet file binds in milliseconds. */
@@ -97,7 +145,9 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
  * source), and the configuration cannot be changed afterwards. See docs/adr/0001.
  */
 export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal; kind?: string; options?: SourceOptions } = {}): Promise<Engine> {
-  const path = resolveWithin(source, opts.roots);
+  const multi = isPattern(source);
+  const resolved = multi ? resolvePattern(source, opts.roots) : (() => { const p = resolveWithin(source, opts.roots); return { source: p, files: [p] }; })();
+  const path = resolved.files[0]!;
   const { signal } = opts;
   // Without a kind from a Ref, the file name says; settings the Ref carries are used as they are, never detected again.
   let adapter = createAdapter(opts.kind ?? kindOf(path), opts.options);
@@ -112,7 +162,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     instance.closeSync();
   };
   try {
-    await connection.run(`SET allowed_paths=[${adapter.allowedPaths(path).map(lit).join(", ")}]`);
+    await connection.run(`SET allowed_paths=[${adapter.allowedPaths(resolved.files).map(lit).join(", ")}]`);
     // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
     await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
     await connection.run("SET threads=4");
@@ -124,12 +174,19 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     const probe = async (sql: string): Promise<Row[]> => (await connection.runAndReadAll(sql)).getRowObjectsJson() as Row[];
     binding = (async () => {
       adapter = await adapter.resolve(path, probe);
-      await connection.run(`CREATE VIEW data AS SELECT * FROM ${adapter.read(path)}`);
+      if (multi) {
+        // Several files: every row has its filename, and a position within its file for selecting by position.
+        await connection.run(`CREATE VIEW data_pos AS ${adapter.positionView(resolved.files)}`);
+        await connection.run(`CREATE VIEW data AS SELECT * EXCLUDE (${adapter.rowPosition}) FROM data_pos`);
+      } else await connection.run(`CREATE VIEW data AS SELECT * FROM ${adapter.read(resolved.files)}`);
     })();
     await watchOpen(path, binding);
     await connection.run("SET lock_configuration=true");
   } catch (error) {
     void Promise.resolve(binding).then(release, release);
+    if (multi && /adds column "filename"/.test(String(error))) {
+      throw new FusenError('a file has a column named "filename", which the files\' own filename column would clash with: rename it, or open the files one at a time');
+    }
     throw error;
   }
   if (signal?.aborted) {
@@ -137,7 +194,9 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     throw cancelled();
   }
   return {
-    source: path,
+    source: resolved.source,
+    files: resolved.files,
+    multi,
     adapter,
     async query(sql: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Row[]> {
       // The caller of one query (a request of the Web UI) may go away while the engine lives on.

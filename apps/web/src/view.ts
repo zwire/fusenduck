@@ -117,6 +117,8 @@ export class View {
     // checkPredicate and mintRefWith run their own).
     this.#engine = {
       source: engine.source,
+      files: engine.files,
+      multi: engine.multi,
       adapter: engine.adapter,
       query: (sql, options) => engine.query(sql, { ...options, ...(this.#signal ? { signal: this.#signal } : {}) }),
       close: () => engine.close(),
@@ -128,9 +130,10 @@ export class View {
   /** Opens `path` (relative paths start at the first root) under `roots`. */
   static async open(path: string, roots: string[]): Promise<View> {
     if (typeof path !== "string" || path.trim() === "") throw new FusenError("give the path of a Parquet file");
+    if (/[*?]/.test(path)) throw new FusenError("the Web UI opens one file; use the CLI or the MCP server for several");
     const engine = await openSource(resolve(roots[0] ?? process.cwd(), path), { roots });
     try {
-      const described = await engine.query(`DESCRIBE SELECT * FROM ${engine.adapter.read(engine.source)}`);
+      const described = await engine.query(`DESCRIBE SELECT * FROM ${engine.adapter.read(engine.files)}`);
       const columns = described.map((c) => String(c.column_name));
       // A real column of that name shadows the position in a predicate (docs/adr/0001), and DuckDB
       // compares identifiers without case.
@@ -189,7 +192,7 @@ export class View {
     if (parsed.includes('"TABLE_FUNCTION"')) throw new FusenError("filter rejected: a filter may not read a table; use the file's columns");
     if (parsed.includes('"STAR"')) throw new FusenError("filter rejected: name the columns instead of * or COLUMNS(*)");
     try {
-      await this.#engine.query(`DESCRIBE SELECT 1 FROM ${this.#engine.adapter.read(this.#engine.source)} WHERE (\n${text}\n)`, {
+      await this.#engine.query(`DESCRIBE SELECT 1 FROM ${this.#engine.adapter.read(this.#engine.files)} WHERE (\n${text}\n)`, {
         timeoutMs: DEFAULT_TIMEOUT_MS,
       });
     } catch (error) {
@@ -225,7 +228,7 @@ export class View {
       const n = limit as number;
       // Every cell arrives as text cut in the engine, so a huge cell is never read whole into the page.
       const cells = this.#columns.map((c, i) => `left(CAST(${ident(c)} AS VARCHAR), ${MAX_CELL_CHARS + 1}) AS c${i}`);
-      const source = this.#engine.adapter.read(this.#engine.source);
+      const source = this.#engine.adapter.read(this.#engine.files);
       // The filter sits alone on its lines, as in a Ref, so a "--" comment cannot swallow what follows.
       const matches = filter === undefined ? "" : `(\n${filter}\n)`;
       const matched = filter === undefined ? this.opened.card.rows : await this.#count(filter, `SELECT count(*)::VARCHAR AS n FROM ${source} WHERE ${matches}`);
