@@ -88,3 +88,34 @@ describe("a CSV source's settings come from the Ref, not from detection", () => 
     expect(out.stdout).toContain("DATA_CHANGED");
   });
 });
+
+describe("what a sample cannot show is still pinned", () => {
+  const dir = tempDir();
+  const resolves = (file: string, where: string) => {
+    const ref = refOf(run("ref", file, "--where", where).stdout);
+    return { ref, out: run("resolve", ref, "--root", dir) };
+  };
+
+  it("carries a date format and skipped preamble lines, so the minted Ref resolves", () => {
+    const file = join(dir, "dates.csv");
+    writeFileSync(file, "# note\n# more\nid,d\n1,13/04/2024\n2,14/04/2024\n");
+    const { ref, out } = resolves(file, "id = 2");
+    expect(parseRef(ref).options).toMatchObject({ skip: "2", dateformat: "%d/%m/%Y" });
+    expect(out.stdout).toContain('"d":"2024-04-14"');
+  });
+
+  it("types a column from every row, not a sample, so a late value cannot break the Ref", () => {
+    const file = join(dir, "late.csv");
+    writeFileSync(file, `id,v\n${Array.from({ length: 30_000 }, (_, i) => `${i},${i}`).join("\n")}\n30000,abc\n`);
+    const { ref, out } = resolves(file, "id = 30000");
+    expect(parseRef(ref).options?.columns).toContain('["v","VARCHAR"]');
+    expect(out.stdout).toContain('"v":"abc"');
+  });
+
+  it("keeps a key that first appears late in an NDJSON file", () => {
+    const file = join(dir, "late.ndjson");
+    writeFileSync(file, `${Array.from({ length: 30_000 }, (_, i) => `{"a":${i}}`).join("\n")}\n{"a":30000,"late":"LATE"}\n`);
+    const { out } = resolves(file, "a = 30000");
+    expect(out.stdout).toContain('"late":"LATE"');
+  });
+});

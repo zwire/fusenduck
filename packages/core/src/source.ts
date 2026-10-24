@@ -144,17 +144,25 @@ const single = (name: string, value: string, max: number): string => {
   return value;
 };
 
+/** Settings sniffed only when the file has them. Everything else is always carried. */
+const OPTIONAL_CSV = ["skip", "dateformat", "timestampformat"];
+
 const csvKind: TextKind = {
   name: "csv",
-  keys: ["delim", "quote", "escape", "header", "columns"],
+  keys: ["delim", "quote", "escape", "header", "columns", "skip", "dateformat", "timestampformat"],
   validate(options) {
     checkKeys("csv", options, this.keys);
     const out: SourceOptions = {};
     for (const key of this.keys) {
       const value = options[key];
+      if (value === undefined && OPTIONAL_CSV.includes(key)) continue;
       if (value === undefined) throw new FusenError(`csv sources need opt.${key}`);
       if (key === "delim") out[key] = single(key, value, 8);
       else if (key === "quote" || key === "escape") out[key] = single(key, value, 1);
+      else if (key === "skip") {
+        if (!/^\d{1,6}$/.test(value)) throw new FusenError("opt.skip must be a number of lines");
+        out[key] = value;
+      } else if (key === "dateformat" || key === "timestampformat") out[key] = single(key, value, 64);
       else if (key === "header") {
         if (value !== "true" && value !== "false") throw new FusenError("opt.header must be true or false");
         out[key] = value;
@@ -163,20 +171,28 @@ const csvKind: TextKind = {
     if (out.delim === "") throw new FusenError("opt.delim must not be empty");
     return out;
   },
+  // Nothing is left to detection at read time: what the sniffer would have decided is in the Ref, and the
+  // two NULL rules (an empty field, and a quoted empty field) are spelled out rather than left to defaults.
   call: (path, o) =>
-    `read_csv(${lit(path)}, auto_detect=false, delim=${lit(o.delim!)}, quote=${lit(o.quote!)}, escape=${lit(o.escape!)}, header=${o.header}, columns=${columnMap(parseColumns(o.columns!))})`,
+    `read_csv(${lit(path)}, auto_detect=false, delim=${lit(o.delim!)}, quote=${lit(o.quote!)}, escape=${lit(o.escape!)}, header=${o.header}, ` +
+    `nullstr='', allow_quoted_nulls=true${o.skip ? `, skip=${o.skip}` : ""}${o.dateformat ? `, dateformat=${lit(o.dateformat)}` : ""}` +
+    `${o.timestampformat ? `, timestampformat=${lit(o.timestampformat)}` : ""}, columns=${columnMap(parseColumns(o.columns!))})`,
   async detect(path, probe) {
-    const rows = await probe(`SELECT Delimiter, Quote, Escape, HasHeader, Columns FROM sniff_csv(${lit(path)})`);
+    const rows = await probe(`SELECT Delimiter, Quote, Escape, HasHeader, Columns, SkipRows, DateFormat, TimestampFormat FROM sniff_csv(${lit(path)}, sample_size=-1)`);
     const r = rows[0];
     if (!r) throw new FusenError(`cannot work out the layout of ${path}`);
     const columns = (r.Columns as { name: string; type: string }[]).map((c): [string, string] => [c.name, c.type]);
-    return {
+    const found: SourceOptions = {
       delim: String(r.Delimiter),
       quote: r.Quote === "(empty)" ? "" : String(r.Quote),
       escape: r.Escape === "(empty)" ? "" : String(r.Escape),
       header: String(r.HasHeader === true || r.HasHeader === "true"),
       columns: JSON.stringify(columns),
     };
+    if (Number(r.SkipRows) > 0) found.skip = String(r.SkipRows);
+    if (r.DateFormat) found.dateformat = String(r.DateFormat);
+    if (r.TimestampFormat) found.timestampformat = String(r.TimestampFormat);
+    return found;
   },
 };
 
@@ -190,7 +206,7 @@ const jsonKind = (name: string, format: string): TextKind => ({
   },
   call: (path, o) => `read_json(${lit(path)}, format=${lit(format)}, columns=${columnMap(parseColumns(o.columns!))})`,
   async detect(path, probe) {
-    const rows = await probe(`DESCRIBE SELECT * FROM read_json(${lit(path)}, format=${lit(format)})`);
+    const rows = await probe(`DESCRIBE SELECT * FROM read_json(${lit(path)}, format=${lit(format)}, sample_size=-1)`);
     if (rows.length === 0) throw new FusenError(`cannot work out the columns of ${path}`);
     return { columns: JSON.stringify(rows.map((r): [string, string] => [String(r.column_name), String(r.column_type)])) };
   },

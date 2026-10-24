@@ -243,8 +243,8 @@ Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52;
 
 `fusen card`, `peek`, `ref` and `resolve`, and the MCP tools, also open CSV/TSV (`.csv`, `.tsv`), NDJSON (`.ndjson`, `.jsonl`) and JSON (`.json`) files. The kind comes from the file name; anything else is read as Parquet.
 
-- **Settings are pinned in the Ref.** The first time a file is opened, DuckDB works out the delimiter, quoting, header and column types (CSV) or the column types (JSON). They go into the Ref as `opt.*`, so the same Ref reads the same types on any machine and DuckDB version. Settings in a Ref are validated and never detected again.
-- **The fingerprint hashes every byte** together with the settings, because these formats have no footer to read. A one-byte edit gives `DATA_CHANGED`. A file over 512MB is refused. On a 1,000,000-row, 34MB CSV, open + card + mint takes about 0.5 seconds (budget: 3 seconds).
+- **Settings are pinned in the Ref.** The first time a file is opened, DuckDB works out the delimiter, quoting, header and column types (CSV; also a date format and skipped preamble lines when the file has them) or the column types (JSON), reading every row, not a sample. NULL rules are spelled out too. They go into the Ref as `opt.*`, so the same Ref reads the same types on any machine and DuckDB version. Settings in a Ref are validated and never detected again.
+- **The fingerprint hashes every byte** together with the settings, because these formats have no footer to read. A one-byte edit gives `DATA_CHANGED`. A file over 512MB is refused. On a 1,000,000-row, 34MB CSV, open + card + mint takes about 2 seconds, because the settings are detected over every row (budget: 6 seconds).
 - **Rows are selected by position** with `file_row_number`, counted from 0 among the records, as for Parquet.
 - **Known gaps**: files with a different encoding than UTF-8, CSV with several header lines, JSON that is one huge array (read whole), and compressed files are not tested. Excel, multiple files and databases come later (ADR 0004).
 
