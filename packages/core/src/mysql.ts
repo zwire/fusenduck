@@ -5,7 +5,7 @@ import type { Engine } from "./engine.ts";
 import { bundledExtension } from "./extensions.ts";
 import { FusenError } from "./errors.ts";
 import { createQuery, type Row } from "./run.ts";
-import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions } from "./server.ts";
+import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions, STATEMENT_TIMEOUT_MS } from "./server.ts";
 import { ident, lit } from "./sql.ts";
 import type { SourceAdapter, SourceOptions } from "./source.ts";
 
@@ -36,7 +36,14 @@ interface Relation {
   integerKey: boolean;
 }
 
-const ONE = (sql: string): string => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
+/**
+ * A statement of ours, sent to the server as it is written. The extension has no timeout for the secret or the attach, a
+ * SET cannot be sent through it, and DuckDB's interrupt does not reach a statement the server is still working on
+ * (probe, docs/adr/0005 section 6), so the statement carries its own limit as an optimizer hint: the server stops it.
+ */
+export const serverStatement = (sql: string, ms = STATEMENT_TIMEOUT_MS): string => sql.replace(/^\s*select\s/i, `select /*+ MAX_EXECUTION_TIME(${ms}) */ `);
+
+const ONE = (sql: string, ms?: number): string => `SELECT * FROM mysql_query('my', ${lit(serverStatement(sql, ms))})`;
 
 export function mysqlAdapter(options: SourceOptions, relation?: Relation): SourceAdapter {
   const { table } = checkOptions(options);
