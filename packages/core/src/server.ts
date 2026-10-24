@@ -63,9 +63,8 @@ export function serverAdapter(options: SourceOptions, relation?: Relation): Sour
     },
     rowPosition: "file_row_number",
     baseQuery(_path, withPosition = false) {
-      if (withPosition) {
-        throw new FusenError(`rows of a database table are selected by its key${relation?.keys.length ? ` (${relation.keys.join(", ")})` : ", and this table has none"}, not by position`);
-      }
+      // A Ref names its adapter by kind and options only, so the key columns are not known here.
+      if (withPosition) throw new FusenError("rows of a database table are selected by its key column, such as where id = 5, not by position");
       return "SELECT * FROM data";
     },
     async fingerprint(engine) {

@@ -110,8 +110,8 @@ describe.skipIf(!enabled)("a Postgres table as a source (docs/adr/0005)", () => 
   });
 
   it("selects rows by key, and says so for a table with no key or a position", async () => {
-    await expect(mintRef("postgres://ro/public.items", { where: "file_row_number = 3" })).rejects.toThrow(/by its key \(id\)/);
-    await expect(mintRef("postgres://ro/public.nokey", { where: "file_row_number = 3" })).rejects.toThrow(/this table has none/);
+    await expect(mintRef("postgres://ro/public.items", { where: "file_row_number = 3" })).rejects.toThrow(/by its key column/);
+    await expect(mintRef("postgres://ro/public.nokey", { where: "file_row_number = 3" })).rejects.toThrow(/by its key column/);
     expect(await peek("postgres://ro/public.nokey", { rows: 2 })).toContain("5");
   });
 
