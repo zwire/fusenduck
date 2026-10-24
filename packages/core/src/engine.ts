@@ -1,4 +1,4 @@
-import { closeSync, constants, lstatSync, openSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, lstatSync, openSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
@@ -145,7 +145,15 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
  * source), and the configuration cannot be changed afterwards. See docs/adr/0001.
  */
 export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal; kind?: string; options?: SourceOptions } = {}): Promise<Engine> {
+  // A database file is named with its table: file.duckdb#table.
+  // A file that exists under the whole name is the file.
+  const named = existsSync(source) ? null : /^(.+?\.(?:duckdb|ddb))#(.+)$/i.exec(source);
+  if (named && !opts.options?.table) {
+    source = named[1]!;
+    opts = { ...opts, kind: opts.kind ?? "duckdb", options: { ...opts.options, table: named[2]! } };
+  }
   const multi = isPattern(source);
+  if (multi && (opts.kind ?? kindOf(source)) === "duckdb") throw new FusenError("a database file is opened alone, not as a pattern");
   const resolved = multi ? resolvePattern(source, opts.roots) : (() => { const p = resolveWithin(source, opts.roots); return { source: p, files: [p] }; })();
   const path = resolved.files[0]!;
   const { signal } = opts;
@@ -153,7 +161,9 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   let adapter = createAdapter(opts.kind ?? kindOf(path), opts.options);
   const cancelled = () => new FusenError("the request was cancelled");
   if (signal?.aborted) throw cancelled();
-  const instance = await DuckDBInstance.create(":memory:");
+  // A database file is the engine's own database, opened read-only, so nothing can be written or attached read-write.
+  const created = DuckDBInstance.create(adapter.database ? path : ":memory:", adapter.database ? { access_mode: "READ_ONLY" } : {});
+  const instance = await (adapter.database ? watchOpen(path, created) : created);
   const connection: DuckDBConnection = await instance.connect();
   // The engine is released when opening fails, once a read of the file that is still running has ended.
   let binding: Promise<unknown> | undefined;
@@ -178,7 +188,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
         // Several files: every row has its filename, and a position within its file for selecting by position.
         await connection.run(`CREATE VIEW data_pos AS ${adapter.positionView(resolved.files)}`);
         await connection.run(`CREATE VIEW data AS SELECT * EXCLUDE (${adapter.rowPosition}) FROM data_pos`);
-      } else await connection.run(`CREATE VIEW data AS SELECT * FROM ${adapter.read(resolved.files)}`);
+      } else await connection.run(`CREATE ${adapter.database ? "TEMP " : ""}VIEW data AS SELECT * FROM ${adapter.read(resolved.files)}`);
     })();
     await watchOpen(path, binding);
     await connection.run("SET lock_configuration=true");

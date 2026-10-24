@@ -2,7 +2,7 @@
 
 fusenduck lets you look at a Parquet file read-only and turn the part you looked at into a single string that starts with `fusen://` (a Ref), which you can hand to an AI agent. It has four entry points: a CLI (`fusen`), an MCP server (`fusen-mcp`), a Web UI (`fusen-web`) and a TUI (`fusen-tui`). All of them use the same core.
 
-Status: experimental (0.0.0, unpublished). The shape of a Ref is protected by a frozen corpus, but there is no formal compatibility promise yet. Supported sources are Parquet, CSV/TSV, NDJSON and JSON files (see "Other file formats"); databases are planned (ADR 0004).
+Status: experimental (0.0.0, unpublished). The shape of a Ref is protected by a frozen corpus, but there is no formal compatibility promise yet. Supported sources are Parquet, CSV/TSV, NDJSON, JSON and DuckDB database files (see "Other file formats"); other databases are planned (ADR 0004).
 
 In this guide only, `fusen` is shorthand for the CLI, `fusen-mcp` for the MCP server and `fusen-web` for the Web UI server. The packages are not published yet, so in practice you run them like this:
 
@@ -44,7 +44,7 @@ A Ref carries everything it needs. No server-side session is required, so you ca
 | --- | --- |
 | `fusen://file/<path>` | The source file (absolute path) |
 | `v=` | The data fingerprint (row count, file size, Parquet footer column statistics) |
-| `src=` | The kind of source (`csv`, `ndjson`, `json`). Absent means Parquet |
+| `src=` | The kind of source (`csv`, `ndjson`, `json`, `duckdb`). Absent means Parquet |
 | `opt.<name>=` | The read settings of a text source (CSV: `delim`, `quote`, `escape`, `header`, `columns`; JSON: `columns`), detected once when the Ref is minted |
 | `e=` | The DuckDB version that minted the Ref |
 | `id=` | A short hash of the selection's syntax tree. It exists to detect a hand-edited Ref; it is not a signature |
@@ -247,6 +247,7 @@ Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52;
 - **The fingerprint hashes every byte** together with the settings, because these formats have no footer to read. A one-byte edit gives `DATA_CHANGED`. A file over 512MB is refused. On a 1,000,000-row, 34MB CSV, open + card + mint takes about 2 seconds, because the settings are detected over every row (budget: 6 seconds).
 - **Rows are selected by position** with `file_row_number`, counted from 0 among the records, as for Parquet.
 - **Several files**: a wildcard (`*` or `?`) in the file name (`fusen card "/data/events-*.parquet"`, quote it so the shell does not expand it) reads all matching files of one kind as one table, in name order, with an extra `filename` column. The directory must be literal, nothing below it is searched, files starting with a dot match only a pattern that starts with one, at most 256 files, and a match that is not a regular file inside the directory and the roots (such as a link out of it) is left out. A file whose own name contains `*` or `?` is read as a pattern. The files' own column must not be called `filename`. The fingerprint covers the list of files and each file's own, so adding, removing or changing a file gives `DATA_CHANGED`. Select a row by `filename` and `file_row_number` (the position within that file). The files must have the same columns. The Web UI, VS Code and TUI open one file at a time.
+- **DuckDB database files** (`.duckdb`, `.ddb`): one table of the file is the source. Name it as `file.duckdb#table` (a database with a single table needs no name); the Ref carries `src=duckdb&opt.table=...`. The file is opened read-only as the engine's own database, so nothing can be written to it, attached again or detached into a writable state (tested by running the attempts and checking the file's bytes). The boundary the engine enforces is the **file**, not the table: a query can read the other tables of the same file, so do not point fusenduck at a database whose other tables must stay out of reach. The fingerprint is the row count and the table's storage layout (segment counts and min/max statistics, read from metadata without scanning rows), like Parquet's footer; a rewrite that leaves every statistic equal is not detected. Rows are selected by a column (`where id = 5`), not by position: DuckDB's `rowid` shifts when rows are deleted and the file is compacted, which the fingerprint could not tell. Views are not sources, and a database file with a write-ahead log (`.wal`) left by a crash must be opened once by DuckDB itself to be checkpointed. SQLite needs a DuckDB extension that is not bundled; it is not supported yet.
 - **Known gaps**: files with a different encoding than UTF-8, CSV with several header lines, JSON that is one huge array (read whole), and compressed files are not tested. Excel, multiple files and databases come later (ADR 0004).
 
 ## 10. Read-only safety
@@ -269,7 +270,7 @@ There are cost limits too. Before a resolve, it stops if the whole file's compre
 
 ## What it cannot do yet
 
-- Databases and S3/HTTP sources (planned in order in [ADR 0004](adr/0004-source-adapters.md)), and Excel, recursive globs and Hive partitions.
+- SQLite, Postgres/MySQL and S3/HTTP sources (planned in order in [ADR 0004](adr/0004-source-adapters.md)), and Excel, recursive globs and Hive partitions.
 - Opening CSV/JSON files from the Web UI, VS Code extension and TUI: they list and open Parquet files only for now (the CLI and MCP server open any supported file).
 - Resolving a Ref after the file has been moved.
 - Publishing to npm, installing as the `fusen` command, and publishing the VS Code extension (for now, load it for development, or install a `.vsix` built in CI or locally).
