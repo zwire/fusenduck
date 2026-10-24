@@ -67,6 +67,17 @@ describe.skipIf(!enabled)("a Postgres table as a source (docs/adr/0005)", () => 
     }
   });
 
+  it("notices a change in the middle of the key range that leaves the count and both ends as they were", async () => {
+    const ref = await mintRef("postgres://ro/public.items", { where: "id < 5" });
+    try {
+      psql("update public.items set name = 'edited' where id = 50010");
+      expect(await resolveRef(ref, { roots: [process.cwd()] })).toMatch(/changed/i);
+    } finally {
+      psql("update public.items set name = 'item 50010' where id = 50010");
+    }
+    expect(await resolveRef(ref, { roots: [process.cwd()] })).not.toMatch(/data changed/i);
+  });
+
   it("refuses a role that can write, before reading anything", async () => {
     await expect(openSource("postgres://rw/public.items")).rejects.toThrow(/must only be able to read/);
   });

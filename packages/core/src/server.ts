@@ -38,6 +38,8 @@ function checkOptions(options: SourceOptions): { conn: string; schema: string; t
 interface Relation {
   /** Primary key columns, in order. Empty when the table has none, and rows are then not selectable. */
   keys: string[];
+  /** Whether the first key column is a whole number, so key-range boundaries can be worked out from its smallest and largest values. */
+  integerKey?: boolean;
   tuples: number;
 }
 
@@ -48,6 +50,8 @@ const CONNECT_TIMEOUT_SECONDS = 10;
 const STATEMENT_TIMEOUT_MS = 60_000;
 /** Rows read from each end of the key for the sample hash. */
 const SAMPLE_ROWS = 50;
+/** Rows read at each of the key-range boundaries (a quarter, a half and three quarters of the way from the smallest key to the largest). */
+const BOUNDARY_ROWS = 20;
 
 const pg = (sql: string): string => `SELECT * FROM postgres_query('pg', ${lit(sql)})`;
 
@@ -80,16 +84,22 @@ export function serverAdapter(options: SourceOptions, relation?: Relation): Sour
         keys.length
           ? `(SELECT md5(coalesce(string_agg(to_jsonb(x)::text, ';'), '')) FROM (SELECT * FROM ${stored} ORDER BY ${keys.map((k) => `${ident(k)} ${direction}`).join(", ")} LIMIT ${SAMPLE_ROWS}) x)`
           : "''";
+      // Seeks on the first key column's index, not OFFSET or a table sample: the rows at a quarter, a half and three quarters
+      // of the key range (the bound is a bigint, so the comparison can use the key's index), so a change in the middle of the table that keeps the count and the ends is seen.
+      const first = keys[0] ? ident(keys[0]) : "";
+      const boundary = (i: number) =>
+        `(SELECT md5(coalesce(string_agg(to_jsonb(x)::text, ';'), '')) FROM (SELECT * FROM ${stored} WHERE ${first} >= (SELECT floor(min(${first})::numeric + (max(${first})::numeric - min(${first})::numeric) * ${i} / 4)::bigint FROM ${stored}) ORDER BY ${order} LIMIT ${BOUNDARY_ROWS}) x)`;
+      const middle = relation?.integerKey ? [1, 2, 3].map(boundary) : [];
       const sql = `SELECT ${exact ? `(SELECT count(*) FROM ${stored})::text` : `(SELECT reltuples::bigint FROM pg_class WHERE oid = ${regclass}::regclass)::text`} AS n,
         ${keys.length ? `(SELECT row(${order})::text FROM ${stored} ORDER BY ${keys.map((k) => `${ident(k)} DESC`).join(", ")} LIMIT 1)` : "''"} AS maxkey,
         (SELECT md5(string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text, ',' ORDER BY a.attnum))
            FROM pg_attribute a WHERE a.attrelid = ${regclass}::regclass AND a.attnum > 0 AND NOT a.attisdropped) AS cols,
-        ${sample("ASC")} AS head, ${sample("DESC")} AS tail, current_database() AS db,
+        ${sample("ASC")} AS head, ${sample("DESC")} AS tail, ${middle.length ? middle.join(" || ") : "''"} AS mid, current_database() AS db,
         (SELECT oid FROM pg_database WHERE datname = current_database())::text AS sys`;
       // One statement, so the count, the key and the sample come from one snapshot (the attach is a READ ONLY transaction).
       const row = (await engine.query(pg(sql)))[0] ?? {};
       return createHash("sha256")
-        .update(`postgres:${exact ? "exact" : "estimate"}:${["n", "maxkey", "cols", "head", "tail", "db", "sys"].map((k) => String(row[k])).join(":")}`)
+        .update(`postgres:${exact ? "exact" : "estimate"}:${["n", "maxkey", "cols", "head", "tail", "mid", "db", "sys"].map((k) => String(row[k])).join(":")}`)
         .digest("hex")
         .slice(0, 12);
     },
@@ -201,6 +211,8 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
     try {
       const rows = await probe(
         pg(`SELECT c.relkind::text AS kind, c.reltuples::float8::text AS tuples,
+              (SELECT (SELECT a.atttypid IN ('int2'::regtype, 'int4'::regtype, 'int8'::regtype) FROM pg_attribute a WHERE a.attrelid = i.indrelid AND a.attnum = i.indkey[0])
+                 FROM pg_index i WHERE i.indrelid = c.oid AND i.indisprimary) AS integer_key,
               (SELECT string_agg(a.attname, chr(31) ORDER BY k.ord) FROM pg_index i
                  CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum, ord)
                  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
@@ -211,7 +223,7 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
       const row = rows[0];
       if (!row) throw new FusenError(`connection "${conn}" has no table "${schema}.${table}"`);
       if (row.kind !== "r" && row.kind !== "p") throw new FusenError(`"${schema}.${table}" is not a table (views, materialized views and foreign tables are not supported)`);
-      relation = { keys: row.keys ? String(row.keys).split("\u001f") : [], tuples: Number(row.tuples) };
+      relation = { keys: row.keys ? String(row.keys).split("\u001f") : [], integerKey: row.integer_key === true || row.integer_key === "true", tuples: Number(row.tuples) };
     } catch (error) {
       if (error instanceof FusenError) throw error;
       throw failed("could not read the table", error);
