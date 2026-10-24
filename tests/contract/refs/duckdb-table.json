@@ -1,0 +1,12 @@
+{
+  "ref": "fusen://file/%2Fdata%2Fdb.duckdb?v=0123456789ab&src=duckdb&opt.table=people&where=file_row_number%20%3D%202",
+  "parsed": {
+    "source": "/data/db.duckdb",
+    "fingerprint": "0123456789ab",
+    "src": "duckdb",
+    "options": {
+      "table": "people"
+    },
+    "where": "file_row_number = 2"
+  }
+}

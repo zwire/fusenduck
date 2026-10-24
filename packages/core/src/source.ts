@@ -4,7 +4,7 @@ import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import type { Engine, Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
-import { lit } from "./sql.ts";
+import { ident, lit } from "./sql.ts";
 
 /** A source that names several files: a wildcard (`*`, `?`) in the file name, never in a directory. */
 export const isPattern = (source: string): boolean => /[*?]/.test(source.split(/[\\/]/).pop() ?? "");
@@ -33,6 +33,11 @@ export interface SourceAdapter {
    * Settings a Ref already carries are never detected again, so the same Ref reads the same on any machine.
    */
   resolve(path: string, probe: Probe): Promise<SourceAdapter>;
+  /**
+   * Whether the file is the engine's own database, opened read-only, rather than something it reads from
+   * memory. Then the engine cannot be made to write it or to attach it again read-write (docs/adr/0004).
+   */
+  readonly database: boolean;
   /** The table expression that reads the files. With several, each row also carries the `filename` it came from. */
   read(files: string[], multi?: boolean): string;
   /** The paths the engine may read for this source, fixed at open time before the configuration is locked. */
@@ -85,6 +90,7 @@ async function parquetFingerprint(engine: Engine, path: string): Promise<string>
 export const parquet: SourceAdapter = {
   name: "parquet",
   options: {},
+  database: false,
   resolve: async () => parquet,
   read: (files, multi = false) => (multi ? `read_parquet(${list(files)}, filename=true)` : `read_parquet(${lit(files[0]!)})`),
   allowedPaths: (files) => files,
@@ -248,6 +254,7 @@ function textAdapter(kind: TextKind, options: SourceOptions, detected: boolean):
   const adapter: SourceAdapter = {
     name: kind.name,
     options,
+    database: false,
     async resolve(path, probe) {
       return detected ? adapter : textAdapter(kind, kind.validate(await kind.detect(path, probe)), true);
     },
@@ -283,14 +290,86 @@ const kinds: Record<string, TextKind> = {
   json: jsonKind("json", "auto"),
 };
 
+/**
+ * A table name as an error may show it. Names come from the file, which is untrusted, and an error is read
+ * by an agent outside any data block, so only plain identifiers are shown (no spaces, so a sentence cannot pass for a name).
+ */
+const showName = (name: string): string => (/^[A-Za-z0-9_$]{1,40}$/.test(name) ? name : "(a table with an unusual name)");
+
+/** The most table names an error lists. */
+const MAX_LISTED_TABLES = 20;
+
+/** The block size of a DuckDB file, which is what a table's persistent blocks are counted in. */
+const DUCKDB_BLOCK_BYTES = 262_144;
+
+/**
+ * A table of a DuckDB database file. The file is the engine's own database, opened read-only (so there is
+ * nothing to attach, and nothing that can be made writable). Only one table is the source, but the boundary
+ * the engine enforces is the file: a query can read the other tables of the same file.
+ * The fingerprint is the row count plus the table's storage layout (segment counts and min/max statistics),
+ * read from metadata like Parquet's footer; a rewrite that leaves every statistic equal is not detected.
+ * Rows are addressed by `rowid`, which the fingerprint guards.
+ */
+function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapter {
+  const table = options.table;
+  const from = () => `main.${ident(table ?? "")}`;
+  const adapter: SourceAdapter = {
+    name: "duckdb",
+    options,
+    database: true,
+    async resolve(_path, probe) {
+      if (detected) {
+        const found = await probe(`SELECT 1 AS x FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND table_name = ${lit(table!)}`);
+        if (found.length === 0) throw new FusenError(`this database has no table named "${showName(table!)}" (in the main schema)`);
+        return adapter;
+      }
+      const rows = await probe(
+        "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND NOT internal ORDER BY table_name",
+      );
+      const names = rows.map((r) => String(r.table_name));
+      if (names.length === 0) throw new FusenError("this database has no tables in the main schema");
+      if (names.length > 1) {
+        const shown = names.slice(0, MAX_LISTED_TABLES).map(showName).join(", ");
+        throw new FusenError(`this database has ${names.length} tables (${shown}${names.length > MAX_LISTED_TABLES ? ", ..." : ""}): name one as file.duckdb#table`);
+      }
+      return databaseAdapter({ table: names[0]! }, true);
+    },
+    read: () => from(),
+    allowedPaths: (files) => files,
+    positionView: () => {
+      throw new FusenError("a database file is opened alone");
+    },
+    rowPosition: "file_row_number",
+    baseQuery(_path, withPosition = false) {
+      return withPosition ? `SELECT *, rowid AS ${this.rowPosition} FROM ${from()}` : `SELECT * FROM ${from()}`;
+    },
+    async fingerprint(engine) {
+      const count = await engine.query(`SELECT count(*)::VARCHAR AS n FROM ${from()}`);
+      const layout = await engine.query(
+        `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, column_id::VARCHAR, column_path, segment_id::VARCHAR, segment_type,
+                                                  start::VARCHAR, count::VARCHAR, compression, stats, has_updates::VARCHAR))::VARCHAR,
+                               ';' ORDER BY row_group_id, column_id, segment_id)) AS h
+         FROM pragma_storage_info(${lit(table!)})`,
+      );
+      return createHash("sha256").update(`duckdb:${table}:${String(count[0]?.n)}:${String(layout[0]?.h)}`).digest("hex").slice(0, 12);
+    },
+    async scanBytes(engine) {
+      const blocks = await engine.query(`SELECT count(DISTINCT block_id)::VARCHAR AS n FROM pragma_storage_info(${lit(table!)}) WHERE persistent`);
+      return Number(blocks[0]?.n ?? 0) * DUCKDB_BLOCK_BYTES;
+    },
+  };
+  return adapter;
+}
+
 /** The kinds a Ref may name in `src=`. */
-export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds)];
+export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb"];
 
 /** The kind a file name suggests. Anything not recognised is Parquet, as every source was before kinds existed. */
 export function kindOf(path: string): string {
   if (/\.(csv|tsv)$/i.test(path)) return "csv";
   if (/\.(ndjson|jsonl)$/i.test(path)) return "ndjson";
   if (/\.json$/i.test(path)) return "json";
+  if (/\.(duckdb|ddb)$/i.test(path)) return "duckdb";
   return "parquet";
 }
 
@@ -302,6 +381,13 @@ export function createAdapter(name = "parquet", options?: SourceOptions): Source
   if (name === "parquet") {
     if (options && Object.keys(options).length) throw new FusenError("parquet sources take no settings");
     return parquet;
+  }
+  if (name === "duckdb") {
+    if (!options || Object.keys(options).length === 0) return databaseAdapter({}, false);
+    checkKeys("duckdb", options, ["table"]);
+    const table = options.table;
+    if (typeof table !== "string" || table === "" || table.length > 256 || /\0/.test(table)) throw new FusenError("opt.table must be a table name");
+    return databaseAdapter({ table }, true);
   }
   const kind = kinds[name];
   if (!kind) throw new FusenError(`unsupported source kind "${name}" (known: ${SOURCE_KINDS.join(", ")})`);
