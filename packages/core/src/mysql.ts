@@ -39,9 +39,27 @@ interface Relation {
 /**
  * A statement of ours, sent to the server as it is written. The extension has no timeout for the secret or the attach, a
  * SET cannot be sent through it, and DuckDB's interrupt does not reach a statement the server is still working on
- * (probe, docs/adr/0005 section 6), so the statement carries its own limit as an optimizer hint: the server stops it.
+ * (probe, docs/adr/0005, "What the first slice does not do yet"), so the statement carries its own limit as an optimizer hint: the server stops it.
  */
-export const serverStatement = (sql: string, ms = STATEMENT_TIMEOUT_MS): string => sql.replace(/^\s*select\s/i, `select /*+ MAX_EXECUTION_TIME(${ms}) */ `);
+export const serverStatement = (sql: string, ms = STATEMENT_TIMEOUT_MS): string => {
+  if (!Number.isInteger(ms) || ms < 1) throw new FusenError("a statement time limit is a whole number of milliseconds");
+  const hinted = sql.replace(/^\s*select\s/i, `select /*+ MAX_EXECUTION_TIME(${ms}) */ `);
+  // A statement that does not begin with select would run without the limit, silently.
+  if (hinted === sql) throw new FusenError("a statement sent to the server must begin with select, so that it can carry its time limit");
+  return hinted;
+};
+
+/** Runs a statement of ours on the server; one the server stopped at its limit is told as that, not as a driver error. */
+async function ran(engine: Engine, sql: string): Promise<Row[]> {
+  try {
+    return await engine.query(ONE(sql));
+  } catch (error) {
+    if (/Failed to fetch result row|maximum statement execution time|Query execution was interrupted/i.test(String(error))) {
+      throw new FusenError(`the server stopped the statement after ${STATEMENT_TIMEOUT_MS / 1000} s (a very large table, or a busy server); try again or ask the DBA`);
+    }
+    throw error;
+  }
+}
 
 const ONE = (sql: string, ms?: number): string => `SELECT * FROM mysql_query('my', ${lit(serverStatement(sql, ms))})`;
 
@@ -85,14 +103,14 @@ export function mysqlAdapter(options: SourceOptions, relation?: Relation): Sourc
         ${edge("asc", SAMPLE_ROWS)} as head, ${edge("desc", SAMPLE_ROWS)} as tail, ${middle.length ? `concat_ws('|', ${middle.join(", ")})` : "''"} as mid,
         database() as db, @@server_uuid as sys`;
       // One statement, so the count, the key and the samples come from one snapshot (the attach is a READ ONLY transaction).
-      const row = (await engine.query(ONE(sql)))[0] ?? {};
+      const row = (await ran(engine, sql))[0] ?? {};
       return createHash("sha256")
         .update(`mysql:${["n", "maxkey", "cols", "head", "tail", "mid", "db", "sys"].map((k) => String(row[k])).join(":")}`)
         .digest("hex")
         .slice(0, 12);
     },
     async scanBytes(engine) {
-      const row = (await engine.query(ONE(`select data_length + index_length as bytes from information_schema.tables where table_schema = database() and table_name = ${lit(table)}`)))[0];
+      const row = (await ran(engine, `select data_length + index_length as bytes from information_schema.tables where table_schema = database() and table_name = ${lit(table)}`))[0];
       return Number(row?.bytes ?? 0);
     },
   };
