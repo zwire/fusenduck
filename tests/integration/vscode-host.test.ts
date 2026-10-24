@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveRef } from "@fusenduck/core";
@@ -6,6 +6,7 @@ import { Host, rootFor, type Reply } from "../../apps/vscode/src/host.ts";
 import { csp, messagePage, webviewPage } from "../../apps/vscode/src/html.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
 import { writeOwnPositionColumn } from "../helpers/web.ts";
+import { writeDatabase } from "../helpers/duckdb.ts";
 
 const ids = (out: string) => out.split("\n").filter((l) => l.startsWith("{")).map((l) => Number((JSON.parse(l) as { id: string }).id));
 
@@ -32,6 +33,28 @@ describe("VS Code extension host: the webview's messages (docs/adr/0002)", () =>
 
   afterAll(async () => {
     await host.close();
+  });
+
+  it("opens a CSV file, and a table of a DuckDB file named file#table, but no other file", async () => {
+    const csv = join(dir, "t.csv");
+    writeFileSync(csv, "id,v\n0,a\n1,b\n");
+    const db = join(dir, "t.duckdb");
+    await writeDatabase(db);
+    const csvHost = make(csv);
+    const dbHost = make(db);
+    try {
+      const reply = (await csvHost.handle({ id: 1, method: "open", params: { path: csv } })) as Reply;
+      expect("result" in reply && (reply.result as { kind: string }).kind).toBe("csv");
+      const tables = (await dbHost.handle({ id: 2, method: "tables", params: { path: db } })) as Reply;
+      expect("result" in tables && (tables.result as { tables: string[] }).tables.sort()).toEqual(["other", "people"]);
+      const table = (await dbHost.handle({ id: 3, method: "open", params: { path: `${db}#people` } })) as Reply;
+      expect("result" in table && (table.result as { table: string }).table).toBe("people");
+      const other = (await dbHost.handle({ id: 4, method: "open", params: { path: `${csv}#people` } })) as Reply;
+      expect("error" in other).toBe(true);
+    } finally {
+      await csvHost.close();
+      await dbHost.close();
+    }
   });
 
   it("tells the page its file, opens it, pages rows and mints a Ref that resolves to the selection", async () => {

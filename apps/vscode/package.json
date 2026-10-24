@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Open a Parquet file, select rows and copy a Ref an agent can resolve.",
+  "description": "Open a Parquet, CSV, JSON or DuckDB file, select rows and copy a Ref an agent can resolve.",
   "publisher": "fusenduck",
   "license": "MIT",
   "repository": {
@@ -24,6 +24,8 @@
   ],
   "keywords": [
     "parquet",
+    "csv",
+    "json",
     "duckdb",
     "data",
     "agent",
@@ -47,6 +49,20 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "fusenduck.data",
+        "displayName": "fusenduck",
+        "selector": [
+          { "filenamePattern": "*.csv" },
+          { "filenamePattern": "*.tsv" },
+          { "filenamePattern": "*.ndjson" },
+          { "filenamePattern": "*.jsonl" },
+          { "filenamePattern": "*.json" },
+          { "filenamePattern": "*.duckdb" },
+          { "filenamePattern": "*.ddb" }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [

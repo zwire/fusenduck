@@ -178,6 +178,8 @@ FUSEN_MCP_TOKEN=<at least 16 characters> fusen-mcp --http --port 7457 --root /pa
 
 ## 9. Web UI
 
+The list on the left shows Parquet, CSV/TSV, NDJSON/JSONL, JSON and DuckDB files. Clicking a DuckDB file shows its tables (a file with one table opens directly). A pattern such as `data/events-*.csv` typed in the path box opens all the matching files as one table. Rows of CSV, NDJSON, JSON and Parquet files are selected by position; the rows of a DuckDB table have no position (a row's place moves when rows are deleted), so filter by a column (`id = 5`) and copy.
+
 This is the entry point for looking at a table in a browser, selecting rows and copying a Ref.
 
 ```sh
@@ -214,7 +216,7 @@ Safeguards (details in [ADR 0002](adr/0002-web-ui-transport.md)):
 
 ### VS Code extension
 
-You can use the same screen inside VS Code (`apps/vscode`). Open a `.parquet` file from the Explorer and an editor with the card and table opens; selecting and Copy work as in the Web UI. The copied Ref goes to VS Code's clipboard. Usage, how errors look, and development and packaging steps are in [apps/vscode/README.md](../apps/vscode/README.md).
+You can use the same screen inside VS Code (`apps/vscode`). Open a `.parquet` file from the Explorer and an editor with the card and table opens (CSV, TSV, NDJSON, JSON and DuckDB files open the same way from Open With… → fusenduck, so they keep their text editor by default; a DuckDB file with several tables asks which one); selecting and Copy work as in the Web UI. The copied Ref goes to VS Code's clipboard. Usage, how errors look, and development and packaging steps are in [apps/vscode/README.md](../apps/vscode/README.md).
 
 ```sh
 pnpm build                                              # first time only (writes the extension and DuckDB for this OS to apps/vscode/dist)
@@ -234,7 +236,7 @@ code --install-extension apps/vscode/out/fusenduck-<target>-0.0.0.vsix
 
 ```sh
 node apps/tui/src/index.ts sales.parquet --root /path/to/data
-node apps/tui/src/index.ts --root /path/to/data     # with no file, pick from a list of Parquet files under the root
+node apps/tui/src/index.ts --root /path/to/data     # with no file, pick from a list of data files under the root
 ```
 
 Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52; on terminals that do not support it, use the `Ref:` line on screen, or the line printed to standard output when you quit with `q`). `space` selects one row, `v` a range, `/` a row condition, `n` and `p` turn the page, `←` and `→` shift the columns, `c` chooses the columns to keep (the Ref then has only those columns), and `b` goes back to the list. Opening a file, reading rows and minting a Ref all go through the same `View` as the Web UI, so the root restriction, the query clock, cancellation on disconnect and the refusal when the file changed are the same. Strings from the file are shown in the terminal only after control characters are replaced with markers. The list of keys is in `apps/tui/README.md` and the design is in ADR 0003.
@@ -246,7 +248,7 @@ Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52;
 - **Settings are pinned in the Ref.** The first time a file is opened, DuckDB works out the delimiter, quoting, header and column types (CSV; also a date format and skipped preamble lines when the file has them) or the column types (JSON), reading every row, not a sample. NULL rules are spelled out too. They go into the Ref as `opt.*`, so the same Ref reads the same types on any machine and DuckDB version. Settings in a Ref are validated and never detected again.
 - **The fingerprint hashes every byte** together with the settings, because these formats have no footer to read. A one-byte edit gives `DATA_CHANGED`. A file over 512MB is refused. On a 1,000,000-row, 34MB CSV, open + card + mint takes about 2 seconds, because the settings are detected over every row (budget: 6 seconds).
 - **Rows are selected by position** with `file_row_number`, counted from 0 among the records, as for Parquet.
-- **Several files**: a wildcard (`*` or `?`) in the file name (`fusen card "/data/events-*.parquet"`, quote it so the shell does not expand it) reads all matching files of one kind as one table, in name order, with an extra `filename` column. The directory must be literal, nothing below it is searched, files starting with a dot match only a pattern that starts with one, at most 256 files, and a match that is not a regular file inside the directory and the roots (such as a link out of it) is left out. A file whose own name contains `*` or `?` is read as a pattern. The files' own column must not be called `filename`. The fingerprint covers the list of files and each file's own, so adding, removing or changing a file gives `DATA_CHANGED`. Select a row by `filename` and `file_row_number` (the position within that file). The files must have the same columns. The Web UI, VS Code and TUI open one file at a time.
+- **Several files**: a wildcard (`*` or `?`) in the file name (`fusen card "/data/events-*.parquet"`, quote it so the shell does not expand it) reads all matching files of one kind as one table, in name order, with an extra `filename` column. The directory must be literal, nothing below it is searched, files starting with a dot match only a pattern that starts with one, at most 256 files, and a match that is not a regular file inside the directory and the roots (such as a link out of it) is left out. A file whose own name contains `*` or `?` is read as a pattern. The files' own column must not be called `filename`. The fingerprint covers the list of files and each file's own, so adding, removing or changing a file gives `DATA_CHANGED`. Select a row by `filename` and `file_row_number` (the position within that file). The files must have the same columns. The Web UI and TUI open a pattern too (type it in the path box, or quote it on the command line); the rows are numbered through the files in name order, and the Ref names each file and the position within it. VS Code opens one file per editor.
 - **DuckDB database files** (`.duckdb`, `.ddb`): one table of the file is the source. Name it as `file.duckdb#table` (a database with a single table needs no name); the Ref carries `src=duckdb&opt.table=...`. The file is opened read-only as the engine's own database, so nothing can be written to it, attached again or detached into a writable state (tested by running the attempts and checking the file's bytes). The boundary the engine enforces is the **file**, not the table: a query can read the other tables of the same file, so do not point fusenduck at a database whose other tables must stay out of reach. The fingerprint is the row count and the table's storage layout (segment counts and min/max statistics, read from metadata without scanning rows), like Parquet's footer; a rewrite that leaves every statistic equal is not detected. Rows are selected by a column (`where id = 5`), not by position: DuckDB's `rowid` shifts when rows are deleted and the file is compacted, which the fingerprint could not tell. Views are not sources, and a database file with a write-ahead log (`.wal`) left by a crash must be opened once by DuckDB itself to be checkpointed. SQLite needs a DuckDB extension that is not bundled; it is not supported yet.
 - **Known gaps**: files with a different encoding than UTF-8, CSV with several header lines, JSON that is one huge array (read whole), and compressed files are not tested. Excel, multiple files and databases come later (ADR 0004).
 
@@ -271,7 +273,6 @@ There are cost limits too. Before a resolve, it stops if the whole file's compre
 ## What it cannot do yet
 
 - SQLite, Postgres/MySQL and S3/HTTP sources (planned in order in [ADR 0004](adr/0004-source-adapters.md)), and Excel, recursive globs and Hive partitions.
-- Opening CSV/JSON files from the Web UI, VS Code extension and TUI: they list and open Parquet files only for now (the CLI and MCP server open any supported file).
 - Resolving a Ref after the file has been moved.
 - Publishing to npm, installing as the `fusen` command, and publishing the VS Code extension (for now, load it for development, or install a `.vsix` built in CI or locally).
 - Refs with a query in the Web UI (column selection and conditions work, but `q=` aggregations do not yet).

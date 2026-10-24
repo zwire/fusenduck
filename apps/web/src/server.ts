@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { describeError, FusenError, logLine, SourceChanged } from "@fusenduck/core";
 import { listFiles } from "./files.ts";
-import { View } from "./view.ts";
+import { tablesOf, View } from "./view.ts";
 
 // The local server of the Web UI (docs/adr/0002): it serves the SPA and a small JSON API on one
 // loopback origin. The URL it prints carries a one-time code in its fragment; the SPA trades the code
@@ -132,6 +132,8 @@ export async function startWebServer(options: WebOptions): Promise<WebHandle> {
     switch (path) {
       case "/api/files":
         return listFiles(options.roots);
+      case "/api/tables":
+        return { tables: await tablesOf(body.path as string, options.roots, signal) };
       case "/api/open": {
         const next = await View.open(body.path as string, options.roots);
         const previous = view;

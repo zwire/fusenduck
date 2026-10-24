@@ -1,4 +1,5 @@
 // Engine, Ref model and protocol live here. See docs/vision.md and docs/adr/0001.
+export { kindOf, SOURCE_KINDS, ManyTables } from "./source.ts";
 export { openSource, lit, ident, type Engine, type Row } from "./engine.ts";
 export { buildCard, CARD_TIMEOUT_MS, type DataCard, type CardColumn } from "./card.ts";
 export { fingerprint } from "./fingerprint.ts";

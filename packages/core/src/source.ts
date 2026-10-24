@@ -296,6 +296,15 @@ const kinds: Record<string, TextKind> = {
  */
 const showName = (name: string): string => (/^[A-Za-z0-9_$]{1,40}$/.test(name) ? name : "(a table with an unusual name)");
 
+/** A database file with several tables, none named. The names come from the file, so they are data, not words of core's. */
+export class ManyTables extends FusenError {
+  readonly tables: string[];
+  constructor(message: string, tables: string[]) {
+    super(message);
+    this.tables = tables;
+  }
+}
+
 /** The most table names an error lists. */
 const MAX_LISTED_TABLES = 20;
 
@@ -336,7 +345,10 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
       if (names.length === 0) throw new FusenError("this database has no tables in the main schema");
       if (names.length > 1) {
         const shown = names.slice(0, MAX_LISTED_TABLES).map(showName).join(", ");
-        throw new FusenError(`this database has ${names.length} tables (${shown}${names.length > MAX_LISTED_TABLES ? ", ..." : ""}): name one as file.duckdb#table`);
+        throw new ManyTables(
+          `this database has ${names.length} tables (${shown}${names.length > MAX_LISTED_TABLES ? ", ..." : ""}): name one as file.duckdb#table`,
+          names,
+        );
       }
       return databaseAdapter({ table: names[0]! }, true);
     },

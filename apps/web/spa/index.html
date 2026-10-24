@@ -10,8 +10,8 @@
   <body>
     <header>
       <form id="open-form">
-        <label for="path">Parquet file</label>
-        <input id="path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/file.parquet (or relative to the first root)" />
+        <label for="path">File</label>
+        <input id="path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/file.parquet, .csv, .json, data/*.csv or .duckdb#table (or relative to the first root)" />
         <button id="open" type="submit">Open</button>
       </form>
       <div id="ref-panel" hidden>
@@ -33,7 +33,7 @@
         <button id="reload" type="button" title="List the files again">Reload</button>
       </div>
       <p id="files-note" class="note"></p>
-      <ul id="files" role="listbox" aria-label="Parquet files under the roots"></ul>
+      <ul id="files" role="listbox" aria-label="Files under the roots"></ul>
     </aside>
     <main>
       <p id="hint" class="note"></p>

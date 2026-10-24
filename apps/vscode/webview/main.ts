@@ -31,6 +31,7 @@ function call<T>(method: string, params: Record<string, unknown> = {}): Promise<
 const api: Api = {
   // An editor shows one file; other files open from VS Code's explorer, so the page lists none.
   files: () => Promise.resolve<Listed>({ roots: [], truncated: false }),
+  tables: (path) => call<{ tables: string[] }>("tables", { path }).then((r) => r.tables),
   open: (path) => call<Opened>("open", { path }),
   rows: (file, offset, limit, where) => call<Page>("rows", { source: file.source, fingerprint: file.fingerprint, offset, limit, where }),
   ref: (file, selection) => call<string>("ref", { source: file.source, fingerprint: file.fingerprint, ...selection }),

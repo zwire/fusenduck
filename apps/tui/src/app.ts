@@ -236,7 +236,11 @@ export function App({ view, copy, done, back }: AppProps): ReactElement {
     else if (input === " " || input === "v") {
       const pos = rows[cursor]?.pos;
       if (pos == null) {
-        setMessage("this file has its own column named file_row_number, so rows cannot be picked");
+        setMessage(
+          opened.kind === "duckdb"
+            ? "rows of a database table are picked by a column: filter with / (e.g. id = 5), then y"
+            : "this file has its own column named file_row_number, so rows cannot be picked",
+        );
         return;
       }
       const next = picked.copy();
