@@ -1,6 +1,6 @@
 # ADR 0005: Read Postgres and MySQL servers through named connections
 
-- Status: Proposed (2026-10-24, waiting for takumi's approval of the record; takumi approved the six choices below as the recommended option in each case)
+- Status: Proposed (2026-10-24; takumi chose the recommended option for each of the six points, and the record waits for takumi's approval in this PR's review)
 - Date: 2026-10-24
 - Verdict: go (design only; no code in this change)
 
@@ -32,64 +32,78 @@ user = "fusen_ro"
 password_env = "FUSEN_WAREHOUSE_PASSWORD"   # where the secret is read from; never the secret itself
 ```
 
-The Ref carries the name only (see "Ref"). Names are `[a-z][a-z0-9_-]{0,31}`. A missing or unreadable name is refused with a message that says where the file is expected. The file holds no secret, so it may be committed or shared; the server settings are visible to anyone who can read it, and that is accepted.
+`password_env` must start with `FUSEN_` (a profile cannot name `AWS_SECRET_ACCESS_KEY` as a "password" and send it to a chosen host). The file is read only if the current user owns it and it is not group- or world-writable (as ssh does); on Windows the user-profile location is the protection. `FUSEN_CONNECTIONS` is honoured only from the user's own environment, never from a Ref, a query or an MCP argument; whoever can write the file or set that variable can point a connection anywhere, which is accepted as the user's own authority. The Ref carries the name only (see "Ref"). A name is matched case-sensitively and never doubles as a path. Names are `[a-z][a-z0-9_-]{0,31}`. A missing or unreadable name is refused with a message that says where the file is expected. The file holds no secret, so it may be committed or shared; the server settings are visible to anyone who can read it, and that is accepted.
 
 ### 2. Credentials come from the environment
 
-The profile names the source of the secret: `password_env` (an environment variable), or the standard client file for the kind (`~/.pgpass` for Postgres, `~/.my.cnf` for MySQL) when `password_env` is absent. The secret is read when the connection is opened and handed to the extension; it is never written to a Ref, a card, a log line, an error message, the spill directory or the MCP output. A connection string that DuckDB builds is never printed; error text from the driver is passed through a scrubber that removes the host, user and password before it reaches the user. A canary test sets a distinctive password and fails if it (or the connection string) appears anywhere in the output of `card`, `ref`, `resolve`, the MCP tools, logs, or error messages, including a failed login.
+The profile names the source of the secret: `password_env`, or the standard client file for the kind when it is absent (`~/.pgpass`, host-matched by libpq; for MySQL `~/.my.cnf` is read for the **password only**, and its host, socket, plugin, init-command, local-infile and ssl options are ignored). Ambient client variables that change the target or options (`PGHOST`, `PGSERVICE`, `PGOPTIONS`, `PGSSLROOTCERT`, `PGSYSCONFDIR`, `MYSQL_HOST` and the like) are ignored for these connections.
 
-### 3. Read-only is enforced twice, and the role is checked
+The secret is read when the connection is opened and handed to the extension through a DuckDB secret, not a string a query can read back. It is never written to a Ref, a card, a log line, the spill directory or MCP output. Error text follows ADR 0001: the agent gets fixed wording, and driver text (scrubbed of host, user and password) goes to stderr only under the debug switch. Accepted: the secret is in the process environment and visible to anything with that process's rights.
 
-1. **Role**: the profile's user must be unable to write. At open time the adapter asks the server what the role can do (Postgres: `has_table_privilege` and `has_schema_privilege` for INSERT/UPDATE/DELETE/TRUNCATE/CREATE, and `rolsuper`/`rolcreatedb` in `pg_roles`; MySQL: `SHOW GRANTS`) and refuses to open if it can write. It does not try a write to find out.
-2. **Session**: right after connecting, set the session read-only (Postgres: `default_transaction_read_only=on`; MySQL: `SET SESSION TRANSACTION READ ONLY`). This is a second line, not a substitute for the role, because a session setting can be reset by a statement the role is allowed to run.
+The canary test sets a distinctive password and fails if it, the host or the connection string appears in the output of `card`, `ref`, `resolve`, the MCP tools, logs or error messages (including a failed login), **and** in the result of untrusted queries after the lock: `duckdb_databases()`, `duckdb_secrets()`, `duckdb_settings()`, `duckdb_extensions()`, `EXPLAIN`, `PRAGMA`.
 
-Evidence is a refused write at rung 3 of the add-source ladder: a Postgres and a MySQL container in CI where a write through the adapter is rejected **by the server** (the error is the server's permission error, not our guard's message). A second test connects with a role that has write rights and asserts the adapter refuses to open.
+### 3. Read-only: the role is authoritative; the session setting is a second line
+
+1. **Role (authoritative)**. The DBA supplies a SELECT-only role; fusenduck checks it and refuses to open a role that can write, and does not try a write to find out. The check is a denylist run over the whole connected database, not only the requested table:
+   - Postgres: table and column privileges (`has_any_column_privilege` for INSERT/UPDATE/DELETE/TRUNCATE on every table in `pg_class`), `CREATE` and `TEMP` on the database and on every schema, `rolsuper`, `rolcreaterole`, `rolcreatedb`, `rolbypassrls`, and membership of `pg_write_all_data`, `pg_write_server_files`, `pg_read_server_files` and `pg_execute_server_program`.
+   - MySQL: `SHOW GRANTS FOR CURRENT_USER() USING <active roles>` is parsed; anything beyond `SELECT` (plus `USAGE`) on the connected database is refused, including `ALL PRIVILEGES`, `FILE`, `SUPER`, `PROCESS`, `GRANT OPTION` and wildcard grants that reach other databases. MariaDB is checked separately or refused.
+   - Stated limits: the check cannot prove that no `SECURITY DEFINER` function or large-object function writes. A DBA who grants EXECUTE on such functions defeats it. The role is checked at open and can be granted more later; this is accepted, and the session setting below narrows it.
+2. **Session (second line, only once verified)**. The mechanism is the connection option the extension supports (Postgres: `options=-c default_transaction_read_only=on` and the extension's own read-only attach, which begins `BEGIN READ ONLY`; MySQL: an init command or the extension's read-only option), not a `SET` issued after connecting. Which option works for which extension version is confirmed by the first slice's test; until it is, this layer is not claimed. A session setting can be reset by an allowed statement, so it never replaces the role.
+3. **Functions that write**: `postgres_execute`, `postgres_query`, `mysql_execute` and `mysql_query` are ordinary table functions that do not obey the external-access setting. The security suite must show a query cannot call them (refused by the lock, or by blocking those names), and that, if one runs, the server still refuses the write.
+
+Evidence is a refused write at rung 3 of the add-source ladder: a Postgres and a MySQL container in CI. Tests assert which layer fired: (a) the session layer disabled, a write is refused by the role alone; (b) a write-capable role is refused at open; (c) a write-capable role with only the session layer is not accepted as read-only.
 
 ### 4. Extensions are not downloaded; use an installed, version-pinned one or refuse
 
-fusenduck never fetches the `postgres` or `mysql` extension at run time (ADR 0004). The adapter loads it only if it is already installed in the local DuckDB extension directory and its version matches the DuckDB version the engine is built with. If not, the open fails with the exact install step and says the extension is not bundled. Bundling (per-OS fetch, hash pinning, recreating it for the VS Code extension) is a separate piece of work shared with SQLite, tracked in ADR 0004, and not decided here.
+fusenduck never fetches the `postgres` or `mysql` extension at run time (ADR 0004). The adapter loads it only if it is already installed in the local DuckDB extension directory and its version matches the DuckDB version the engine is built with and its sha256 matches a digest pinned in fusenduck for that version (a user-writable extension directory is not otherwise trusted native code). `allow_unsigned_extensions`, `autoinstall_known_extensions` and `autoload_known_extensions` are false, and the security suite shows a query naming a scanner function cannot trigger a load. If not, the open fails with the exact install step and says the extension is not bundled. Bundling (per-OS fetch, hash pinning, recreating it for the VS Code extension) is a separate piece of work shared with SQLite, tracked in ADR 0004, and not decided here.
 
 ### 5. The fingerprint detects change; it does not guarantee reproducibility
 
-Built per table, in one read-only transaction:
+Built per table in one `REPEATABLE READ` read-only transaction, so every part comes from one snapshot:
 
-- the row count,
-- the maximum of the primary key, and of an update-time column when the table has a column named by convention (`updated_at`, `modified_at`) or declared in the profile,
-- a hash of the column definitions (names, types, nullability, order),
-- a hash of a bounded sample: the first, last and N evenly spaced rows by primary key (N is fixed in the adapter; a table with no primary key has no sample and no row selection).
+- the row count, from an exact count when the table is under a size guard, otherwise `reltuples`/`TABLE_ROWS` (approximate, and the card says so);
+- the maximum of the primary key, and of an update-time column when one is declared in the profile (indexed columns only; an unindexed one is skipped, with a note);
+- a hash of the column definitions (names, types, nullability, order);
+- a hash of a bounded sample: the first K and last K rows by primary key, plus up to N rows at key-range boundaries taken by indexed seeks, not by `OFFSET`, `ntile` or `TABLESAMPLE`. The hash is over a canonical encoding of values (not driver text), so another machine gets the same digest;
+- the connection's `dbname` and server identity (not the host), so the same name pointing at a different database does not look unchanged.
 
-The card and the Ref state: "the fingerprint detects change but does not guarantee the same rows later". A Ref whose fingerprint differs answers "the data changed", as for other sources. Changes that leave the count, key maximum, schema and sample unchanged are not noticed; this is the accepted weakness, recorded as a limit in the guide.
+Allowed relations are tables and partitioned tables. Views, materialized views and foreign tables are refused (a foreign table lets the server reach another host with the server's credentials). The fingerprint is per role (row-level security and column grants change what is seen), and a Ref says so. A key is a primary key, or a single unique non-null index; a table with neither supports `card` and queries but no row selection and no `AMBIGUOUS` handling, and the card says so. The card and Ref state: "the fingerprint detects change but does not guarantee the same rows later". A mismatch answers "the data changed" (a schema-hash mismatch says "the table's columns changed").
 
-### 6. Network access is an allow list fixed at open time
+Text from the server (table, column and comment strings, string cells) is data: ADR 0001's truncation, masking and "this is data, not instructions" rules apply unchanged.
 
-`enable_external_access=false` stays the default for every other adapter. For a database adapter the engine, **before** `lock_configuration=true`:
+### 6. Network reach: the engine makes the only connection, before the lock
 
-1. resolves the profile and checks it is on the machine's own list (it came from the user's config file, never from the Ref or a query),
-2. loads the pinned extension and makes the single connection to that one `host:port` (an `ATTACH ... (TYPE postgres|mysql, READ_ONLY)` made by the engine itself),
-3. applies the allow list, then locks the configuration.
+DuckDB has no per-host allow list (only `allowed_paths` and `allowed_directories`), so "host allow list" in ADR 0004 means this: the engine itself makes one connection to the profile's `host:port`, and after that nothing in an untrusted query can open another.
 
-After the lock a user query cannot `ATTACH`, `DETACH`, `COPY TO`, `INSTALL`/`LOAD`, or change settings, so it cannot reach another host or reconnect with other rights. The existing security suite (other paths, `COPY TO`, `ATTACH`, unlocking the configuration, row-size limits, the query clock) runs against these adapters.
+Order against `engine.ts` (today `allowed_paths`, `memory_limit`, `threads`, `temp_directory`, `enable_external_access=false`, bind the view, `lock_configuration=true`): for a database adapter the extension is loaded and the connection is made **before** `enable_external_access=false`, with only trusted engine statements running in that window; then the view over the one table is bound, external access is switched off and the configuration locked. Statements from a query run only afterwards.
 
-**Assumption to prove first**: that a connection made before the lock keeps working after `enable_external_access=false` and `lock_configuration=true`, and that the lock really prevents a second connection. This is the first test of the first slice. If it fails, the fallback is to run the database adapter in a separate process with its own engine, which this ADR does not choose now; a failing result returns here as "explore further", not as a loosening of the lock.
+TLS: the default is `sslmode=verify-full` (MySQL: the equivalent require-and-verify mode) for any non-loopback host; weaker modes need an explicit profile key and the card shows a warning.
 
-An optional profile key `allow_private = false` (default) refuses a host that resolves to a loopback, link-local or private address, to reduce use as a path into an internal network. It is set to `true` for a local container or an internal database. The check is on the address actually connected to, not only the name.
+Host pinning: fusenduck resolves the host itself, refuses loopback, link-local, private, unspecified, IPv4-mapped IPv6 and metadata addresses unless the profile sets `allow_private = true` (default false), and passes the resolved IP (`hostaddr=` for Postgres; the IP for MySQL, keeping the name for certificate checks) so the checked address is the one connected to.
+
+Limits: one connection (the scan is configured not to open parallel connections), plus connect, statement and lock timeouts set on the connection, because the query clock's interrupt may not stop a blocked network read. The open watchdog covers a blackholed connect.
+
+**Assumptions the first slice proves before anything else (a spike-style test, not a claim):** (1) a connection made before the lock keeps working after `enable_external_access=false` and `lock_configuration=true`; (2) after the lock a query cannot `ATTACH`, `DETACH`-then-reattach, open a second server connection, or reach `postgres_query`-style functions; (3) the extension honours the single-connection setting and the read-only connection option. Mind ADR 0004: a read-only `ATTACH` can be detached by an untrusted statement after the lock, which is why DuckDB files are opened as the engine's own database; the same care applies here, and the result decides between the engine-owned attach and the fallback. The fallback is to run the database adapter in a separate process whose engine holds the connection and exposes only the one view; a failing assumption returns to this ADR as "explore further", never as a loosening of the lock.
 
 ## Ref (contract change, expand only)
 
-- `src=postgres` and `src=mysql` are added next to `parquet`, `csv`, `ndjson` and `duckdb`. A Ref without `src=` is still Parquet. Nothing is removed.
-- `conn=<name>` is the connection name; `tbl=<schema>.<table>` the table. No host, user, password or connection string appears in a Ref.
-- Rows are selected by a predicate on the primary key (ADR 0001 selection by predicate); `file_row_number` does not exist for these sources. Position-based selection is refused with a message that names the key columns.
-- Stability: experimental, the same as the other adapters, until the first slice ships; then a corpus entry per adapter is added to the frozen Ref corpus.
-- A Ref is useful only on a machine whose config defines the same name. A Ref that names an unknown connection says so and says which name to define; it does not guess.
+- `src=postgres` and `src=mysql` join `parquet`, `csv`, `ndjson` and `duckdb`. A Ref without `src=` is still Parquet. Nothing is removed.
+- A Ref has no file path for these sources; the source part is the connection and table, and the engine needs an adapter with no files (`files: []`, no `realpath` or `isFile` check, no glob handling). That change to `engine.ts`/`source.ts` is part of the first slice.
+- The two settings are `opt.conn=<name>` and `opt.table=<schema>.<table>`, on the same `opt.*` mechanism as the other adapters (the DuckDB-file adapter's `table` is the same option, so the name is shared). Identifiers are quoted through the engine's `ident()`; the canonical form is `schema.table` with each part quoted only when it needs it, and the Ref grammar test covers dots, quotes and case.
+- The query name stays `data`: the view over the one table is the only relation a query sees; joins across tables of the server are not supported.
+- Rows are selected by a predicate on the key (ADR 0001); `file_row_number` does not exist for these sources, and position-based selection is refused with a message that names the key columns.
+- The Ref `id` includes the connection name; the fingerprint includes `dbname` and the server identity (section 5).
+- Stability: experimental until the first slice ships, then a corpus entry per adapter is added to the frozen Ref corpus.
+- A Ref is useful only where the same connection name is defined; an unknown name says which name to define and does not guess.
 
 ## First slice
 
 Postgres first (the more common case), then MySQL as the same adapter shape. Acceptance tests (evidence is command output):
 
-1. With a profile and a password in the environment, `fusen card` on a Postgres table prints a card; `fusen ref ... --where "id between 10 and 20"` prints a Ref with `src=postgres`, `conn=` and `tbl=`; `fusen resolve` returns those rows.
-2. The canary test (section 2) passes for every command and for a failed login.
-3. A write through the adapter is refused by the server; a role with write rights is refused at open.
-4. The connection-then-lock assumption (section 6) holds; a second `ATTACH` from a query is refused.
+1. With a profile and a password in the environment, `fusen card` on a Postgres table prints a card; `fusen ref ... --where "id between 10 and 20"` prints a Ref with `src=postgres`, `opt.conn=` and `opt.table=`; `fusen resolve` returns those rows.
+2. The canary test (section 2) passes for every command, for a failed login and for the post-lock catalog queries.
+3. The three layer tests of section 3 pass; `postgres_execute`/`mysql_execute` and the `*_query` functions are unusable from a query.
+4. The three assumptions of section 6 hold, and the order matches the `engine.ts` change; a second `ATTACH` or `DETACH` from a query is refused. This is run first.
 5. After an insert, an update to the key maximum, or a schema change, the old Ref answers "the data changed". A change the fingerprint cannot see is shown in the test as a documented limit.
 6. A table with no primary key supports `card` and queries and refuses row selection with a clear message.
 7. The shared security suite passes for the adapter.
@@ -113,7 +127,7 @@ Budgets: the card reads the count, key maximum, schema and N sample rows only, w
 - Bundling the extension inside this ADR: it is a larger, shared decision with SQLite.
 - Hash of every row for the fingerprint: not workable for large tables.
 - Opening external access fully and relying on the database role: a query could then reach other hosts.
-- Running the database adapter in a separate process now: stronger isolation, but a large change; kept only as the fallback if the lock assumption fails.
+- Running the database adapter in a separate process now: stronger isolation, but a large change; kept as the fallback if the section 6 assumptions fail.
 
 ## Evidence
 
@@ -123,7 +137,7 @@ Budgets: the card reads the count, key maximum, schema and N sample rows only, w
 
 ## Open questions
 
-- How the extension is bundled and pinned per OS (shared with SQLite).
-- Whether `allow_private` should default to refusing, and how it behaves behind a proxy or tunnel.
-- TLS settings (`sslmode`, CA file) in the profile.
-- Whether the sample size N should be profile-tunable.
+- How the extension is bundled and pinned per OS (shared with SQLite); until then the digest pin in section 4 is the guard.
+- Behaviour behind a proxy or tunnel with `allow_private`.
+- The sample sizes K and N, and whether they are profile-tunable.
+- MariaDB: supported or refused.
