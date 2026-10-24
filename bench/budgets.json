@@ -8,7 +8,8 @@
     "web_ref_ms": 100,
     "web_spa_bytes": 51200,
     "csv_open_card_mint_ms": 6000,
-    "sqlite_open_card_mint_ms": 9000
+    "sqlite_open_card_mint_ms": 9000,
+    "sqlite_reopen_ms": 500
   },
   "measured": {
     "measured_on": "1,000,000 rows x 5 columns (id, region, amount, status, note), Parquet",
@@ -22,6 +23,7 @@
     "csv_open_card_mint_ms": 1980,
     "csv_note": "open + card + mint on 1,000,000 rows as CSV (34 MB), which hashes every byte twice",
     "sqlite_open_card_mint_ms": 3054,
-    "sqlite_note": "open + card + mint on 1,000,000 rows as a 40 MB SQLite file, which is copied to a DuckDB file for each open"
+    "sqlite_note": "open + card + mint on 1,000,000 rows as a 40 MB SQLite file, which is copied to a DuckDB file for each open",
+    "sqlite_reopen_ms": 24
   }
 }

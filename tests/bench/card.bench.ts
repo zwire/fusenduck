@@ -81,7 +81,14 @@ const sqliteMs = await time(async () => {
   }
 });
 
+// Engines of one process share the copy of an unchanged file (docs/adr/0004, 6a): the second open copies nothing.
+await new Promise((resolve) => setTimeout(resolve, 3_200));
+const firstEngine = await openSource(sqliteFile);
+const reopenMs = await time(async () => (await openSource(sqliteFile)).close());
+firstEngine.close();
+
 const numbers = {
+  sqlite_reopen_ms: reopenMs,
   sqlite_open_card_mint_ms: sqliteMs,
   csv_open_card_mint_ms: csvMs,
   card_build_ms: cardMs,
@@ -93,6 +100,7 @@ const numbers = {
   web_spa_bytes: spaBytes,
 };
 console.log(`csv open+card+mint: ${csvMs} ms; csv file: ${csvBytes} bytes`);
+console.log(`sqlite reopen of a shared copy: ${reopenMs} ms`);
 console.log(`sqlite open+card+mint: ${sqliteMs} ms; sqlite file: ${sqliteBytes} bytes`);
 rmSync(dir, { recursive: true, force: true });
 const rows = compare(numbers, budgets);

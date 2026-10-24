@@ -1,4 +1,4 @@
-import { constants, mkdtempSync, rmSync } from "node:fs";
+import { constants, lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -97,7 +97,170 @@ async function slot(signal?: AbortSignal): Promise<() => void> {
   };
 }
 
+/** Counts what happened, for tests: copies made from a file. */
+export const sqliteStats = { copies: 0 };
+
+/** How long a copy that no engine uses stays for the next open of the same file. */
+export const LINGER_MS = 30_000;
+/** The most idle copies kept. */
+const MAX_IDLE = 4;
+/** A file changed within this long before it is copied might change again without its timestamps moving (FAT keeps modification times to 2 s). */
+const RACY_MS = 3_000;
+
+interface Shared {
+  key: string;
+  copy: Promise<SqliteCopy>;
+  refs: number;
+  /** Engines still waiting for, or using, the copy. */
+  live: number;
+  /** Aborts the copy; fired when `live` reaches 0 before it is made. */
+  controller: AbortController;
+  /** The copy once it is made, so that it can be removed without waiting a turn. */
+  made?: SqliteCopy;
+  timer?: ReturnType<typeof setTimeout>;
+  idleSince: number;
+}
+const shared = new Map<string, Shared>();
+
+/** Every folder made and not yet removed, so a process that ends normally leaves none. */
+const live = new Set<string>();
+let exitHook = false;
+const track = (dir: string): void => {
+  live.add(dir);
+  if (exitHook) return;
+  exitHook = true;
+  const sweep = () => {
+    for (const d of live) {
+      try {
+        rmSync(d, { recursive: true, force: true });
+      } catch {
+        // Nothing more to do while exiting.
+      }
+    }
+  };
+  process.once("exit", sweep);
+  // A signal without a handler ends the process without an 'exit' event. Ours is removed once it runs, so if nobody else
+  // listens the signal is sent again and ends the process as it would have; a host with its own handler shuts down its way.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      sweep();
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    });
+  }
+};
+
+/**
+ * What a copy depends on, or undefined when it must not be shared: the file and its log by real path, size, inode,
+ * modification and change time (a user cannot set the change time back), and the table asked for. A file touched
+ * within RACY_MS is not shared, since a write right after the copy could keep every timestamp.
+ */
+function identity(path: string, wanted: string | undefined): string | undefined {
+  try {
+    const parts: unknown[] = [path, wanted ?? null];
+    let newest = 0;
+    for (const file of [path, `${path}-wal`]) {
+      let s;
+      try {
+        s = lstatSync(file);
+      } catch {
+        parts.push(null);
+        continue;
+      }
+      newest = Math.max(newest, s.mtimeMs, s.ctimeMs);
+      parts.push([s.size, s.ino, s.dev, s.mtimeMs, s.ctimeMs]);
+    }
+    return Date.now() - newest < RACY_MS ? undefined : JSON.stringify(parts);
+  } catch {
+    return undefined;
+  }
+}
+
+function release(entry: Shared): void {
+  if (--entry.refs > 0) return;
+  entry.idleSince = Date.now();
+  entry.timer = setTimeout(() => drop(entry), LINGER_MS);
+  entry.timer.unref();
+  const idle = [...shared.values()].filter((e) => e.refs === 0).sort((x, y) => x.idleSince - y.idleSince);
+  for (const old of idle.slice(0, Math.max(0, idle.length - MAX_IDLE))) drop(old);
+}
+
+/** Removes every copy that no engine uses now (a test starts from none; a host may call it to free disk). */
+export function dropIdleCopies(): void {
+  for (const entry of [...shared.values()]) if (entry.refs === 0) drop(entry);
+}
+
+function drop(entry: Shared): void {
+  clearTimeout(entry.timer);
+  if (shared.get(entry.key) === entry) shared.delete(entry.key);
+  if (entry.made) entry.made.remove();
+  else entry.copy.then((c) => c.remove(), () => undefined);
+}
+
+/**
+ * The copy of a table of a SQLite file for one engine. Engines of this process that open the same unchanged file and table
+ * share one copy, kept for LINGER_MS after the last of them closes; each one's `remove` gives its share back.
+ * The copy runs under a signal of its own that fires only when every engine waiting for it has been cancelled, so one
+ * cancelled request cannot fail another, and each waiter stops waiting as soon as its own request is cancelled.
+ */
 export async function copySqlite(path: string, wanted: string | undefined, signal?: AbortSignal): Promise<SqliteCopy> {
+  const key = identity(path, wanted);
+  if (key === undefined) return copyAlone(path, wanted, signal);
+  const cancelled = () => new FusenError("the request was cancelled");
+  if (signal?.aborted) throw cancelled();
+  let entry = shared.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const created: Shared = { key, copy: copyAlone(path, wanted, controller.signal), refs: 0, live: 0, controller, idleSince: Date.now() };
+    entry = created;
+    shared.set(key, created);
+    // A copy that failed is not kept for the next open.
+    created.copy.then(
+      (c) => void (created.made = c),
+      () => {
+        if (shared.get(key) === created) shared.delete(key);
+      },
+    );
+  }
+  const current = entry;
+  clearTimeout(current.timer);
+  current.refs++;
+  current.live++;
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(cancelled());
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const copy = await Promise.race([current.copy, aborted]);
+    let given = false;
+    return {
+      path: copy.path,
+      table: copy.table,
+      remove() {
+        if (given) return;
+        given = true;
+        release(current);
+      },
+    };
+  } catch (error) {
+    // Nobody is left waiting for a copy that is still being made: stop it, and do not offer it to the next open.
+    if (--current.live === 0 && !current.made) {
+      if (shared.get(key) === current) shared.delete(key);
+      current.controller.abort();
+    }
+    // The share is given back once the copy settles (if it finishes after all, it stays for the linger, unused).
+    current.copy.then(
+      () => release(current),
+      () => void current.refs--,
+    );
+    throw error;
+  } finally {
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    aborted.catch(() => undefined);
+  }
+}
+
+async function copyAlone(path: string, wanted: string | undefined, signal?: AbortSignal): Promise<SqliteCopy> {
   const done = await slot(signal);
   try {
     return await copyOne(path, wanted, signal);
@@ -110,7 +273,10 @@ async function copyOne(path: string, wanted: string | undefined, signal?: AbortS
   if (signal?.aborted) throw new FusenError("the request was cancelled");
   const dir = mkdtempSync(join(tmpdir(), "fusenduck-sqlite-"));
   // A folder that cannot be removed now (Windows holds a file a moment longer) must not hide the error that led here.
+  sqliteStats.copies++;
+  track(dir);
   const remove = () => {
+    live.delete(dir);
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
     } catch {
