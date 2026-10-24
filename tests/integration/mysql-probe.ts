@@ -219,6 +219,49 @@ for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_id
   }
 }
 
+// 11. Can the server be made to stop a long statement? (No timeout option is known for the secret or the attach.)
+{
+  const slow = "select count(*) as n from items a join items b join items c";
+  const through = (sql: string) => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
+  const e = await engine("fusen_ro", roPassword);
+  await e.attach();
+  await observe("11a duckdb settings that mention mysql", async () => e.q("select name from duckdb_settings() where name like '%mysql%' or name like '%timeout%'"));
+  await observe("11b SET SESSION max_execution_time through mysql_query", async () => e.q(through("set session max_execution_time = 1000")));
+  await observe("11c max_execution_time seen by 8 later statements (one connection or several?)", async () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 8; i++) seen.add(JSON.stringify(await e.q(through("select @@session.max_execution_time as t, connection_id() as id"))));
+    return [...seen];
+  });
+  await observe("11d a slow statement through mysql_query after that SET: how long, what error", async () => {
+    const start = Date.now();
+    try {
+      await e.q(through(slow));
+      return `finished in ${Date.now() - start} ms`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message}`;
+    }
+  });
+  for (const key of ["CONNECT_TIMEOUT 5", "READ_TIMEOUT 5", "TIMEOUT 5", "INIT_COMMAND 'set session max_execution_time=1000'"]) {
+    const x = await engine("fusen_ro", roPassword, `, ${key}`);
+    await observe(`11e secret key ${key}`, async () => {
+      await x.attach();
+      return x.q(through("select @@session.max_execution_time as t"));
+    });
+  }
+  const slept = await engine("fusen_ro", roPassword);
+  await slept.attach();
+  await observe("11f interrupt of a blocked statement (select sleep(8)): how long until it returns", async () => {
+    const start = Date.now();
+    setTimeout(() => slept.c.interrupt(), 1000);
+    try {
+      await slept.q(through("select sleep(8) as s"));
+      return `finished in ${Date.now() - start} ms`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message}`;
+    }
+  });
+}
+
 const summary = process.env.GITHUB_STEP_SUMMARY;
 if (summary) {
   const { appendFileSync } = await import("node:fs");
