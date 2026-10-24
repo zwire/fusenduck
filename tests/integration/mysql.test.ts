@@ -174,8 +174,11 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
   });
 
   it("lists the tables the role can read, and Web's tablesOf offers the same", async () => {
+    sql("drop table if exists `we.ird`; create table `we.ird` (id int); grant select on probe.`we.ird` to 'fusen_ro'@'%'");
     const { tables, truncated } = await listTables("mysql://ro/");
+    sql("drop table if exists `we.ird`");
     expect(truncated).toBe(false);
+    expect(tables, "a name a Ref cannot carry is not offered").not.toContain("we.ird");
     expect(tables).toContain("items");
     expect(tables).toContain("nokey");
     expect([...tables]).toEqual([...tables].sort());

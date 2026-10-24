@@ -137,7 +137,7 @@ export function layoutPredicate(ranges: Range[], layout: Layout): string {
 }
 
 /** The most table names offered for one database file. */
-export const MAX_TABLES = 500;
+export const MAX_TABLES = 1000;
 
 /** Whether rows of this kind of source are tables, selected by a column and not by position. */
 export const isDatabaseKind = (kind: string): boolean => kind === "duckdb" || kind === "sqlite" || kind === "postgres" || kind === "mysql";

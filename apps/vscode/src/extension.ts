@@ -128,7 +128,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showWarningMessage(`fusenduck could not list the tables of ${picked.label}: ${error instanceof Error ? error.message : String(error)}`);
       }
       const table = tables.length
-        ? (await vscode.window.showQuickPick(tables, { placeHolder: `Table of ${picked.label}` }))
+        ? (await vscode.window.showQuickPick(tables, { placeHolder: `Table of ${picked.label} (type to filter)` }))
         : await vscode.window.showInputBox({
             prompt: `Table of ${picked.label}`,
             placeHolder: picked.connKind === "postgres" ? "schema.table, e.g. public.items" : "table",

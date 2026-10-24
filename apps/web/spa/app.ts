@@ -427,10 +427,11 @@ function showFiles(): void {
   };
   // The connections a database table is opened through come first; choosing one lists its tables.
   for (const c of listed.connections ?? []) {
-    if (!words.every((w) => c.name.toLowerCase().includes(w))) continue;
     const path = `${c.kind}://${c.name}/`;
+    const tables = (tablesOpen.get(path) ?? []).filter((t) => words.every((w) => `${c.name}#${t}`.toLowerCase().includes(w)));
+    if (!words.every((w) => c.name.toLowerCase().includes(w)) && !tables.length) continue;
     render({ path, name: c.name, kind: "connection", size: 0, modified: 0 });
-    for (const t of tablesOpen.get(path) ?? []) render({ path: path + t, name: `${c.name}#${t}`, kind: "table", size: 0, modified: 0 });
+    for (const t of tables) render({ path: path + t, name: `${c.name}#${t}`, kind: "table", size: 0, modified: 0 });
   }
   for (const { root, files } of listed.roots) {
     // Every listed name ends in an extension, so the extension would match a "q" or a "p" in every file.

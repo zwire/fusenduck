@@ -5,7 +5,7 @@ import type { Engine } from "./engine.ts";
 import { bundledExtension } from "./extensions.ts";
 import { FusenError } from "./errors.ts";
 import { createQuery, type Row } from "./run.ts";
-import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions, STATEMENT_TIMEOUT_MS, TABLE_LIST_MAX, openable } from "./server.ts";
+import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions, STATEMENT_TIMEOUT_MS, TABLE_LIST_MAX, carried } from "./server.ts";
 import { ident, lit } from "./sql.ts";
 import type { SourceAdapter, SourceOptions } from "./source.ts";
 
@@ -304,7 +304,7 @@ export async function listMysqlTables(conn: string, signal?: AbortSignal): Promi
       throw failed("could not list the tables", error);
     }
     // A name the Ref could not carry would only fail when picked.
-    const names = rows.map((r) => String(r.name)).filter((name) => openable(`mysql://${conn}/${name}`));
+    const names = rows.map((r) => String(r.name)).filter((table) => carried(() => checkOptions({ conn, table })));
     return { tables: names.slice(0, TABLE_LIST_MAX), truncated: names.length > TABLE_LIST_MAX };
   } finally {
     release();

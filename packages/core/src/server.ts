@@ -24,7 +24,7 @@ export function serverOptions(source: string): SourceOptions {
   return { conn: match[1]!, table: match[2]! };
 }
 
-function checkOptions(options: SourceOptions): { conn: string; schema: string; table: string } {
+export function checkOptions(options: SourceOptions): { conn: string; schema: string; table: string } {
   const keys = Object.keys(options);
   if (keys.some((k) => k !== "conn" && k !== "table")) throw new FusenError("a database source takes only opt.conn and opt.table");
   const { conn, table } = options;
@@ -48,10 +48,10 @@ export const EXACT_COUNT_MAX = 100_000;
 /** Seconds the one connection may take to be made, and milliseconds the server may spend on a statement or a lock. */
 export const CONNECT_TIMEOUT_SECONDS = 10;
 export const STATEMENT_TIMEOUT_MS = 60_000;
-/** Whether a source text names a table the Ref can carry. */
-export function openable(source: string): boolean {
+/** Whether a check of a name passes. */
+export function carried(check: () => unknown): boolean {
   try {
-    serverOptions(source);
+    check();
     return true;
   } catch {
     return false;
@@ -289,7 +289,7 @@ export async function listServerTables(conn: string, signal?: AbortSignal): Prom
       throw failed("could not list the tables", error);
     }
     // A name the Ref could not carry would only fail when picked.
-    const names = rows.map((r) => String(r.name)).filter((name) => openable(`postgres://${conn}/${name}`));
+    const names = rows.map((r) => String(r.name)).filter((table) => carried(() => checkOptions({ conn, table })));
     return { tables: names.slice(0, TABLE_LIST_MAX), truncated: names.length > TABLE_LIST_MAX };
   } finally {
     release();
