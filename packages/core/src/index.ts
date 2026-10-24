@@ -11,3 +11,4 @@ export { type Masked } from "./pii.ts";
 export { setExtensionDirectory } from "./extensions.ts";
 export { listConnections } from "./connections.ts";
 export { isServerSource } from "./server.ts";
+export { isConnectionSource, listTables } from "./tables.ts";

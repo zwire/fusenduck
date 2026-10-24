@@ -180,7 +180,7 @@ FUSEN_MCP_TOKEN=<at least 16 characters> fusen-mcp --http --port 7457 --root /pa
 
 The list on the left shows Parquet, CSV/TSV, NDJSON/JSONL, JSON, DuckDB and SQLite files. Clicking a DuckDB or SQLite file shows its tables (a file with one table opens directly). A pattern such as `data/events-*.csv` typed in the path box opens all the matching files as one table. Rows of CSV, NDJSON, JSON and Parquet files are selected by position; the rows of a DuckDB or SQLite table have no position (a row's place moves when rows are deleted), so filter by a column (`id = 5`) and copy.
 
-The connections defined in `connections.toml` (names and kinds only) are listed first. Choosing one fills the path box with `mysql://connection/` (or `postgres://connection/`); type the table after it (for Postgres `schema.table`) and Open. A table of a server has no position either, so rows are filtered by a column. `fusen-tui mysql://connection/table` opens the same table in the terminal, and in VS Code the command **fusenduck: Open Database Table…** asks for a connection and a table.
+The connections defined in `connections.toml` (names and kinds only) are listed first. Choosing one connects (read-only, role checked as for any table) and lists the tables the role can read (up to 500, `schema.table` for Postgres); choose a table to open it, or type `mysql://connection/table` in the path box. A table of a server has no position either, so rows are filtered by a column. `fusen-tui mysql://connection/table` opens the same table in the terminal, and in VS Code the command **fusenduck: Open Database Table…** asks for a connection and then offers its tables.
 
 This is the entry point for looking at a table in a browser, selecting rows and copying a Ref.
 

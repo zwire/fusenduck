@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildCard, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
+import { buildCard, listTables, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 
 // Runs against a real Postgres, which only the CI job `db-probe` provides (docs/adr/0005). Elsewhere it is skipped.
 const host = process.env.FUSEN_PG_HOST ?? "";
@@ -76,6 +76,15 @@ describe.skipIf(!enabled)("a Postgres table as a source (docs/adr/0005)", () => 
       psql("update public.items set name = 'item 50010' where id = 50010");
     }
     expect(await resolveRef(ref, { roots: [process.cwd()] })).not.toMatch(/data changed/i);
+  });
+
+  it("lists the tables the role can read, outside the system schemas", async () => {
+    const { tables, truncated } = await listTables("postgres://ro/");
+    expect(truncated).toBe(false);
+    expect(tables).toContain("public.items");
+    expect(tables).toContain("public.nokey");
+    expect(tables.filter((t) => /^(pg_catalog|information_schema)\./.test(t))).toEqual([]);
+    await expect(listTables("postgres://rw/")).rejects.toThrow(/must only be able to read/);
   });
 
   it("refuses a role that can write, before reading anything", async () => {

@@ -119,11 +119,21 @@ export function activate(context: vscode.ExtensionContext): void {
         { placeHolder: "Database connection" },
       );
       if (!picked) return;
-      const table = await vscode.window.showInputBox({
-        prompt: `Table of ${picked.label}`,
-        placeHolder: picked.connKind === "postgres" ? "schema.table, e.g. public.items" : "table",
-        validateInput: (text) => (/^[^\s/`"'\\]+$/.test(text) ? undefined : "A table name, without spaces, quotes or slashes"),
-      });
+      // The server lists its tables (the role's SELECT-able ones); a failure says so and the name can still be typed.
+      let tables: string[] = [];
+      try {
+        tables = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Reading the tables of ${picked.label}…` }, async () => (await loadHost()).connectionTables(picked.connKind, picked.label),
+        );
+      } catch (error) {
+        void vscode.window.showWarningMessage(`fusenduck could not list the tables of ${picked.label}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const table = tables.length
+        ? (await vscode.window.showQuickPick(tables, { placeHolder: `Table of ${picked.label}` }))
+        : await vscode.window.showInputBox({
+            prompt: `Table of ${picked.label}`,
+            placeHolder: picked.connKind === "postgres" ? "schema.table, e.g. public.items" : "table",
+            validateInput: (text) => (/^[^\s/`"'\\]+$/.test(text) ? undefined : "A table name, without spaces, quotes or slashes"),
+          });
       if (!table) return;
       const panel = vscode.window.createWebviewPanel("fusenduck.table", `${table} (${picked.label})`, vscode.ViewColumn.Active, {
         enableScripts: true,

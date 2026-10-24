@@ -82,3 +82,15 @@ describe("connection profiles (docs/adr/0005 sections 1 and 2)", () => {
     if (process.platform !== "win32") expect(listConnections({ path: write("open.toml", GOOD, 0o666) })).toEqual([]);
   });
 });
+
+describe("listing the tables of a connection", () => {
+  it("takes a connection as kind://name/ and nothing else, before any profile is read", async () => {
+    const { listTables, isConnectionSource } = await import("../../packages/core/src/index.ts");
+    expect(isConnectionSource("mysql://c/")).toBe(true);
+    expect(isConnectionSource("postgres://c")).toBe(true);
+    expect(isConnectionSource("mysql://c/t")).toBe(false);
+    await expect(listTables("mysql://Bad Name/")).rejects.toThrow(/give a connection as/);
+    await expect(listTables("mysql://c/t")).rejects.toThrow(/give a connection as/);
+    await expect(listTables("/etc/passwd")).rejects.toThrow(/give a connection as/);
+  });
+});

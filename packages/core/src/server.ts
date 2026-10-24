@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { DuckDBInstance } from "@duckdb/node-api";
+import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { loadProfile, readPassword, resolveHost, type Profile } from "./connections.ts";
 import type { Engine } from "./engine.ts";
 import { bundledExtension } from "./extensions.ts";
@@ -48,6 +48,18 @@ export const EXACT_COUNT_MAX = 100_000;
 /** Seconds the one connection may take to be made, and milliseconds the server may spend on a statement or a lock. */
 export const CONNECT_TIMEOUT_SECONDS = 10;
 export const STATEMENT_TIMEOUT_MS = 60_000;
+/** Whether a source text names a table the Ref can carry. */
+export function openable(source: string): boolean {
+  try {
+    serverOptions(source);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The most tables a connection's list names. */
+export const TABLE_LIST_MAX = 1000;
 /** Rows read from each end of the key for the sample hash. */
 export const SAMPLE_ROWS = 50;
 /** Rows read at each of the key-range boundaries (a quarter, a half and three quarters of the way from the smallest key to the largest). */
@@ -136,18 +148,18 @@ function roleProblems(row: Row): string[] {
   return found;
 }
 
+interface Session {
+  connection: DuckDBConnection;
+  probe(sql: string): Promise<Row[]>;
+  failed(what: string, error: unknown): FusenError;
+  release(): void;
+}
+
 /**
- * Opens a table of a Postgres server. The engine makes the only connection, as a read-only attach whose password is
- * a DuckDB secret, before external access is switched off and the configuration locked. The role is checked first.
+ * Connects to a Postgres server by name: a read-only attach whose password is a DuckDB secret, then the role is
+ * checked. External access is still on and the configuration open; the caller closes or locks it.
  */
-export async function openServerEngine(source: string, opts: { signal?: AbortSignal; options?: SourceOptions } = {}): Promise<Engine> {
-  const options = opts.options ?? serverOptions(source);
-  // A Ref's source text and its settings name one table; if they disagree, neither is trusted.
-  if (isServerSource(source)) {
-    const named = serverOptions(source);
-    if (named.conn !== options.conn || named.table !== options.table) throw new FusenError("the source and the settings of this Ref name different tables");
-  }
-  const { conn, schema, table } = checkOptions(options);
+async function connectServer(conn: string, signal?: AbortSignal): Promise<Session> {
   const profile: Profile = loadProfile(conn);
   if (profile.kind !== "postgres") throw new FusenError(`connection "${conn}" is not a Postgres connection`);
   const password = readPassword(profile);
@@ -197,7 +209,7 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
     } catch (error) {
       throw failed("could not connect", error);
     }
-    if (opts.signal?.aborted) throw new FusenError("the request was cancelled");
+    if (signal?.aborted) throw new FusenError("the request was cancelled");
     let problems: string[];
     try {
       problems = roleProblems((await probe(pg(ROLE_CHECK)))[0] ?? {});
@@ -207,6 +219,27 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
     if (problems.length) {
       throw new FusenError(`connection "${conn}": the database role must only be able to read, but ${problems.join(" and ")}. Use a role with SELECT only.`);
     }
+    return { connection, probe, failed, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+/**
+ * Opens a table of a Postgres server. The engine makes the only connection (connectServer), and external access is
+ * switched off and the configuration locked before the table is read.
+ */
+export async function openServerEngine(source: string, opts: { signal?: AbortSignal; options?: SourceOptions } = {}): Promise<Engine> {
+  const options = opts.options ?? serverOptions(source);
+  // A Ref's source text and its settings name one table; if they disagree, neither is trusted.
+  if (isServerSource(source)) {
+    const named = serverOptions(source);
+    if (named.conn !== options.conn || named.table !== options.table) throw new FusenError("the source and the settings of this Ref name different tables");
+  }
+  const { conn, schema, table } = checkOptions(options);
+  const { connection, probe, failed, release } = await connectServer(conn, opts.signal);
+  try {
     let relation: Relation;
     try {
       const rows = await probe(
@@ -237,5 +270,28 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
   } catch (error) {
     release();
     throw error;
+  }
+}
+
+/** The tables (schema.table) the role can read, outside the system schemas; cut at TABLE_LIST_MAX. */
+export async function listServerTables(conn: string, signal?: AbortSignal): Promise<{ tables: string[]; truncated: boolean }> {
+  const { probe, failed, release } = await connectServer(conn, signal);
+  try {
+    let rows: Row[];
+    try {
+      rows = await probe(
+        pg(`SELECT n.nspname || '.' || c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_%'
+              AND has_table_privilege(c.oid, 'SELECT')
+            ORDER BY n.nspname, c.relname LIMIT ${TABLE_LIST_MAX + 1}`),
+      );
+    } catch (error) {
+      throw failed("could not list the tables", error);
+    }
+    // A name the Ref could not carry would only fail when picked.
+    const names = rows.map((r) => String(r.name)).filter((name) => openable(`postgres://${conn}/${name}`));
+    return { tables: names.slice(0, TABLE_LIST_MAX), truncated: names.length > TABLE_LIST_MAX };
+  } finally {
+    release();
   }
 }

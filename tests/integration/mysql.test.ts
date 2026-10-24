@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serverStatement } from "../../packages/core/src/mysql.ts";
-import { View } from "../../apps/web/src/view.ts";
-import { buildCard, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
+import { tablesOf, View } from "../../apps/web/src/view.ts";
+import { buildCard, listTables, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 
 // Runs against a real MySQL, which only the CI job `mysql-probe` provides (docs/adr/0005). Elsewhere it is skipped.
 const host = process.env.FUSEN_MY_HOST ?? "";
@@ -171,6 +171,17 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
     } finally {
       engine.close();
     }
+  });
+
+  it("lists the tables the role can read, and Web's tablesOf offers the same", async () => {
+    const { tables, truncated } = await listTables("mysql://ro/");
+    expect(truncated).toBe(false);
+    expect(tables).toContain("items");
+    expect(tables).toContain("nokey");
+    expect([...tables]).toEqual([...tables].sort());
+    expect(await tablesOf("mysql://ro/", [])).toEqual(tables);
+    await expect(listTables("mysql://rw/")).rejects.toThrow(/must only be able to read/);
+    await expect(listTables("mysql://nobody/")).rejects.toThrow(/nobody/);
   });
 
   it("selects rows by key, and says so for a table with no key or a position", async () => {

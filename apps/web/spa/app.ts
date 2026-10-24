@@ -410,17 +410,27 @@ function showFiles(): void {
   const items: HTMLLIElement[] = [];
   let matched = 0;
   shown = [];
-  // The connections a database table is opened through come first; choosing one asks for the table's name.
-  for (const c of listed.connections ?? []) {
-    if (!words.every((w) => c.name.toLowerCase().includes(w))) continue;
-    const entry: ListedFile = { path: `${c.kind}://${c.name}/`, name: c.name, kind: "connection", size: 0, modified: 0 };
+  const render = (f: ListedFile): void => {
     const li = document.createElement("li");
     li.id = `file-${shown.length}`;
     li.dataset.index = String(shown.length);
     li.setAttribute("role", "option");
-    li.append(span("name", c.name), span("dir", ""), span("kind", `${c.kind} connection`), span("size", ""));
-    shown.push(entry);
+    li.title = f.path;
+    const slash = f.name.lastIndexOf("/");
+    if (f.kind === "table") {
+      li.classList.add("table");
+      li.append(span("name", `↳ ${f.name.slice(f.name.indexOf("#") + 1)}`), span("dir", ""), span("kind", "table"), span("size", ""));
+    } else li.append(span("name", f.name.slice(slash + 1)), span("dir", f.name.slice(0, slash + 1)), span("kind", f.kind), span("size", size(f.size)));
+    li.classList.toggle("current", f.path === file?.source || (f.kind === "table" && file?.table !== undefined && f.path === `${file.source}#${file.table}`));
+    shown.push(f);
     items.push(li);
+  };
+  // The connections a database table is opened through come first; choosing one lists its tables.
+  for (const c of listed.connections ?? []) {
+    if (!words.every((w) => c.name.toLowerCase().includes(w))) continue;
+    const path = `${c.kind}://${c.name}/`;
+    render({ path, name: c.name, kind: "connection", size: 0, modified: 0 });
+    for (const t of tablesOpen.get(path) ?? []) render({ path: path + t, name: `${c.name}#${t}`, kind: "table", size: 0, modified: 0 });
   }
   for (const { root, files } of listed.roots) {
     // Every listed name ends in an extension, so the extension would match a "q" or a "p" in every file.
@@ -439,21 +449,7 @@ function showFiles(): void {
       f,
       ...(tablesOpen.get(f.path) ?? []).map((t): ListedFile => ({ path: `${f.path}#${t}`, name: `${f.name}#${t}`, kind: "table", size: 0, modified: f.modified })),
     ]);
-    for (const f of entries) {
-      const li = document.createElement("li");
-      li.id = `file-${shown.length}`;
-      li.dataset.index = String(shown.length);
-      li.setAttribute("role", "option");
-      li.title = f.path;
-      const slash = f.name.lastIndexOf("/");
-      if (f.kind === "table") {
-        li.classList.add("table");
-        li.append(span("name", `↳ ${f.name.slice(f.name.indexOf("#") + 1)}`), span("dir", ""), span("kind", "table"), span("size", ""));
-      } else li.append(span("name", f.name.slice(slash + 1)), span("dir", f.name.slice(0, slash + 1)), span("kind", f.kind), span("size", size(f.size)));
-      li.classList.toggle("current", f.kind === "table" ? file?.table !== undefined && f.path === `${file.source}#${file.table}` : f.path === file?.source);
-      shown.push(f);
-      items.push(li);
-    }
+    for (const f of entries) render(f);
   }
   filesList.replaceChildren(...items);
   active = Math.min(active, Math.max(shown.length - 1, 0));
@@ -508,15 +504,8 @@ async function loadFiles(): Promise<void> {
  * opened as file#table); one with a single table opens directly.
  */
 async function openListed(f: ListedFile): Promise<void> {
-  if (f.kind === "connection") {
-    // The table is named by the person: connection, then table (or schema.table for Postgres).
-    pathInput.value = f.path;
-    pathInput.focus();
-    pathInput.setSelectionRange(f.path.length, f.path.length);
-    $("hint").textContent = `Type the table after ${f.path}, then Open.`;
-    return;
-  }
-  if ((f.kind !== "duckdb" && f.kind !== "sqlite") || !api) return open(f.path);
+  if (f.kind !== "connection" && f.kind !== "duckdb" && f.kind !== "sqlite") return open(f.path);
+  if (!api) return;
   if (tablesOpen.has(f.path)) {
     tablesOpen.delete(f.path);
     showFiles();
@@ -530,10 +519,11 @@ async function openListed(f: ListedFile): Promise<void> {
     say(openFailed(f.path, error), true);
     return;
   }
-  if (tables.length === 1) return open(f.path);
+  if (f.kind !== "connection" && tables.length === 1) return open(f.path);
+  if (!tables.length) return say(`${f.name} has no table to open.`, true);
   tablesOpen.set(f.path, tables);
   showFiles();
-  active = Math.min(shown.indexOf(f) + 1, shown.length - 1);
+  active = Math.min(shown.findIndex((e) => e.path === f.path) + 1, shown.length - 1);
   highlight(true);
   say(`${f.name} has ${tables.length} tables: pick one.`);
 }
