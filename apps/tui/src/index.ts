@@ -2,7 +2,7 @@
 // `fusen-tui [file] [--root <dir>]...` : pick rows of a data file in the terminal and copy a Ref. The file is
 // a Parquet, CSV, NDJSON or JSON file, a wildcard pattern (quote it), `file.duckdb#table`, `file.sqlite#table`,
 // or a table of a database server named through a connection of connections.toml: `mysql://connection/table`, `postgres://connection/schema.table`.
-// Without a file, the data files under the roots are listed to pick from.
+// Without a file, the connections of connections.toml and the data files under the roots are listed to pick from.
 // Files are readable only under the roots (default: the current directory). The Ref last shown is
 // printed to stdout when you quit, so `fusen-tui f.parquet | pbcopy` works where OSC 52 does not.
 // See docs/adr/0003.
