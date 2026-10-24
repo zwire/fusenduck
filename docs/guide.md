@@ -2,7 +2,7 @@
 
 fusenduck lets you look at a Parquet file read-only and turn the part you looked at into a single string that starts with `fusen://` (a Ref), which you can hand to an AI agent. It has four entry points: a CLI (`fusen`), an MCP server (`fusen-mcp`), a Web UI (`fusen-web`) and a TUI (`fusen-tui`). All of them use the same core.
 
-Status: experimental (0.0.0, unpublished). The shape of a Ref is protected by a frozen corpus, but there is no formal compatibility promise yet. The only supported source is Parquet files.
+Status: experimental (0.0.0, unpublished). The shape of a Ref is protected by a frozen corpus, but there is no formal compatibility promise yet. Supported sources are Parquet, CSV/TSV, NDJSON and JSON files (see "Other file formats"); databases are planned (ADR 0004).
 
 In this guide only, `fusen` is shorthand for the CLI, `fusen-mcp` for the MCP server and `fusen-web` for the Web UI server. The packages are not published yet, so in practice you run them like this:
 
@@ -44,6 +44,8 @@ A Ref carries everything it needs. No server-side session is required, so you ca
 | --- | --- |
 | `fusen://file/<path>` | The source file (absolute path) |
 | `v=` | The data fingerprint (row count, file size, Parquet footer column statistics) |
+| `src=` | The kind of source (`csv`, `ndjson`, `json`). Absent means Parquet |
+| `opt.<name>=` | The read settings of a text source (CSV: `delim`, `quote`, `escape`, `header`, `columns`; JSON: `columns`), detected once when the Ref is minted |
 | `e=` | The DuckDB version that minted the Ref |
 | `id=` | A short hash of the selection's syntax tree. It exists to detect a hand-edited Ref; it is not a signature |
 | `where=` | How to pick rows (a SQL predicate) |
@@ -237,6 +239,15 @@ node apps/tui/src/index.ts --root /path/to/data     # with no file, pick from a 
 
 Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52; on terminals that do not support it, use the `Ref:` line on screen, or the line printed to standard output when you quit with `q`). `space` selects one row, `v` a range, `/` a row condition, `n` and `p` turn the page, `←` and `→` shift the columns, `c` chooses the columns to keep (the Ref then has only those columns), and `b` goes back to the list. Opening a file, reading rows and minting a Ref all go through the same `View` as the Web UI, so the root restriction, the query clock, cancellation on disconnect and the refusal when the file changed are the same. Strings from the file are shown in the terminal only after control characters are replaced with markers. The list of keys is in `apps/tui/README.md` and the design is in ADR 0003.
 
+## 9b. Other file formats
+
+`fusen card`, `peek`, `ref` and `resolve`, and the MCP tools, also open CSV/TSV (`.csv`, `.tsv`), NDJSON (`.ndjson`, `.jsonl`) and JSON (`.json`) files. The kind comes from the file name; anything else is read as Parquet.
+
+- **Settings are pinned in the Ref.** The first time a file is opened, DuckDB works out the delimiter, quoting, header and column types (CSV) or the column types (JSON). They go into the Ref as `opt.*`, so the same Ref reads the same types on any machine and DuckDB version. Settings in a Ref are validated and never detected again.
+- **The fingerprint hashes every byte** together with the settings, because these formats have no footer to read. A one-byte edit gives `DATA_CHANGED`. A file over 512MB is refused. On a 1,000,000-row, 34MB CSV, open + card + mint takes about 0.5 seconds (budget: 3 seconds).
+- **Rows are selected by position** with `file_row_number`, counted from 0 among the records, as for Parquet.
+- **Known gaps**: files with a different encoding than UTF-8, CSV with several header lines, JSON that is one huge array (read whole), and compressed files are not tested. Excel, multiple files and databases come later (ADR 0004).
+
 ## 10. Read-only safety
 
 Read-only is enforced by DuckDB settings, not by inspecting SQL strings. Right after a source is opened, these are always applied: `allowed_paths` allowing only the file being opened, a ban on external access, spilling to disk disabled, and the configuration locked (`lock_configuration`). DuckDB lets the spill directory (by default `.tmp` in the working directory) be read and written even while external access is banned, so spilling is not used. The security tests (`pnpm test:security`) check every time that reading any other file, `COPY TO`, `ATTACH` and unlocking the configuration are all refused.
@@ -257,7 +268,8 @@ There are cost limits too. Before a resolve, it stops if the whole file's compre
 
 ## What it cannot do yet
 
-- Sources other than Parquet (CSV, databases, S3/HTTP).
+- Databases and S3/HTTP sources (planned in order in [ADR 0004](adr/0004-source-adapters.md)), and Excel, multiple files and globs.
+- Opening CSV/JSON files from the Web UI, VS Code extension and TUI: they list and open Parquet files only for now (the CLI and MCP server open any supported file).
 - Resolving a Ref after the file has been moved.
 - Publishing to npm, installing as the `fusen` command, and publishing the VS Code extension (for now, load it for development, or install a `.vsix` built in CI or locally).
 - Refs with a query in the Web UI (column selection and conditions work, but `q=` aggregations do not yet).

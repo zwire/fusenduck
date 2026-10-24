@@ -2,7 +2,7 @@ import { closeSync, constants, lstatSync, openSync, realpathSync, statSync } fro
 import { isAbsolute, relative } from "node:path";
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
-import { adapterFor, type SourceAdapter } from "./source.ts";
+import { createAdapter, kindOf, type SourceAdapter, type SourceOptions } from "./source.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 
 export { ident, lit };
@@ -96,10 +96,11 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
  * only this exact path is readable, nothing can be written (COPY TO, ATTACH, overwriting the
  * source), and the configuration cannot be changed afterwards. See docs/adr/0001.
  */
-export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal } = {}): Promise<Engine> {
+export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal; kind?: string; options?: SourceOptions } = {}): Promise<Engine> {
   const path = resolveWithin(source, opts.roots);
   const { signal } = opts;
-  const adapter = adapterFor(path);
+  // Without a kind from a Ref, the file name says; settings the Ref carries are used as they are, never detected again.
+  let adapter = createAdapter(opts.kind ?? kindOf(path), opts.options);
   const cancelled = () => new FusenError("the request was cancelled");
   if (signal?.aborted) throw cancelled();
   const instance = await DuckDBInstance.create(":memory:");
@@ -120,7 +121,11 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     await connection.run("SET temp_directory=''");
     await connection.run("SET enable_external_access=false");
     // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
-    binding = connection.run(`CREATE VIEW data AS SELECT * FROM ${adapter.read(path)}`);
+    const probe = async (sql: string): Promise<Row[]> => (await connection.runAndReadAll(sql)).getRowObjectsJson() as Row[];
+    binding = (async () => {
+      adapter = await adapter.resolve(path, probe);
+      await connection.run(`CREATE VIEW data AS SELECT * FROM ${adapter.read(path)}`);
+    })();
     await watchOpen(path, binding);
     await connection.run("SET lock_configuration=true");
   } catch (error) {

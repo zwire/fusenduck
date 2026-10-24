@@ -127,7 +127,7 @@ Click rows (Shift for a range, Ctrl/⌘ to add), press **Copy**, and paste the R
 
 ## Status
 
-Experimental: version 0.0.0, not published. The only supported source is Parquet files. The shape of a Ref is protected by the frozen corpus, but there is no formal compatibility promise yet. See [what it cannot do yet](docs/guide.md#what-it-cannot-do-yet).
+Experimental: version 0.0.0, not published. Supported sources are Parquet, CSV, NDJSON and JSON files; databases are planned (ADR 0004). The shape of a Ref is protected by the frozen corpus, but there is no formal compatibility promise yet. See [what it cannot do yet](docs/guide.md#what-it-cannot-do-yet).
 
 ## Repository layout
 

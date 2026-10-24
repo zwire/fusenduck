@@ -24,6 +24,8 @@ describe("malformed Ref corpus", () => {
     "fusen://file/%2Fx?v=1&junk",
     "fusen://file/%2Fx",
     "https://example.com/%2Fx?v=1",
+    "fusen://file/%2Fx.csv?v=1&src=excel",
+    "fusen://file/%2Fx.csv?v=1&src=csv&opt.shell=1&opt.columns=%5B%5B%22a%22%2C%22BIGINT%22%5D%5D",
   ])("%s is rejected", (text) => {
     expect(() => parseRef(text)).toThrow();
   });

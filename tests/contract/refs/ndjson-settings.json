@@ -1,0 +1,12 @@
+{
+  "ref": "fusen://file/%2Fdata%2Fpeople.ndjson?v=0123456789ab&src=ndjson&opt.columns=%5B%5B%22id%22%2C%22BIGINT%22%5D%2C%5B%22name%22%2C%22VARCHAR%22%5D%5D&where=id%20%3D%202",
+  "parsed": {
+    "source": "/data/people.ndjson",
+    "fingerprint": "0123456789ab",
+    "src": "ndjson",
+    "options": {
+      "columns": "[[\"id\",\"BIGINT\"],[\"name\",\"VARCHAR\"]]"
+    },
+    "where": "id = 2"
+  }
+}

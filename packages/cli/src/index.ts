@@ -5,9 +5,9 @@ import { parseArgs } from "node:util";
 import { buildCard, describeError, FusenError, MAX_PEEK_ROWS, mintRef, openSource, peek, renderCard, resolveRef } from "@fusenduck/core";
 
 const USAGE = `usage:
-  fusen card <file.parquet> [--unmask]
-  fusen peek <file.parquet> [--rows <n>] [--unmask]   (the card, the first rows and a Ref in one result)
-  fusen ref <file.parquet> [--query <select over data>] [--where <predicate>] [--columns a,b]
+  fusen card <file> [--unmask]
+  fusen peek <file> [--rows <n>] [--unmask]   (the card, the first rows and a Ref in one result)
+  fusen ref <file> [--query <select over data>] [--where <predicate>] [--columns a,b]
   fusen resolve <ref> [--limit <n>] [--root <dir>]... [--unmask]   (roots default to the current directory)
   fusen --help | --version
 
@@ -51,7 +51,7 @@ async function main(argv: string[]): Promise<string> {
   const [command, target, ...extra] = positionals;
   if (!command) throw usage("give a command");
   if (!["card", "peek", "ref", "resolve"].includes(command)) throw usage(`unknown command: ${command}`);
-  if (!target) throw usage(command === "resolve" ? "resolve needs a Ref" : `${command} needs the path of a Parquet file`);
+  if (!target) throw usage(command === "resolve" ? "resolve needs a Ref" : `${command} needs the path of a data file`);
   if (extra.length) throw usage(`unexpected argument: ${extra[0]} (quote a --where or --query that has spaces)`);
   const only = (...allowed: string[]) => {
     const stray = Object.keys(values).filter((k) => !allowed.includes(k));

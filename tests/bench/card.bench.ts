@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { buildCard, mintRef, openSource, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 import { View } from "../../apps/web/src/view.ts";
 import { tempDir, writeCustomers } from "../helpers/fixtures.ts";
+import { DuckDBInstance } from "@duckdb/node-api";
 import { buildSpa } from "../helpers/web.ts";
 import { compare, table, type Numbers } from "./budgets.ts";
 
@@ -43,7 +44,22 @@ const spaBytes = ["spa/index.html", "spa/style.css", "dist/app.js", "dist/api.js
   .map((f) => statSync(join("apps/web", f)).size)
   .reduce((a, b) => a + b, 0);
 
+// A text source has no footer: opening it hashes every byte (docs/adr/0004). 1,000,000 rows as CSV.
+const csvFile = join(dir, "big.csv");
+await (await (await DuckDBInstance.create(":memory:")).connect()).run(`COPY (SELECT * FROM read_parquet('${file}')) TO '${csvFile}' (FORMAT csv)`);
+const csvBytes = statSync(csvFile).size;
+const csvMs = await time(async () => {
+  const csvEngine = await openSource(csvFile);
+  try {
+    await buildCard(csvEngine);
+    await mintRef(csvFile, { where: "id <= 11" });
+  } finally {
+    csvEngine.close();
+  }
+});
+
 const numbers = {
+  csv_open_card_mint_ms: csvMs,
   card_build_ms: cardMs,
   card_render_tokens: tokens(renderCard(card, file)),
   rows_render_tokens_11_rows: tokens(rendered),
@@ -52,6 +68,7 @@ const numbers = {
   web_ref_ms: webRefMs,
   web_spa_bytes: spaBytes,
 };
+console.log(`csv open+card+mint: ${csvMs} ms; csv file: ${csvBytes} bytes`);
 rmSync(dir, { recursive: true, force: true });
 const rows = compare(numbers, budgets);
 console.log(table(rows));
