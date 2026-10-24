@@ -211,6 +211,13 @@ export class View {
       let from = "data";
       let pos = "file_row_number";
       let layout: Layout | undefined;
+      if (engine.multi) {
+        // The files' own column of that name would be replaced by the position that Refs select by.
+        const own = await engine.query(`DESCRIBE SELECT * FROM ${engine.adapter.read(engine.files, true)}`);
+        if (own.some((c) => String(c.column_name).toLowerCase() === "file_row_number")) {
+          throw new FusenError("the files have a column named file_row_number, which a pattern cannot keep: open them one at a time");
+        }
+      }
       if (selectable && engine.multi) {
         // Positions run through the files in name order; the engine reads them in parallel, so each file's rows are counted.
         const counts = new Map(

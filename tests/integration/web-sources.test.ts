@@ -70,6 +70,13 @@ describe("the Web UI's view of sources other than one Parquet file", () => {
     }
   });
 
+  it("refuses a pattern whose files have their own file_row_number column", async () => {
+    const own = tempDir();
+    writeFileSync(join(own, "a.csv"), "id,file_row_number\n1,8\n2,8\n");
+    writeFileSync(join(own, "b.csv"), "id,file_row_number\n3,9\n4,9\n");
+    await expect(View.open(join(own, "*.csv"), [own])).rejects.toThrow(/file_row_number/);
+  });
+
   it("cuts a range where it crosses from one file into the next", () => {
     const layout = [
       { file: "/d/a.csv", rows: 3 },
