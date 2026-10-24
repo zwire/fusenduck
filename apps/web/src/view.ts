@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   buildCard,
@@ -154,10 +155,30 @@ export async function tablesOf(path: string, roots: string[], signal?: AbortSign
   }
 }
 
+/**
+ * The size, modified time and identity of the files of a text source. Its fingerprint hashes every byte, which a
+ * page cannot afford each time, so a page asks the files whether they were touched at all; a Ref still checks the
+ * bytes when it is minted. Other kinds read a footer or metadata, which is cheap, and give undefined. A rewrite
+ * that keeps all three (a restored modified time) is not noticed by a page.
+ */
+function signature(kind: string, files: string[]): string | undefined {
+  if (kind === "parquet" || kind === "duckdb") return undefined;
+  try {
+    return JSON.stringify(files.map((f) => {
+      const s = statSync(f);
+      return [s.size, s.mtimeMs, s.ino];
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
 export class View {
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;
   #closing: Promise<void> | undefined;
+  /** What #touched said when the bytes were last found to match the fingerprint. */
+  #verified: string | undefined;
   /** The count of the last filter, so paging through its rows counts them once. */
   #counted: { where: string; n: number } | undefined;
 
@@ -205,6 +226,8 @@ export class View {
       // A real column of that name shadows the position in a predicate (docs/adr/0001), and DuckDB
       // compares identifiers without case. A database table has no position to select by.
       const selectable = !database && !columns.some((c) => c.toLowerCase() === "file_row_number");
+      // Looked at before the bytes are hashed, so a rewrite in between is not taken for the hashed bytes.
+      const before = signature(engine.adapter.name, engine.files);
       const fp = await fingerprint(engine);
       const card = await buildCard(engine);
       const ref = await mintRefWith(engine, { expect: fp });
@@ -247,7 +270,9 @@ export class View {
         files: engine.files.length,
         ...(table === undefined ? {} : { table }),
       };
-      return new View(engine, opened, columns, from, pos, layout);
+      const view = new View(engine, opened, columns, from, pos, layout);
+      view.#verified = before;
+      return view;
     } catch (error) {
       engine.close();
       throw error;
@@ -271,10 +296,16 @@ export class View {
     return run;
   }
 
+  #touched(): string | undefined {
+    return signature(this.opened.kind, this.#engine.files);
+  }
+
   async #check(expected: unknown): Promise<void> {
-    if (expected !== this.opened.fingerprint || (await fingerprint(this.#engine)) !== this.opened.fingerprint) {
-      throw new SourceChanged(CHANGED);
-    }
+    if (expected !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
+    const touched = this.#touched();
+    if (touched !== undefined && touched === this.#verified) return;
+    if ((await fingerprint(this.#engine)) !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
+    this.#verified = touched;
   }
 
   /**
