@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { DuckDBInstance } from "@duckdb/node-api";
 import { loadProfile, readPassword, resolveHost, type Profile } from "./connections.ts";
 import type { Engine } from "./engine.ts";
+import { bundledExtension } from "./extensions.ts";
 import { FusenError } from "./errors.ts";
 import { createQuery, type Row } from "./run.ts";
 import { ident, lit } from "./sql.ts";
@@ -161,9 +162,11 @@ export async function openServerEngine(source: string, opts: { signal?: AbortSig
     await connection.run("SET autoinstall_known_extensions=false");
     await connection.run("SET autoload_known_extensions=false");
     try {
-      await connection.run("LOAD postgres");
+      const engine = (await probe("SELECT version() AS v, platform AS p FROM pragma_platform()"))[0]!;
+      await connection.run(`LOAD ${lit(bundledExtension("postgres_scanner", String(engine.v), String(engine.p)))}`);
     } catch (error) {
-      throw failed("the postgres extension of DuckDB is not installed (it is never downloaded while fusenduck runs)", error);
+      if (error instanceof FusenError) throw error;
+      throw failed("the postgres extension of DuckDB could not be loaded (it is never downloaded while fusenduck runs)", error);
     }
     try {
       // The password lives in a secret, which no catalog function shows; the address is the one that was checked.

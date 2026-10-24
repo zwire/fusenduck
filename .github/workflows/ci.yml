@@ -107,6 +107,8 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # TEMPORARY: writes the postgres_scanner pins (the lock cannot be made where extensions.duckdb.org is unreachable).
+      - run: pnpm extensions:lock && cat packages/core/extensions.lock.json
       - name: Create the roles and a table
         env:
           PGPASSWORD: admin
@@ -122,8 +124,8 @@ jobs:
           revoke create on schema public from public;
           SQL
       - run: node tests/integration/db-probe.ts
-      # The extension is installed here, ahead of the tests: fusenduck never downloads it while it runs.
-      - run: node -e "import('@duckdb/node-api').then(async (d) => { const c = await (await d.DuckDBInstance.create(':memory:')).connect(); await c.run('INSTALL postgres'); })"
+      # The shipped extension, fetched against the lock: fusenduck never downloads it while it runs.
+      - run: pnpm extensions:fetch
       - name: Postgres source tests
         env:
           FUSEN_PG_HOST: 127.0.0.1
