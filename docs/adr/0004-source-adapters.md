@@ -8,7 +8,7 @@
 
 takumi asked whether fusenduck can go beyond Parquet (other file formats, databases), and proposed that covering what DuckDB can read fits the name of the repository. The aim is adopted: **if DuckDB can read it and a Ref to it can be reproduced, fusenduck can hand it to an agent.**
 
-Today the code is Parquet-shaped in five places:
+Before step 1 the code was Parquet-shaped in five places (step 1 moved the read, fingerprint, scan-byte count, row-position column and allowed paths behind `engine.adapter`; the text of messages and the Web view's `file_row_number` handling still name Parquet and move with the CSV step):
 
 - `engine.ts` binds `data` with a fixed `read_parquet(...)`.
 - `ref.ts` builds the base query with `read_parquet(...)` and uses `file_row_number`, a Parquet reader column, to select rows by position.

@@ -111,7 +111,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     instance.closeSync();
   };
   try {
-    await connection.run(`SET allowed_paths=[${lit(path)}]`);
+    await connection.run(`SET allowed_paths=[${adapter.allowedPaths(path).map(lit).join(", ")}]`);
     // Untrusted SQL can be big without reading many bytes; bound what the engine may hold.
     await connection.run(`SET memory_limit='${MEMORY_LIMIT}'`);
     await connection.run("SET threads=4");

@@ -13,6 +13,8 @@ export interface SourceAdapter {
   readonly name: string;
   /** The table expression that reads `path`. */
   read(path: string): string;
+  /** The paths the engine may read for this source, fixed at open time before the configuration is locked. */
+  allowedPaths(path: string): string[];
   /** The column that exposes a row's position in the source, which a predicate may name. */
   readonly rowPosition: string;
   /** The base query of a source, with the row position when a predicate selects by it. */
@@ -34,9 +36,10 @@ export interface SourceAdapter {
 export const parquet: SourceAdapter = {
   name: "parquet",
   read: (path) => `read_parquet(${lit(path)})`,
+  allowedPaths: (path) => [path],
   rowPosition: "file_row_number",
   baseQuery(path, withPosition = false) {
-    return withPosition ? `SELECT *, file_row_number FROM ${this.read(path)}` : `SELECT * FROM ${this.read(path)}`;
+    return withPosition ? `SELECT *, ${this.rowPosition} FROM ${this.read(path)}` : `SELECT * FROM ${this.read(path)}`;
   },
   async fingerprint(engine) {
     const rows = await engine.query(`SELECT num_rows::VARCHAR AS n FROM parquet_file_metadata(${lit(engine.source)})`);
