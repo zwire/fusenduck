@@ -1,6 +1,6 @@
 # ADR 0004: Cover what DuckDB can read, through source adapters
 
-- Status: Proposed (awaiting approval)
+- Status: Accepted (2026-10-24, takumi approved)
 - Date: 2026-10-24
 - Verdict: go (refactor first, then CSV and NDJSON, as increments)
 

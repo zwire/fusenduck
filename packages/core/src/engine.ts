@@ -1,27 +1,23 @@
 import { closeSync, constants, lstatSync, openSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 import { FusenError } from "./errors.ts";
+import { ident, lit } from "./sql.ts";
+import { adapterFor, type SourceAdapter } from "./source.ts";
 import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
+
+export { ident, lit };
 
 export type Row = Record<string, unknown>;
 
 export interface Engine {
   /** The absolute path of the one file this engine may read. */
   readonly source: string;
+  /** How this kind of source is read, fingerprinted and addressed (docs/adr/0004). */
+  readonly adapter: SourceAdapter;
   /** Runs one statement and returns its rows as JSON-safe objects (BIGINT and DECIMAL arrive as strings). */
   query(sql: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<Row[]>;
   /** Releases the engine. A query after this fails. */
   close(): void;
-}
-
-/** A SQL string literal. */
-export function lit(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-/** A SQL identifier. */
-export function ident(name: string): string {
-  return `"${name.replaceAll('"', '""')}"`;
 }
 
 const MEMORY_LIMIT = "512MB";
@@ -103,6 +99,7 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
 export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal } = {}): Promise<Engine> {
   const path = resolveWithin(source, opts.roots);
   const { signal } = opts;
+  const adapter = adapterFor(path);
   const cancelled = () => new FusenError("the request was cancelled");
   if (signal?.aborted) throw cancelled();
   const instance = await DuckDBInstance.create(":memory:");
@@ -123,7 +120,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     await connection.run("SET temp_directory=''");
     await connection.run("SET enable_external_access=false");
     // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
-    binding = connection.run(`CREATE VIEW data AS SELECT * FROM read_parquet(${lit(path)})`);
+    binding = connection.run(`CREATE VIEW data AS SELECT * FROM ${adapter.read(path)}`);
     await watchOpen(path, binding);
     await connection.run("SET lock_configuration=true");
   } catch (error) {
@@ -136,6 +133,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
   }
   return {
     source: path,
+    adapter,
     async query(sql: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<Row[]> {
       // The caller of one query (a request of the Web UI) may go away while the engine lives on.
       const signals = [signal, opts.signal].filter((s): s is AbortSignal => s !== undefined);

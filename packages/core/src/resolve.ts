@@ -1,8 +1,8 @@
 import { dirname } from "node:path";
-import { lit, openSource, type Engine, type Row } from "./engine.ts";
+import { openSource, type Engine, type Row } from "./engine.ts";
 import { FusenError, planned } from "./errors.ts";
 import { fingerprint } from "./fingerprint.ts";
-import { baseQuery, checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
+import { checkPredicate, checkQuery, engineVersion, formatRef, parseRef, positional, refId, selectionSql, type Ref } from "./ref.ts";
 import { buildCard } from "./card.ts";
 import { maskRows } from "./pii.ts";
 import { renderCard, renderChanged, renderRows, type Ambiguity } from "./render.ts";
@@ -104,10 +104,7 @@ async function resolveWith(
 
   // The byte guard counts the whole source (a predicate cannot make a scan bigger than the file);
   // the clock below is what bounds a predicate that is slow without reading much.
-  const meta = await engine.query(
-    `SELECT sum(total_compressed_size)::VARCHAR AS bytes FROM parquet_metadata(${lit(engine.source)})`,
-  );
-  const bytes = Number(meta[0]?.bytes ?? 0);
+  const bytes = await engine.adapter.scanBytes(engine);
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   if (bytes > maxBytes) throw new CostExceeded(`would scan ${bytes} bytes, over the limit of ${maxBytes}`);
 
@@ -169,7 +166,7 @@ async function countCopies(
     // A file with its own file_row_number column reads that column in a predicate, not the position.
     const own = ref.query
       ? []
-      : await engine.query(`SELECT 1 FROM (DESCRIBE ${baseQuery(engine.source)}) WHERE column_name = 'file_row_number'`);
+      : await engine.query(`SELECT 1 FROM (DESCRIBE ${engine.adapter.baseQuery(engine.source)}) WHERE column_name = '${engine.adapter.rowPosition}'`);
     return { distinct: Number(n), byPosition: !ref.query && own.length === 0 };
   } catch {
     return undefined;

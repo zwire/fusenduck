@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { ident, lit, type Engine } from "./engine.ts";
+import { adapterFor } from "./source.ts";
 import { FusenError } from "./errors.ts";
 
 export interface Ref {
@@ -94,9 +95,7 @@ export const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
 
 /** The base query of a source. */
 export function baseQuery(source: string, withPosition = false): string {
-  return withPosition
-    ? `SELECT *, file_row_number FROM read_parquet(${lit(source)})`
-    : `SELECT * FROM read_parquet(${lit(source)})`;
+  return adapterFor(source).baseQuery(source, withPosition);
 }
 
 // The predicate sits alone on its lines inside parentheses: a "--" comment cannot swallow what
