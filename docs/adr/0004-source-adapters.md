@@ -81,7 +81,7 @@ Databases are in scope when DuckDB can read them (DuckDB files, SQLite, and Post
 
 ## First slice
 
-Status: steps 1 and 2 are implemented (PR #38 for step 1; the CSV/NDJSON/JSON adapters, `src=` and `opt.*`, the text-source tests and the `csv_open_card_mint_ms` budget for step 2). JSON that is one array is read with `format=auto`; its row position and fingerprint behave like NDJSON.
+Status: steps 1, 2 and 3 are implemented (step 3: a wildcard in the file name, up to 256 files, fingerprint over the file list; Hive partitions and recursive globs are left out). Steps 1 and 2 were implemented (PR #38 for step 1; the CSV/NDJSON/JSON adapters, `src=` and `opt.*`, the text-source tests and the `csv_open_card_mint_ms` budget for step 2). JSON that is one array is read with `format=auto`; its row position and fingerprint behave like NDJSON.
 
 Steps 1 and 2. Acceptance tests (evidence is command output):
 

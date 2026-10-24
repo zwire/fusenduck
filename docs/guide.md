@@ -246,6 +246,7 @@ Look at a table in the terminal, select rows, and copy the Ref with `y` (OSC 52;
 - **Settings are pinned in the Ref.** The first time a file is opened, DuckDB works out the delimiter, quoting, header and column types (CSV; also a date format and skipped preamble lines when the file has them) or the column types (JSON), reading every row, not a sample. NULL rules are spelled out too. They go into the Ref as `opt.*`, so the same Ref reads the same types on any machine and DuckDB version. Settings in a Ref are validated and never detected again.
 - **The fingerprint hashes every byte** together with the settings, because these formats have no footer to read. A one-byte edit gives `DATA_CHANGED`. A file over 512MB is refused. On a 1,000,000-row, 34MB CSV, open + card + mint takes about 2 seconds, because the settings are detected over every row (budget: 6 seconds).
 - **Rows are selected by position** with `file_row_number`, counted from 0 among the records, as for Parquet.
+- **Several files**: a wildcard (`*` or `?`) in the file name (`fusen card "/data/events-*.parquet"`, quote it so the shell does not expand it) reads all matching files of one kind as one table, in name order, with an extra `filename` column. The directory must be literal, nothing below it is searched, files starting with a dot match only a pattern that starts with one, at most 256 files, and a match that is not a regular file inside the roots (such as a link out of them) is left out. The fingerprint covers the list of files and each file's own, so adding, removing or changing a file gives `DATA_CHANGED`. Select a row by `filename` and `file_row_number` (the position within that file). The files must have the same columns. The Web UI, VS Code and TUI open one file at a time.
 - **Known gaps**: files with a different encoding than UTF-8, CSV with several header lines, JSON that is one huge array (read whole), and compressed files are not tested. Excel, multiple files and databases come later (ADR 0004).
 
 ## 10. Read-only safety
@@ -268,7 +269,7 @@ There are cost limits too. Before a resolve, it stops if the whole file's compre
 
 ## What it cannot do yet
 
-- Databases and S3/HTTP sources (planned in order in [ADR 0004](adr/0004-source-adapters.md)), and Excel, multiple files and globs.
+- Databases and S3/HTTP sources (planned in order in [ADR 0004](adr/0004-source-adapters.md)), and Excel, recursive globs and Hive partitions.
 - Opening CSV/JSON files from the Web UI, VS Code extension and TUI: they list and open Parquet files only for now (the CLI and MCP server open any supported file).
 - Resolving a Ref after the file has been moved.
 - Publishing to npm, installing as the `fusen` command, and publishing the VS Code extension (for now, load it for development, or install a `.vsix` built in CI or locally).

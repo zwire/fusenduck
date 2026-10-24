@@ -1,0 +1,16 @@
+{
+  "ref": "fusen://file/%2Fdata%2Fpart-*.csv?v=0123456789ab&src=csv&opt.columns=%5B%5B%22id%22%2C%22BIGINT%22%5D%5D&opt.delim=%2C&opt.escape=&opt.header=true&opt.quote=%22&where=filename%20LIKE%20'%25a.csv'%20AND%20file_row_number%20%3D%200",
+  "parsed": {
+    "source": "/data/part-*.csv",
+    "fingerprint": "0123456789ab",
+    "src": "csv",
+    "options": {
+      "delim": ",",
+      "quote": "\"",
+      "escape": "",
+      "header": "true",
+      "columns": "[[\"id\",\"BIGINT\"]]"
+    },
+    "where": "filename LIKE '%a.csv' AND file_row_number = 0"
+  }
+}

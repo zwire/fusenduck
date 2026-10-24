@@ -67,7 +67,7 @@ export async function buildCard(engine: Engine, opts: { timeoutMs?: number; unma
   const timeoutMs = opts.timeoutMs ?? CARD_TIMEOUT_MS;
   let summary;
   try {
-    summary = await engine.query(`SUMMARIZE SELECT * FROM ${engine.adapter.read(engine.source)}`, { timeoutMs });
+    summary = await engine.query(`SUMMARIZE SELECT * FROM data`, { timeoutMs });
   } catch (error) {
     if (error instanceof FusenError && /stopped after/.test(error.message)) {
       throw new FusenError(`data card stopped after ${timeoutMs} ms: the file is too large to summarize in time`);
