@@ -302,6 +302,37 @@ for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_id
   });
 }
 
+// 13. The extension's own timeout and hint settings.
+{
+  const through = (sql: string) => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
+  const timed = async (fn: () => Promise<unknown>) => {
+    const start = Date.now();
+    try {
+      const value = await fn();
+      return `finished in ${Date.now() - start} ms ${JSON.stringify(value).slice(0, 120)}`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message.slice(0, 200)}`;
+    }
+  };
+  const heavy = "select sum(a.id * b.id) as s from items a join items b on a.id % 1000 = b.id % 1000";
+  const e = await engine("fusen_ro", roPassword);
+  await observe("13a the settings, with defaults and descriptions", async () =>
+    e.q("select name, value, description from duckdb_settings() where name like 'mysql_query_timeout%' or name like 'mysql_hint%' or name = 'mysql_pool_wait_timeout_millis'"),
+  );
+  await e.c.run("SET mysql_query_timeout_enabled=true");
+  await e.c.run("SET mysql_query_timeout_min_ms=300");
+  await e.c.run("SET mysql_query_timeout_max_ms=300");
+  await e.attach();
+  await observe("13b heavy join through mysql_query with the extension's timeout at 300 ms", async () => timed(() => e.q(through(heavy))));
+  await observe("13c select sleep(5) through mysql_query with the timeout", async () => timed(() => e.q(through("select sleep(5) as s"))));
+  await e.c.run("SET mysql_debug_show_queries=true");
+  await observe("13d a scan with the timeout on (the statement it sends is printed above this line)", async () => timed(() => e.q("select count(*) as n from my.items where id < 10")));
+  await observe("13e a scan with a filter the server cannot do quickly: where name like '%99%'", async () => timed(() => e.q("select count(*) as n from my.items where name like '%99%'")));
+  await e.c.run("SET mysql_debug_show_queries=false");
+  await e.c.run("SET mysql_query_timeout_enabled=false");
+  await observe("13f the same heavy join with the timeout off again", async () => timed(() => e.q(through(heavy))));
+}
+
 const summary = process.env.GITHUB_STEP_SUMMARY;
 if (summary) {
   const { appendFileSync } = await import("node:fs");
