@@ -155,6 +155,24 @@ export async function tablesOf(path: string, roots: string[], signal?: AbortSign
   }
 }
 
+/**
+ * The size, modified time and identity of the files of a text source. Its fingerprint hashes every byte, which a
+ * page cannot afford each time, so a page asks the files whether they were touched at all; a Ref still checks the
+ * bytes when it is minted. Other kinds read a footer or metadata, which is cheap, and give undefined. A rewrite
+ * that keeps all three (a restored modified time) is not noticed by a page.
+ */
+function signature(kind: string, files: string[]): string | undefined {
+  if (kind === "parquet" || kind === "duckdb") return undefined;
+  try {
+    return JSON.stringify(files.map((f) => {
+      const s = statSync(f);
+      return [s.size, s.mtimeMs, s.ino];
+    }));
+  } catch {
+    return undefined;
+  }
+}
+
 export class View {
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;
@@ -208,6 +226,8 @@ export class View {
       // A real column of that name shadows the position in a predicate (docs/adr/0001), and DuckDB
       // compares identifiers without case. A database table has no position to select by.
       const selectable = !database && !columns.some((c) => c.toLowerCase() === "file_row_number");
+      // Looked at before the bytes are hashed, so a rewrite in between is not taken for the hashed bytes.
+      const before = signature(engine.adapter.name, engine.files);
       const fp = await fingerprint(engine);
       const card = await buildCard(engine);
       const ref = await mintRefWith(engine, { expect: fp });
@@ -251,7 +271,7 @@ export class View {
         ...(table === undefined ? {} : { table }),
       };
       const view = new View(engine, opened, columns, from, pos, layout);
-      view.#verified = view.#touched();
+      view.#verified = before;
       return view;
     } catch (error) {
       engine.close();
@@ -276,21 +296,8 @@ export class View {
     return run;
   }
 
-  /**
-   * The size, modified time and identity of the files of a text source. Its fingerprint hashes every byte, which a
-   * page cannot afford each time, so a page asks the files whether they were touched at all; a Ref still
-   * checks the bytes when it is minted. Other kinds read a footer or metadata, which is cheap, and give undefined.
-   */
   #touched(): string | undefined {
-    if (this.opened.kind === "parquet" || this.opened.kind === "duckdb") return undefined;
-    try {
-      return JSON.stringify(this.#engine.files.map((f) => {
-        const s = statSync(f);
-        return [s.size, s.mtimeMs, s.ino];
-      }));
-    } catch {
-      return undefined;
-    }
+    return signature(this.opened.kind, this.#engine.files);
   }
 
   async #check(expected: unknown): Promise<void> {

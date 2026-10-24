@@ -28,6 +28,25 @@ describe("review findings on text and database sources (#43)", () => {
     }
   });
 
+  it("opens a table named Data in any case", async () => {
+    const dir = tempDir();
+    const file = join(dir, "my file.duckdb");
+    const instance = await DuckDBInstance.create(file);
+    const connection = await instance.connect();
+    await connection.run('CREATE TABLE "Data"(id BIGINT); INSERT INTO "Data" SELECT * FROM range(3)');
+    await connection.run("CHECKPOINT");
+    connection.closeSync();
+    instance.closeSync();
+    const engine = await openSource(`${file}#DATA`, { roots: [dir] });
+    try {
+      expect((await buildCard(engine)).rows).toBe(3);
+      const ref = await mintRefWith(engine, { where: "id = 1" });
+      expect(ids(await resolveRef(ref, { roots: [dir] }))).toEqual([1]);
+    } finally {
+      engine.close();
+    }
+  });
+
   it("refuses CSV files whose columns differ in order or name, instead of mapping them by position", async () => {
     const dir = tempDir();
     writeFileSync(join(dir, "o1.csv"), "id,n\n1,2\n");
