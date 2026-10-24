@@ -186,9 +186,9 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
     try {
       const rows = await server(
         `select t.table_type as kind, t.table_rows as tuples, t.table_name as name,
-           (select group_concat(s.column_name order by s.seq_in_index separator char(31)) from information_schema.statistics s
+           (select group_concat(s.column_name order by s.seq_in_index separator '\u001f') from information_schema.statistics s
              where s.table_schema = t.table_schema and s.table_name = t.table_name and s.index_name = 'PRIMARY') as pk,
-           (select group_concat(c.column_name order by c.ordinal_position separator char(31)) from information_schema.columns c
+           (select group_concat(c.column_name order by c.ordinal_position separator '\u001f') from information_schema.columns c
              where c.table_schema = t.table_schema and c.table_name = t.table_name) as cols,
            (select c.data_type in ('tinyint', 'smallint', 'mediumint', 'int', 'bigint') from information_schema.statistics s
               join information_schema.columns c on c.table_schema = s.table_schema and c.table_name = s.table_name and c.column_name = s.column_name

@@ -183,6 +183,9 @@ jobs:
           FUSEN_MY_ADMIN_PASSWORD: admin
           FUSEN_MY_CA: ${{ runner.temp }}/mysql-ca.pem
         run: pnpm exec vitest run tests/integration/mysql.test.ts
+      - name: The mysql_scanner pins, on one line
+        if: always()
+        run: node -e "console.log('PINS ' + JSON.stringify(require('./packages/core/extensions.lock.json').mysql_scanner))"
 
   repro:
     # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs
