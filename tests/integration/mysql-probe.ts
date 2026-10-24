@@ -27,7 +27,7 @@ async function observe(name: string, fn: () => Promise<unknown>) {
   }
 }
 const mysql = (user: string, password: string, sql: string): string =>
-  execFileSync("mysql", ["-h", host, "-P", port, "-u", user, `-p${password}`, "--ssl-mode=DISABLED", "-N", "-B", db, "-e", sql], { encoding: "utf8" }).trim();
+  execFileSync("mysql", ["-h", host, "-P", port, "-u", user, `-p${password}`, "--ssl-mode=REQUIRED", "-N", "-B", db, "-e", sql], { encoding: "utf8" }).trim();
 
 async function engine(user: string, password: string, secretExtra = "", attachExtra = "READ_ONLY") {
   const instance = await DuckDBInstance.create(":memory:");
@@ -85,13 +85,15 @@ for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_id
   await e.attach();
   await lockdown(e.c);
   await observe("2a ATTACH again after the lock", () => e.c.run(`ATTACH ${lit(`host=${host} port=${port} user=fusen_ro password=${roPassword} database=${db} ssl_mode=disabled`)} AS my2 (TYPE mysql, READ_ONLY)`));
-  await observe("2b DETACH after the lock", () => e.c.run("DETACH my"));
   await observe("2c mysql_query after the lock", () => e.q("SELECT * FROM mysql_query('my', 'select 1 as one')"));
   await observe("2d mysql_execute after the lock (role is SELECT only)", () => e.q("CALL mysql_execute('my', 'create table probe_x(i int)')"));
   await observe("2e INSERT through the attached catalog", () => e.c.run("INSERT INTO my.items VALUES (999999, 'x')"));
   await observe("2f CREATE SECRET after the lock", () => e.c.run("CREATE SECRET evil (TYPE mysql, HOST '127.0.0.1', PORT 1)"));
   await observe("2g mysql_scan with a connection string after the lock", () => e.q(`SELECT * FROM mysql_scan(${lit(`host=127.0.0.1 port=1 user=x database=${db}`)}, ${lit(db)}, 'items')`));
   await observe("2h INSTALL after the lock", () => e.c.run("INSTALL postgres"));
+  await observe("2i mysql_scan / mysql_attach style functions that exist", () => e.q("SELECT function_name FROM duckdb_functions() WHERE function_name LIKE 'mysql%' GROUP BY 1"));
+  await observe("2j DETACH after the lock", () => e.c.run("DETACH my"));
+  await observe("2k mysql_query after DETACH", () => e.q("SELECT * FROM mysql_query('my', 'select 1 as one')"));
 }
 
 // 3. A write-capable role: which layer stops a write.
@@ -142,10 +144,60 @@ const leaks = async (q: (sql: string) => Promise<Record<string, unknown>[]>, pas
     e.q(`SELECT * FROM mysql_query('my', ${lit("select (select count(*) from items) as n, (select max(id) from items) as maxkey, (select group_concat(column_name, ':', column_type, ':', is_nullable order by ordinal_position) from information_schema.columns where table_schema = database() and table_name = 'items') as cols, database() as db, @@server_uuid as sys")})`));
   await observe("6b estimate: table_rows", () => e.q(`SELECT * FROM mysql_query('my', ${lit("select table_rows as n, data_length + index_length as bytes, table_type as kind from information_schema.tables where table_schema = database() and table_name = 'items'")})`));
   await observe("6c primary key columns", () =>
-    e.q(`SELECT * FROM mysql_query('my', ${lit("select group_concat(column_name order by seq_in_index) as keys from information_schema.statistics where table_schema = database() and table_name = 'items' and index_name = 'PRIMARY'")})`));
+    e.q(`SELECT * FROM mysql_query('my', ${lit("select group_concat(column_name order by seq_in_index) as pk from information_schema.statistics where table_schema = database() and table_name = 'items' and index_name = 'PRIMARY'")})`));
   await observe("6d sample hash (md5 of group_concat of rows), 50 rows from each end", () =>
     e.q(`SELECT * FROM mysql_query('my', ${lit("select md5(group_concat(json_object('id', id, 'name', name) order by id separator ';')) as head from (select * from items order by id asc limit 50) x")})`));
   await observe("6e a view, is it in information_schema.tables", async () => mysql("fusen_ro", roPassword, "select count(*) from information_schema.tables where table_schema = 'probe' and table_type = 'VIEW'"));
+}
+
+// 7. Is the connection encrypted, per ssl_mode? (The secret accepted every mode above, even against a self-signed certificate.)
+for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_identity"]) {
+  const e = await engine("fusen_ro", roPassword, `, SSL_MODE ${lit(mode)}`);
+  await observe(`7a ssl_mode=${mode}: attach, then the session cipher`, async () => {
+    await e.attach();
+    return e.q(`SELECT * FROM mysql_query('my', ${lit("select variable_value as cipher from performance_schema.session_status where variable_name = 'Ssl_cipher'")})`);
+  });
+}
+{
+  const instance = await DuckDBInstance.create(":memory:");
+  const c = await instance.connect();
+  await c.run("INSTALL mysql");
+  await c.run("LOAD mysql");
+  await c.run(`CREATE SECRET bad (TYPE mysql, HOST ${lit(host)}, PORT ${port}, DATABASE ${lit(db)}, USER 'fusen_ro', PASSWORD 'wrong-password-canary-1')`);
+  await observe("7b wrong password: is the attach eager, and does the error show the password", () => c.run("ATTACH '' AS my (TYPE mysql, SECRET bad, READ_ONLY)"));
+}
+
+// 8. Does the client library read ~/.my.cnf or MYSQL_* variables behind the secret?
+{
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const home = mkdtempSync(join(tmpdir(), "mycnf-"));
+  writeFileSync(join(home, ".my.cnf"), "[client]\ninit-command=SET @from_cnf=1\n");
+  const saved = { HOME: process.env.HOME, MYSQL_PWD: process.env.MYSQL_PWD, MYSQL_HOST: process.env.MYSQL_HOST };
+  process.env.HOME = home;
+  process.env.MYSQL_HOST = "192.0.2.1";
+  process.env.MYSQL_PWD = "env-password-canary";
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'required'");
+  await observe("8a ~/.my.cnf init-command and MYSQL_HOST/MYSQL_PWD present: attach and read @from_cnf", async () => {
+    await e.attach();
+    return e.q("SELECT * FROM mysql_query('my', 'select @from_cnf as from_cnf')");
+  });
+  for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v;
+}
+
+// 9. What the role check can see without SHOW GRANTS.
+{
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'required'");
+  await e.attach();
+  const w = await engine("fusen_rw", rwPassword, ", SSL_MODE 'required'");
+  await w.attach();
+  for (const [who, x] of [["ro", e], ["rw", w]] as const) {
+    await observe(`9a ${who}: information_schema.user_privileges`, () => x.q(`SELECT * FROM mysql_query('my', ${lit("select grantee, privilege_type, is_grantable from information_schema.user_privileges")})`));
+    await observe(`9b ${who}: information_schema.schema_privileges`, () => x.q(`SELECT * FROM mysql_query('my', ${lit("select grantee, table_schema, privilege_type, is_grantable from information_schema.schema_privileges")})`));
+    await observe(`9c ${who}: information_schema.table_privileges`, () => x.q(`SELECT * FROM mysql_query('my', ${lit("select table_schema, table_name, privilege_type from information_schema.table_privileges")})`));
+    await observe(`9d ${who}: enabled roles / SUPER-like`, () => x.q(`SELECT * FROM mysql_query('my', ${lit("select current_role() as r, @@global.read_only as ro, @@global.super_read_only as sro")})`));
+  }
 }
 
 const summary = process.env.GITHUB_STEP_SUMMARY;
