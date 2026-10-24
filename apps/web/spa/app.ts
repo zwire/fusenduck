@@ -212,7 +212,7 @@ function showSelection(): void {
     tr.setAttribute("aria-selected", String(on));
   }
   const how = !file.selectable
-    ? file.kind === "duckdb"
+    ? file.kind === "duckdb" || file.kind === "sqlite"
       ? " This is a database table, so its rows are selected by a column, not by position: use the filter, e.g. id = 5."
       : " This file has its own column named file_row_number, so rows cannot be selected by position; use the filter instead."
     : ranges.length
@@ -448,7 +448,7 @@ function showFiles(): void {
   const roots = listed.roots.map((r) => r.root).join(", ");
   $("files-note").textContent =
     total === 0
-      ? `No Parquet, CSV, JSON or DuckDB files under ${roots}. Type a path above instead.`
+      ? `No Parquet, CSV, JSON, DuckDB or SQLite files under ${roots}. Type a path above instead.`
       : matched === 0
         ? "No file matches the filter."
         : (matched === total ? `${total} ${total === 1 ? "file" : "files"}` : `${matched} of ${total} files`) +
@@ -495,7 +495,7 @@ async function loadFiles(): Promise<void> {
  * opened as file#table); one with a single table opens directly.
  */
 async function openListed(f: ListedFile): Promise<void> {
-  if (f.kind !== "duckdb" || !api) return open(f.path);
+  if ((f.kind !== "duckdb" && f.kind !== "sqlite") || !api) return open(f.path);
   if (tablesOpen.has(f.path)) {
     tablesOpen.delete(f.path);
     showFiles();
@@ -775,9 +775,9 @@ export function mount(host: Api, path: string): void {
   void openOrChoose(path);
 }
 
-/** A DuckDB file with several tables lists them to choose from; anything else opens. */
+/** A DuckDB or SQLite file with several tables lists them to choose from; anything else opens. */
 async function openOrChoose(path: string): Promise<void> {
-  if (/\.(duckdb|ddb)$/i.test(path) && api) {
+  if (/\.(duckdb|ddb|sqlite|sqlite3|db3)$/i.test(path) && api) {
     try {
       const tables = await api.tables(path);
       if (tables.length > 1) {

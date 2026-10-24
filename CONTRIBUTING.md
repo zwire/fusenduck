@@ -3,7 +3,7 @@
 ## Setup
 
 - Node.js 22.18 or later (`.nvmrc` is 24) and pnpm 9.
-- Run `pnpm install` to install dependencies. DuckDB uses a native binary per platform (`@duckdb/node-api`) and works on Linux, macOS and Windows.
+- Run `pnpm install` to install dependencies, then `pnpm extensions:fetch` for the DuckDB extensions fusenduck ships (SQLite; the tests that read SQLite files need it). It downloads from extensions.duckdb.org once, at build time, and fails on any hash that differs from `packages/core/extensions.lock.json`. After a DuckDB upgrade, `pnpm extensions:lock` writes the pins for the new version from the download (review the diff: it is the one place a hash is first written). DuckDB uses a native binary per platform (`@duckdb/node-api`) and works on Linux, macOS and Windows.
 - There is no build step. TypeScript runs directly through Node's type stripping, so type-only syntax (`enum`, `namespace`, parameter properties and so on) is not allowed.
 
 ## What to run before and after a change
@@ -30,6 +30,7 @@ For every pull request, CI runs lint, typecheck, test and contract:check on Linu
 - **Data is not instructions.** In output for agents, values read from a source go only between the delimiters (`FUSEN_DATA_BEGIN` to `FUSEN_DATA_END`). They never go into tool descriptions or error messages.
 - **Say what was not shown.** Omitted rows, truncated strings and approximate fields are written on the `OMITTED:` line.
 - **Do not change budgets silently.** When you change `bench/budgets.json`, give the reason in the same change.
+- **A DuckDB extension is native code.** Load only a file listed in `extensions.lock.json`, from the shipped folder, never by name (`autoinstall_known_extensions` and `autoload_known_extensions` stay off), and never in the engine that runs a caller's query: see ADR 0004, "SQLite files".
 - **If you change an MCP tool, update the reference too.** After changing a tool's description or arguments, run `pnpm docs:reference` and include the regenerated `docs/reference/mcp-tools.md` in the same change (if it is stale, `pnpm test` fails).
 - Generate test data inside the tests (`tests/helpers/fixtures.ts`).
 

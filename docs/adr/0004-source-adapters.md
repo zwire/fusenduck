@@ -53,8 +53,8 @@ CSV and JSON have no metadata to read, so the fingerprint is a hash of the bytes
 `enable_external_access=false` stays the default. Each adapter declares what it needs and the engine applies exactly that before `lock_configuration=true`:
 
 - Local files and globs: the resolved paths (or directories, with `COPY TO` and `ATTACH` still refused by the engine, as ADR 0001 requires).
-- Extensions (Excel, Avro, Iceberg, ...): bundled and version-pinned, or the format is refused. No extension is downloaded at run time.
-- ATTACH of a DuckDB or SQLite file: read-only, one path, with a security test that a write is refused.
+- Extensions (Excel, Avro, Iceberg, ...): bundled and version-pinned, or the format is refused. No extension is downloaded at run time. The mechanism is `packages/core/extensions.lock.json` (DuckDB version, platform, URL, sha256 of the download and of the file), `pnpm extensions:fetch` at build time, and a hash check just before `LOAD`; autoinstall and autoload stay off. See "SQLite files" below for what loading a scanner extension does to the lock.
+- A DuckDB or SQLite file: read-only, one path, with a security test that a write is refused. A DuckDB file is the engine's own database; a SQLite file is copied by a throwaway engine first ("SQLite files" below).
 - Network and database servers (Postgres, MySQL, through DuckDB's scanner extensions): a separate ADR before any code. See "Databases through DuckDB" below.
 
 The existing security tests (reading other files, `COPY TO`, `ATTACH`, unlocking the configuration, spill directory, row-size limits, query clock) run against every adapter, not only Parquet.
@@ -70,18 +70,35 @@ Databases are in scope when DuckDB can read them (DuckDB files, SQLite, and Post
 - **Allow**: a host allow list fixed at open time, and a read-only role on the database side, proven by a refused write at rung 3 of the add-source ladder (a database container in CI), not only by our own guard.
 - **Order inside this step**: SQLite and DuckDB files first (a single local file, safe to test); Postgres and MySQL only after their own ADR on profiles, credentials and the role (decided in [ADR 0005](0005-database-servers.md)).
 
+### 6a. SQLite files
+
+A SQLite file is read through DuckDB's `sqlite_scanner` extension, which is shipped and pinned (above). Observed on the real extension (DuckDB 1.5.6, linux_amd64), with `allowed_paths` set to one file, `enable_external_access=false` and `lock_configuration=true`:
+
+- `sqlite_scan('/etc/passwd', 'x')` reached SQLite's open and failed with "file is not a database": the allow list did not stop it, so any other SQLite file on disk is readable by name.
+- `ATTACH 'file.sqlite' AS s (TYPE sqlite)` succeeded after the lock, and an attach is read-write unless it says `READ_ONLY`.
+
+The extension opens files with SQLite's own file access, which neither setting governs, and a loaded extension's functions cannot be unloaded. Blocking the names in SQL text would be the only guard, which ADR 0001 and "Read-only by construction" rule out as the sole defence. So the engine that runs a caller's query never has the extension loaded:
+
+1. The source file (and its `-wal` log, when one is a regular file next to it; links and pipes are skipped) is copied into a private folder (`mkdtemp`, mode 0700), read without following links and without blocking on a pipe. SQLite writes `-shm`/`-wal` beside a database it reads, so reading the copy keeps the user's folder untouched, and a database being written is read as of the copy.
+2. A throwaway engine loads the pinned extension, attaches the copy `READ_ONLY`, lists the tables and views of the main schema (`ManyTables` when none is named), and `CREATE TABLE AS` copies the one table into a DuckDB file in that folder. It runs fixed statements and no text from a caller; a table name goes in as a quoted identifier.
+3. The query engine opens that DuckDB file as its own read-only database, exactly as for a `.duckdb` file. The folder is removed when the engine closes or opening fails.
+
+Costs, accepted: each open copies the table (bench: 40 MB / 1,000,000 rows opens, builds a card and mints a Ref in about 3 s, two copies; budget 9 s); a file over 512 MB is refused with a message; the copy has a 60 s clock; a crash can leave a folder in the temporary directory. Row address, fingerprint and `scanBytes` are the DuckDB-file ones on the copy (key column only; the fingerprint is the row count and an order-independent hash of the rows, because the storage layout of the copy varies between copies), with the kind `sqlite` in the Ref (`src=sqlite&opt.table=...`). SQLite's own parser still reads the user's file: a malformed file is SQLite's to reject; fusenduck maps its errors to fixed wording.
+
+The same reasoning applies to the Postgres and MySQL scanners ([ADR 0005](0005-database-servers.md)): an engine that holds a connection and runs a caller's text must not also have functions that open another one; the shape for them is decided there.
+
 ### 7. Order
 
 1. Adapter layer with Parquet only. Behaviour must not change; the frozen Ref corpus and all tests pass untouched.
 2. CSV/TSV and NDJSON/JSON (this is the first slice below).
 3. Multiple files, globs and Hive partitions.
 4. Extension-based formats.
-5. DuckDB and SQLite files (read-only ATTACH).
+5. DuckDB and SQLite files (a DuckDB file as the engine's own read-only database; a SQLite file as a copy, see 6a).
 6. Remote files, and Postgres/MySQL servers (own ADR first).
 
 ## First slice
 
-Status: steps 1 to 3 and the DuckDB-file part of step 5 are implemented (DuckDB files are opened as the engine's own read-only database rather than by ATTACH, because after the configuration lock an untrusted statement could detach a read-only ATTACH and attach the same file read-write; SQLite waits on how its extension is obtained, takumi chose DuckDB files first). Steps 1 to 3 (step 3: a wildcard in the file name, up to 256 files, fingerprint over the file list; Hive partitions and recursive globs are left out). Steps 1 and 2 were implemented (PR #38 for step 1; the CSV/NDJSON/JSON adapters, `src=` and `opt.*`, the text-source tests and the `csv_open_card_mint_ms` budget for step 2). JSON that is one array is read with `format=auto`; its row position and fingerprint behave like NDJSON.
+Status: steps 1 to 3 and the DuckDB-file part of step 5 are implemented (DuckDB files are opened as the engine's own read-only database rather than by ATTACH, because after the configuration lock an untrusted statement could detach a read-only ATTACH and attach the same file read-write; SQLite followed once the extension could be fetched and pinned, as a copy read by a DuckDB file: see 6a). Steps 1 to 3 (step 3: a wildcard in the file name, up to 256 files, fingerprint over the file list; Hive partitions and recursive globs are left out). Steps 1 and 2 were implemented (PR #38 for step 1; the CSV/NDJSON/JSON adapters, `src=` and `opt.*`, the text-source tests and the `csv_open_card_mint_ms` budget for step 2). JSON that is one array is read with `format=auto`; its row position and fingerprint behave like NDJSON.
 
 Steps 1 and 2. Acceptance tests (evidence is command output):
 

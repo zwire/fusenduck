@@ -317,7 +317,7 @@ const kinds: Record<string, TextKind> = {
  * A table name as an error may show it. Names come from the file, which is untrusted, and an error is read
  * by an agent outside any data block, so only plain identifiers are shown (no spaces, so a sentence cannot pass for a name).
  */
-const showName = (name: string): string => (/^[A-Za-z0-9_$]{1,40}$/.test(name) ? name : "(a table with an unusual name)");
+export const showName = (name: string): string => (/^[A-Za-z0-9_$]{1,40}$/.test(name) ? name : "(a table with an unusual name)");
 
 /** A database file with several tables, none named. The names come from the file, so they are data, not words of core's. */
 export class ManyTables extends FusenError {
@@ -342,7 +342,7 @@ const DUCKDB_BLOCK_BYTES = 262_144;
  * read from metadata like Parquet's footer; a rewrite that leaves every statistic equal is not detected.
  * Rows are selected by a key column, not by position (rowid is not stable under deletes).
  */
-function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: string): SourceAdapter {
+function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: string, name = "duckdb"): SourceAdapter {
   const table = options.table;
   // DuckDB's lookup of a table's storage by name does not take an escaped quote.
   if (table?.includes('"')) throw new FusenError("a table name with a double quote is not supported");
@@ -353,7 +353,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
   const stored = clash && catalog ? `${ident(catalog)}.main.${ident(table!)}` : `main.${ident(table ?? "")}`;
   const from = () => stored;
   const adapter: SourceAdapter = {
-    name: "duckdb",
+    name,
     options,
     database: true,
     async resolve(_path, probe) {
@@ -365,7 +365,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
         );
         if (found.length === 0) throw new FusenError(`this database has no table named "${showName(table!)}" (in the main schema)`);
         const actual = String(found[0]!.table_name);
-        return actual === table && catalog === d ? adapter : databaseAdapter({ table: actual }, true, d);
+        return actual === table && catalog === d ? adapter : databaseAdapter({ table: actual }, true, d, name);
       }
       const rows = await probe(
         "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND NOT internal ORDER BY table_name",
@@ -379,7 +379,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
           names,
         );
       }
-      return databaseAdapter({ table: names[0]! }, true, d);
+      return databaseAdapter({ table: names[0]! }, true, d, name);
     },
     read: () => from(),
     allowedPaths: (files) => files,
@@ -394,6 +394,12 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
       return clash ? "SELECT * FROM data" : `SELECT * FROM ${from()}`;
     },
     async fingerprint(engine) {
+      if (name === "sqlite") {
+        // The copy's storage layout (segment boundaries of text columns) varies from one copy to the next, so a SQLite table
+        // is fingerprinted by its content: the row count and an order-independent hash of the rows.
+        const rows = await engine.query(`SELECT count(*)::VARCHAR AS n, coalesce(bit_xor(hash(__fusen_row)), 0)::VARCHAR AS h FROM ${from()} AS __fusen_row`);
+        return createHash("sha256").update(`sqlite:${table}:${String(rows[0]?.n)}:${String(rows[0]?.h)}`).digest("hex").slice(0, 12);
+      }
       const count = await engine.query(`SELECT count(*)::VARCHAR AS n FROM ${from()}`);
       const layout = await engine.query(
         `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, column_id::VARCHAR, column_path, segment_id::VARCHAR, segment_type,
@@ -401,7 +407,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
                                ';' ORDER BY row_group_id, column_id, segment_id)) AS h
          FROM pragma_storage_info(${lit(clash && catalog ? `${catalog}.main.${ident(table!)}` : `main.${ident(table!)}`)})`,
       );
-      return createHash("sha256").update(`duckdb:${table}:${String(count[0]?.n)}:${String(layout[0]?.h)}`).digest("hex").slice(0, 12);
+      return createHash("sha256").update(`${name}:${table}:${String(count[0]?.n)}:${String(layout[0]?.h)}`).digest("hex").slice(0, 12);
     },
     async scanBytes(engine) {
       const blocks = await engine.query(`SELECT count(DISTINCT block_id)::VARCHAR AS n FROM pragma_storage_info(${lit(clash && catalog ? `${catalog}.main.${ident(table!)}` : `main.${ident(table!)}`)}) WHERE persistent`);
@@ -412,7 +418,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
 }
 
 /** The kinds a Ref may name in `src=`. */
-export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb", "postgres"];
+export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb", "sqlite", "postgres"];
 
 /** The kind a file name suggests. Anything not recognised is Parquet, as every source was before kinds existed. */
 export function kindOf(path: string): string {
@@ -420,6 +426,7 @@ export function kindOf(path: string): string {
   if (/\.(ndjson|jsonl)$/i.test(path)) return "ndjson";
   if (/\.json$/i.test(path)) return "json";
   if (/\.(duckdb|ddb)$/i.test(path)) return "duckdb";
+  if (/\.(sqlite|sqlite3|db3)$/i.test(path)) return "sqlite";
   return "parquet";
 }
 
@@ -433,12 +440,12 @@ export function createAdapter(name = "parquet", options?: SourceOptions): Source
     return parquet;
   }
   if (name === "postgres") return serverAdapter(options ?? {});
-  if (name === "duckdb") {
-    if (!options || Object.keys(options).length === 0) return databaseAdapter({}, false);
-    checkKeys("duckdb", options, ["table"]);
+  if (name === "duckdb" || name === "sqlite") {
+    if (!options || Object.keys(options).length === 0) return databaseAdapter({}, false, undefined, name);
+    checkKeys(name, options, ["table"]);
     const table = options.table;
     if (typeof table !== "string" || table === "" || table.length > 256 || /\0/.test(table)) throw new FusenError("opt.table must be a table name");
-    return databaseAdapter({ table }, true);
+    return databaseAdapter({ table }, true, undefined, name);
   }
   const kind = kinds[name];
   if (!kind) throw new FusenError(`unsupported source kind "${name}" (known: ${SOURCE_KINDS.join(", ")})`);

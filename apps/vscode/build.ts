@@ -6,7 +6,7 @@
 import { copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { build, type Plugin } from "esbuild";
-import { placeEngine, targetFromArgs } from "./engine.ts";
+import { placeEngine, placeExtensions, targetFromArgs } from "./engine.ts";
 
 const here = import.meta.dirname;
 const dist = join(here, "dist");
@@ -47,3 +47,4 @@ await build({
 for (const file of ["index.html", "style.css"]) copyFileSync(join(spa, file), join(dist, file));
 copyFileSync(join(here, "webview/vscode.css"), join(dist, "vscode.css"));
 placeEngine(targetFromArgs(process.argv), join(dist, "native"));
+placeExtensions(targetFromArgs(process.argv), join(dist, "extensions"));

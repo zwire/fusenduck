@@ -27,6 +27,7 @@
     "csv",
     "json",
     "duckdb",
+    "sqlite",
     "data",
     "agent",
     "mcp"
@@ -60,7 +61,10 @@
           { "filenamePattern": "*.jsonl" },
           { "filenamePattern": "*.json" },
           { "filenamePattern": "*.duckdb" },
-          { "filenamePattern": "*.ddb" }
+          { "filenamePattern": "*.ddb" },
+          { "filenamePattern": "*.sqlite" },
+          { "filenamePattern": "*.sqlite3" },
+          { "filenamePattern": "*.db3" }
         ],
         "priority": "option"
       }

@@ -56,7 +56,7 @@ export interface Listed {
 
 export interface Api {
   files(): Promise<Listed>;
-  /** The tables of a DuckDB file. */
+  /** The tables of a DuckDB or SQLite file. */
   tables(path: string): Promise<string[]>;
   open(path: string): Promise<Opened>;
   rows(file: Opened, offset: number, limit: number, where?: string): Promise<Page>;

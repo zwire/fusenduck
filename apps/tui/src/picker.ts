@@ -98,7 +98,7 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
           ),
     ),
     listed !== null && files.length === 0
-      ? h(Text, { wrap: "truncate-end" }, "no Parquet, CSV, JSON or DuckDB files under the roots (hidden files and symlinks are skipped). Give a path, or start in another folder.")
+      ? h(Text, { wrap: "truncate-end" }, "no Parquet, CSV, JSON, DuckDB or SQLite files under the roots (hidden files and symlinks are skipped). Give a path, or start in another folder.")
       : null,
     h(Text, { wrap: "truncate-end" }, opening ? "opening…" : plain(notice)),
     h(Text, { dimColor: true, wrap: "truncate-end" }, PICKER_KEYS),

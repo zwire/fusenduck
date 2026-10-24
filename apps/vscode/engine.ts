@@ -28,6 +28,36 @@ export function isTarget(value: string): value is Target {
   return Object.hasOwn(TARGETS, value);
 }
 
+/** The platform name DuckDB publishes its extensions under for each target. */
+export const EXTENSION_PLATFORMS: Record<Target, string> = {
+  "linux-x64": "linux_amd64",
+  "linux-arm64": "linux_arm64",
+  "alpine-x64": "linux_amd64_musl",
+  "alpine-arm64": "linux_arm64_musl",
+  "darwin-x64": "osx_amd64",
+  "darwin-arm64": "osx_arm64",
+  "win32-x64": "windows_amd64",
+  "win32-arm64": "windows_arm64",
+};
+
+/**
+ * Puts the shipped DuckDB extensions for `target` into `into` (dist/extensions, laid out as core reads them). They are fetched
+ * from extensions.duckdb.org against packages/core/extensions.lock.json, which fails on any difference from its pins.
+ */
+export function placeExtensions(target: Target, into: string): void {
+  const platform = EXTENSION_PLATFORMS[target];
+  const script = join(here, "../../packages/core/scripts/extensions.ts");
+  execFileSync(process.execPath, [script, "fetch", "--platform", platform], { stdio: "inherit" });
+  const fetched = join(here, "../../packages/core/extensions");
+  rmSync(into, { recursive: true, force: true });
+  for (const version of readdirSync(fetched)) {
+    const from = join(fetched, version, platform);
+    if (!existsSync(from)) continue;
+    mkdirSync(join(into, version, platform), { recursive: true });
+    for (const file of readdirSync(from)) copyFileSync(join(from, file), join(into, version, platform, file));
+  }
+}
+
 /** The target of the machine running this script. */
 export function nativeTarget(): Target {
   const header = process.report.getReport() as { header?: { glibcVersionRuntime?: string } };
