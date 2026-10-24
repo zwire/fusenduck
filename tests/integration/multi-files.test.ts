@@ -1,4 +1,4 @@
-import { symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -54,10 +54,11 @@ describe("a pattern that names several files", () => {
   });
 
   it("keeps the pattern in the Ref and a plain path unchanged", () => {
-    const pattern = join(dir, "part-*.csv");
-    expect(parseRef(refOf(run("ref", pattern).stdout)).source).toBe(pattern);
+    // The Ref holds the real path of the directory (on macOS /var is /private/var).
+    const real = realpathSync(dir);
+    expect(parseRef(refOf(run("ref", join(dir, "part-*.csv")).stdout)).source).toBe(join(real, "part-*.csv"));
     const single = parseRef(refOf(run("ref", join(dir, "p1.parquet")).stdout));
-    expect(single.source).toBe(join(dir, "p1.parquet"));
+    expect(single.source).toBe(join(real, "p1.parquet"));
   });
 
   it("refuses a pattern with no match, and a wildcard in a directory", () => {
