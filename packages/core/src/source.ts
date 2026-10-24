@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import type { Engine, Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
+import { serverAdapter } from "./server.ts";
 
 /** A source that names several files: a wildcard (`*`, `?`) in the file name, never in a directory. */
 export const isPattern = (source: string): boolean => /[*?]/.test(source.split(/[\\/]/).pop() ?? "");
@@ -24,6 +25,8 @@ export type Probe = (sql: string) => Promise<Row[]>;
  * supported. See docs/adr/0004.
  */
 export interface SourceAdapter {
+  /** Whether the source is a table on a database server, reached through a connection rather than a file. */
+  readonly server?: boolean;
   /** The kind, as a Ref names it (`src=`). A Ref without `src=` is `parquet`. */
   readonly name: string;
   /** The read settings that change what the source returns. Empty when the kind has none or they are not detected yet. */
@@ -409,7 +412,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: st
 }
 
 /** The kinds a Ref may name in `src=`. */
-export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb"];
+export const SOURCE_KINDS = ["parquet", ...Object.keys(kinds), "duckdb", "postgres"];
 
 /** The kind a file name suggests. Anything not recognised is Parquet, as every source was before kinds existed. */
 export function kindOf(path: string): string {
@@ -429,6 +432,7 @@ export function createAdapter(name = "parquet", options?: SourceOptions): Source
     if (options && Object.keys(options).length) throw new FusenError("parquet sources take no settings");
     return parquet;
   }
+  if (name === "postgres") return serverAdapter(options ?? {});
   if (name === "duckdb") {
     if (!options || Object.keys(options).length === 0) return databaseAdapter({}, false);
     checkKeys("duckdb", options, ["table"]);

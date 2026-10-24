@@ -81,10 +81,9 @@ jobs:
 
   db-probe:
     # Observes how DuckDB's postgres extension behaves under the engine's lock (docs/adr/0005 section 6).
-    # It reports; it does not gate. The answers decide whether the adapter is built as the ADR describes.
+    # The probe reports; the Postgres source tests gate this job (no other job has a server to talk to).
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    continue-on-error: true
     services:
       postgres:
         image: postgres:16
@@ -120,6 +119,15 @@ jobs:
           revoke create on schema public from public;
           SQL
       - run: node tests/integration/db-probe.ts
+      # The extension is installed here, ahead of the tests: fusenduck never downloads it while it runs.
+      - run: node -e "import('@duckdb/node-api').then(async (d) => { const c = await (await d.DuckDBInstance.create(':memory:')).connect(); await c.run('INSTALL postgres'); })"
+      - name: Postgres source tests
+        env:
+          FUSEN_PG_HOST: 127.0.0.1
+          FUSEN_PG_PORT: "5432"
+          FUSEN_PG_DB: probe
+          FUSEN_PG_ADMIN_PASSWORD: admin
+        run: pnpm exec vitest run tests/integration/postgres.test.ts
 
   repro:
     # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs

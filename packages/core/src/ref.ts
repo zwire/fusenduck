@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { ident, lit, type Engine } from "./engine.ts";
 import { createAdapter, isPattern, SOURCE_KINDS, type SourceOptions } from "./source.ts";
 import { FusenError } from "./errors.ts";
+import { guardServerQuery } from "./guard.ts";
 
 export interface Ref {
   /** Absolute path of the source file. */
@@ -146,6 +147,7 @@ export async function checkPredicate(
     statements?: { node?: { type?: string; modifiers?: unknown[] } }[];
   };
   if (parsed.error) throw new FusenError(`predicate rejected: ${parsed.error_message ?? "not a single SELECT"}`);
+  if (engine.adapter.server) await guardServerQuery(sql, (text) => engine.query(text));
   const statements = parsed.statements ?? [];
   const node = statements[0]?.node;
   if (statements.length !== 1 || node?.type !== "SELECT_NODE" || node.modifiers?.length) {
@@ -172,6 +174,7 @@ export async function checkQuery(engine: Engine, query: string): Promise<void> {
   if (parsed.error || parsed.statements?.length !== 1 || node?.type !== "SELECT_NODE" || node.from_table?.type !== "SUBQUERY") {
     throw new FusenError(`query rejected: ${parsed.error_message ?? "it must be a single SELECT"}`);
   }
+  if (engine.adapter.server) await guardServerQuery(sql, (text) => engine.query(text));
 }
 
 export async function engineVersion(engine: Engine): Promise<string> {
