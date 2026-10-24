@@ -34,7 +34,6 @@ interface Relation {
   columns: string[];
   /** Whether the first key column is a whole number, so key-range boundaries can be worked out. */
   integerKey: boolean;
-  tuples: number;
 }
 
 const ONE = (sql: string): string => `SELECT * FROM mysql_query('my', ${lit(sql)})`;
@@ -61,8 +60,7 @@ export function mysqlAdapter(options: SourceOptions, relation?: Relation): Sourc
     async fingerprint(engine) {
       const keys = relation?.keys ?? [];
       const columns = relation?.columns ?? [];
-      const exact = (relation?.tuples ?? 0) <= EXACT_COUNT_MAX;
-      const order = keys.map(my).join(", ");
+          const order = keys.map(my).join(", ");
       const orderDesc = keys.map((k) => `${my(k)} DESC`).join(", ");
       const rowJson = `json_object(${columns.flatMap((c) => [lit(c), my(c)]).join(", ")})`;
       // The rows of a sample are combined order-independently (xor and sum of a 60-bit piece of each row's md5), so no
@@ -72,17 +70,17 @@ export function mysqlAdapter(options: SourceOptions, relation?: Relation): Sourc
       const edge = (direction: string, rows: number) => (keys.length && columns.length ? sample(`select * from ${stored} order by ${keys.map((k) => `${my(k)} ${direction}`).join(", ")} limit ${rows}`) : "''");
       const first = keys[0] ? my(keys[0]) : "";
       const boundary = (i: number) =>
-        sample(`select * from ${stored} where ${first} >= (select cast(floor(min(${first}) + (max(${first}) - min(${first})) * ${i} / 4) as signed) from ${stored}) order by ${order} limit ${BOUNDARY_ROWS}`);
+        sample(`select * from ${stored} where ${first} >= (select cast(min(${first}) as decimal(40,0)) + floor((cast(max(${first}) as decimal(40,0)) - cast(min(${first}) as decimal(40,0))) * ${i} / 4) from ${stored}) order by ${order} limit ${BOUNDARY_ROWS}`);
       const middle = relation?.integerKey && columns.length ? [1, 2, 3].map(boundary) : [];
-      const sql = `select ${exact ? `(select count(*) from ${stored})` : "(select table_rows from information_schema.tables where table_schema = database() and table_name = " + lit(table) + ")"} as n,
+      const sql = `select (select case when c > ${EXACT_COUNT_MAX} then -1 else c end from (select count(*) as c from (select 1 from ${stored} limit ${EXACT_COUNT_MAX + 1}) z) y) as n,
         ${keys.length ? `(select json_array(${keys.map(my).join(", ")}) from ${stored} order by ${orderDesc} limit 1)` : "''"} as maxkey,
-        (select group_concat(column_name, ':', column_type, ':', is_nullable order by ordinal_position separator ',') from information_schema.columns where table_schema = database() and table_name = ${lit(table)}) as cols,
+        (select concat_ws(':', count(*), bit_xor(h), sum(h)) from (select cast(conv(substr(md5(concat_ws(':', ordinal_position, column_name, column_type, is_nullable)), 1, 15), 16, 10) as unsigned) as h from information_schema.columns where table_schema = database() and table_name = ${lit(table)}) c) as cols,
         ${edge("asc", SAMPLE_ROWS)} as head, ${edge("desc", SAMPLE_ROWS)} as tail, ${middle.length ? `concat_ws('|', ${middle.join(", ")})` : "''"} as mid,
         database() as db, @@server_uuid as sys`;
       // One statement, so the count, the key and the samples come from one snapshot (the attach is a READ ONLY transaction).
       const row = (await engine.query(ONE(sql)))[0] ?? {};
       return createHash("sha256")
-        .update(`mysql:${exact ? "exact" : "estimate"}:${["n", "maxkey", "cols", "head", "tail", "mid", "db", "sys"].map((k) => String(row[k])).join(":")}`)
+        .update(`mysql:${["n", "maxkey", "cols", "head", "tail", "mid", "db", "sys"].map((k) => String(row[k])).join(":")}`)
         .digest("hex")
         .slice(0, 12);
     },
@@ -130,10 +128,15 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
   const password = readPassword(profile);
   const address = await resolveHost(profile);
   const instance = await DuckDBInstance.create(":memory:");
-  const connection = await instance.connect();
+  const connection = await instance.connect().catch((error) => {
+    instance.closeSync();
+    throw error;
+  });
   const release = () => {
     try {
       connection.closeSync();
+    } catch {
+      // closing must not hide the error that is being thrown
     } finally {
       instance.closeSync();
     }
@@ -162,7 +165,7 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
         `CREATE SECRET fusen_my (TYPE mysql, HOST ${lit(address)}, PORT ${profile.port}, DATABASE ${lit(profile.dbname)}, USER ${lit(profile.user)}, PASSWORD ${lit(password)}, SSL_MODE ${lit(profile.sslmode)}${profile.sslCa ? `, SSL_CA ${lit(profile.sslCa)}` : ""})`,
       );
       // The client library may read MYSQL_* variables; the profile alone decides, so they are set aside for the one connection.
-      const set = Object.entries(process.env).filter(([name]) => /^MYSQL_/i.test(name));
+      const set = Object.entries(process.env).filter(([name]) => /^(MYSQL|LIBMYSQL|MARIADB)_/i.test(name));
       for (const [name] of set) delete process.env[name];
       try {
         await connection.run("ATTACH '' AS my (TYPE mysql, SECRET fusen_my, READ_ONLY)");
@@ -185,33 +188,32 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
     let relation: Relation;
     try {
       const rows = await server(
-        `select t.table_type as kind, t.table_rows as tuples, t.table_name as name,
-           (select group_concat(s.column_name order by s.seq_in_index separator '\u001f') from information_schema.statistics s
-             where s.table_schema = t.table_schema and s.table_name = t.table_name and s.index_name = 'PRIMARY') as pk,
-           (select group_concat(c.column_name order by c.ordinal_position separator '\u001f') from information_schema.columns c
-             where c.table_schema = t.table_schema and c.table_name = t.table_name) as cols,
-           (select c.data_type in ('tinyint', 'smallint', 'mediumint', 'int', 'bigint') from information_schema.statistics s
-              join information_schema.columns c on c.table_schema = s.table_schema and c.table_name = s.table_name and c.column_name = s.column_name
-             where s.table_schema = t.table_schema and s.table_name = t.table_name and s.index_name = 'PRIMARY' and s.seq_in_index = 1) as integer_key
-         from information_schema.tables t where t.table_schema = database() and binary t.table_name = binary ${lit(table)}`,
+        `select t.table_type as kind, t.table_name as name from information_schema.tables t where t.table_schema = database() and binary t.table_name = binary ${lit(table)}`,
       );
       const row = rows[0];
       if (!row) throw new FusenError(`connection "${conn}" has no table "${table}"`);
-      if (String(row.cols ?? "").split("\u001f").some((c) => /[`'"\\\0]/.test(c))) throw new FusenError(`"${table}" has a column whose name holds a quote or a backslash, which is not supported`);
+      const where = `table_schema = database() and binary table_name = binary ${lit(table)}`;
+      // One row per column: a group_concat would be cut off at group_concat_max_len on a wide table.
+      const columns = (await server(`select column_name as c, data_type as t from information_schema.columns where ${where} order by ordinal_position`)).map((r) => ({ name: String(r.c), type: String(r.t) }));
+      const keys = (await server(`select column_name as c from information_schema.statistics where ${where} and index_name = 'PRIMARY' order by seq_in_index`)).map((r) => String(r.c));
+      if (columns.some((c) => /[`'"\\\0]/.test(c.name))) throw new FusenError(`"${table}" has a column whose name holds a quote or a backslash, which is not supported`);
       if (row.kind !== "BASE TABLE") throw new FusenError(`"${table}" is not a table (views and system tables are not supported)`);
       relation = {
-        keys: row.pk ? String(row.pk).split("\u001f") : [],
-        columns: row.cols ? String(row.cols).split("\u001f") : [],
-        integerKey: row.integer_key === true || row.integer_key === "true" || String(row.integer_key) === "1",
-        tuples: Number(row.tuples),
+        keys,
+        columns: columns.map((c) => c.name),
+        integerKey: ["tinyint", "smallint", "mediumint", "int", "bigint"].includes(columns.find((c) => c.name === keys[0])?.type ?? ""),
       };
     } catch (error) {
       if (error instanceof FusenError) throw error;
       throw failed("could not read the table", error);
     }
-    await connection.run(`CREATE TEMP VIEW data AS SELECT * FROM my.${ident(table)}`);
-    await connection.run("SET enable_external_access=false");
-    await connection.run("SET lock_configuration=true");
+    try {
+      await connection.run(`CREATE TEMP VIEW data AS SELECT * FROM my.${ident(table)}`);
+      await connection.run("SET enable_external_access=false");
+      await connection.run("SET lock_configuration=true");
+    } catch (error) {
+      throw failed("could not open the table", error);
+    }
     if (opts.signal?.aborted) throw new FusenError("the request was cancelled");
     const adapter = mysqlAdapter({ conn, table }, relation);
     return { source: `mysql://${conn}/${table}`, files: [], multi: false, adapter, query: createQuery(connection, opts.signal), close: release };

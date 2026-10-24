@@ -41,7 +41,7 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
     sql("drop table if exists nokey; create table nokey (id bigint); insert into nokey values (1),(2),(3),(4),(5); grant select on probe.nokey to 'fusen_ro'@'%'");
   });
   afterAll(() => {
-    sql("drop table if exists nokey");
+    sql("drop table if exists nokey, widekey");
     process.env = saved;
   });
 
@@ -126,6 +126,15 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
       engine.close();
     }
     expect(sql("select count(*) from information_schema.tables where table_schema = 'probe' and table_name = 'probe_z'").trim()).toBe("0");
+  });
+
+  it("fingerprints a key that spans the whole unsigned range and a table with many wide column names", async () => {
+    const cols = Array.from({ length: 60 }, (_, i) => `column_with_a_long_name_${i} int`).join(", ");
+    sql(`drop table if exists widekey; create table widekey (id bigint unsigned primary key, ${cols}); insert into widekey (id) values (1), (9223372036854775808), (18446744073709551615); grant select on probe.widekey to 'fusen_ro'@'%'`);
+    const ref = await mintRef("mysql://ro/widekey", { where: "id = 1" });
+    expect(await resolveRef(ref, { roots: [process.cwd()] })).not.toMatch(/data changed/i);
+    sql("alter table widekey add column zz_last int");
+    expect(await resolveRef(ref, { roots: [process.cwd()] })).toMatch(/changed/i);
   });
 
   it("selects rows by key, and says so for a table with no key or a position", async () => {

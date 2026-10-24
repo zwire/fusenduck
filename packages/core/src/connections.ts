@@ -29,7 +29,8 @@ export interface Profile {
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 const PASSWORD_ENV = /^FUSEN_[A-Z0-9_]{1,64}$/;
 const SSLMODES = new Set(["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]);
-const MYSQL_SSLMODES = new Set(["disabled", "preferred", "required", "verify_ca", "verify_identity"]);
+const MYSQL_SSLMODES = new Set(["disabled", "preferred", "required", "verify_ca"]);
+// verify_identity is not offered: the extension connects to the checked IP and never compares the certificate's name, so it would only be verify_ca under a stronger name.
 const KEYS = new Set(["kind", "host", "port", "dbname", "user", "password_env", "allow_private", "sslmode", "ssl_ca"]);
 
 /** Where the profiles live: `FUSEN_CONNECTIONS`, else the user's config directory. */
@@ -95,8 +96,8 @@ function profileOf(name: string, table: Map<string, string | number | boolean>):
   const sslCa = text("ssl_ca", false);
   if (kind === "mysql") {
     if (!MYSQL_SSLMODES.has(sslmode)) throw new FusenError(`connection "${name}": sslmode "${sslmode}" is not one of ${[...MYSQL_SSLMODES].join(", ")}`);
-    // Measured on the real extension: without ssl_ca the client accepts any certificate under verify_ca and verify_identity.
-    if ((sslmode === "verify_ca" || sslmode === "verify_identity") && !sslCa) {
+    // Measured on the real extension: without ssl_ca the client accepts any certificate under verify_ca.
+    if (sslmode === "verify_ca" && !sslCa) {
       throw new FusenError(`connection "${name}": sslmode ${sslmode} needs ssl_ca (the file of the certificate authority); without it the MySQL client does not check the server. Set ssl_ca, or sslmode = "required" to encrypt without checking`);
     }
   } else {
