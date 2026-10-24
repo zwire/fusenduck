@@ -38,8 +38,8 @@ const notices = [
   const folder = dirname((from as NodeJS.Require).resolve(`${name as string}/package.json`));
   return `${name as string}\n\n${readFileSync(join(folder, "LICENSE"), "utf8").trim()}\n`;
 });
-// dist/extensions carries DuckDB's sqlite_scanner (MIT, DuckDB Foundation), which embeds SQLite (public domain).
-notices.push("sqlite_scanner (DuckDB extension, dist/extensions)\n\nMIT License. Copyright 2018-2025 Stichting DuckDB Foundation. It embeds SQLite, which is in the public domain.\n");
+// dist/extensions carries DuckDB's sqlite_scanner and postgres_scanner (MIT, DuckDB Foundation), which embed SQLite (public domain) and libpq (PostgreSQL License).
+notices.push("sqlite_scanner, postgres_scanner (DuckDB extensions, dist/extensions)\n\nMIT License. Copyright 2018-2025 Stichting DuckDB Foundation. They embed SQLite, which is in the public domain, and libpq, under the PostgreSQL License.\n");
 writeFileSync(join(stage, "ThirdPartyNotices.txt"), `This extension bundles the following packages.\n\n${notices.join("\n---\n\n")}`);
 
 const vsix = join(out, `fusenduck-${target}-${manifest.version as string}.vsix`);

@@ -42,5 +42,49 @@
         "sha256": "b53a67840c1a29494b33c935ce67897b45e25e4846974fa4dafd2945063caa69"
       }
     }
+  },
+  "postgres_scanner": {
+    "v1.5.6": {
+      "linux_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64/postgres_scanner.duckdb_extension.gz",
+        "gz": "f3720b2c67f770b1060f39d01c7b0127ef9135bc045e7f1dbb82de472664e544",
+        "sha256": "6706047a549bbb4b73afe6c81c87df2f6daf863545bf38b8af2fc2d60e501fc3"
+      },
+      "linux_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_arm64/postgres_scanner.duckdb_extension.gz",
+        "gz": "381e87ff1bf82d8c41b24256168f8710ff7f5be936caa69a1ce2b4384073339f",
+        "sha256": "e8de4878f83574436f86159dbdad4839584bfcabe95411bd39eebb81dfd59623"
+      },
+      "linux_amd64_musl": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64_musl/postgres_scanner.duckdb_extension.gz",
+        "gz": "93fee90b421bb50218355a3baf1f843f723fb550b5b3ed249a422a7ac0bd773f",
+        "sha256": "eebb9dadfa031068786440a00733083117769ff58b65472e2ae609a583a141c9"
+      },
+      "linux_arm64_musl": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_arm64_musl/postgres_scanner.duckdb_extension.gz",
+        "gz": "ae3c8f1a52bcad442ddab567790e50acc8d0841e35dda487de189ae538453ba2",
+        "sha256": "7e4732fab53467a7dfee6aed2812e8d9e23d77233d243f48e925d75b011fb5d6"
+      },
+      "osx_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/osx_amd64/postgres_scanner.duckdb_extension.gz",
+        "gz": "ddfc6f682c381699aacef8750fd24aad4384da0654310f32bef6223cee7b8986",
+        "sha256": "df00846cc68d99970a1088c654b98297de11148c7293c970877ea9c2fd9099b1"
+      },
+      "osx_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/osx_arm64/postgres_scanner.duckdb_extension.gz",
+        "gz": "9d5f9f7b9873bfebd161b88675a5dbcc52355046dadbbc38f774db147a824240",
+        "sha256": "e39b78d219ad1599d60588fb4a9aaa7b36a84ac49ba36c94e7dd46d902749e65"
+      },
+      "windows_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/windows_amd64/postgres_scanner.duckdb_extension.gz",
+        "gz": "c78f47fb78e1b79daa830f5f7d3ab5f1061096a37b6166fd4ffab0c4d12eb93e",
+        "sha256": "e5ccb234e0af0c16d783c8cbb342fe289c1a611528ce9a62d88f199e37e6f75b"
+      },
+      "windows_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/windows_arm64/postgres_scanner.duckdb_extension.gz",
+        "gz": "e777e83e4e02bc6dc28384a6135e085ac4492701513bd30618f47bf61352e153",
+        "sha256": "979e856bb6fbca09f8dbe2264742e0103cf211d4c28b2e0cb55f344d9c9a7add"
+      }
+    }
   }
 }

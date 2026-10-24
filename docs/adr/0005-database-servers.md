@@ -56,7 +56,7 @@ Evidence is a refused write at rung 3 of the add-source ladder: a Postgres and a
 
 ### 4. Extensions are not downloaded; use an installed, version-pinned one or refuse
 
-fusenduck never fetches the `postgres` or `mysql` extension at run time (ADR 0004). The adapter loads it only if it is already installed in the local DuckDB extension directory and its version matches the DuckDB version the engine is built with and its sha256 matches a digest pinned in fusenduck for that version (a user-writable extension directory is not otherwise trusted native code). `allow_unsigned_extensions`, `autoinstall_known_extensions` and `autoload_known_extensions` are false, and the security suite shows a query naming a scanner function cannot trigger a load. If not, the open fails with the exact install step and says the extension is not bundled. Bundling now exists for SQLite (ADR 0004, "SQLite files"): `packages/core/extensions.lock.json` holds the pin per DuckDB version and platform, `pnpm extensions:fetch` fetches at build time, the VS Code package carries its platform's files, and `bundledExtension` checks the hash before `LOAD`. Adding `postgres_scanner` and `mysql_scanner` is a matter of listing them there. What that ADR found for the SQLite scanner matters here: a loaded scanner's functions and `ATTACH` types stay reachable after the lock and are not governed by `allowed_paths`; assumption (2) below must be proven on the real extension before any code.
+fusenduck never fetches the `postgres` or `mysql` extension at run time (ADR 0004). The adapter loads only the shipped copy: `packages/core/extensions.lock.json` holds the sha256 per DuckDB version and platform (`postgres_scanner` is pinned for the eight platforms; `mysql_scanner` is not shipped yet), `pnpm extensions:fetch` fetches it at build time, the VS Code package carries its platform's file, and `bundledExtension` hashes the file again just before `LOAD` (a user-writable extension directory is not trusted native code). `allow_unsigned_extensions`, `autoinstall_known_extensions` and `autoload_known_extensions` are false. If the file is missing or does not match, the open fails with the fixed message that says to run `pnpm extensions:fetch`. The pins were first written from what extensions.duckdb.org served over HTTPS to CI (trust on first use, like SQLite's). What that ADR found for the SQLite scanner matters here: a loaded scanner's functions and `ATTACH` types stay reachable after the lock and are not governed by `allowed_paths`; assumption (2) below must be proven on the real extension before any code.
 
 ### 5. The fingerprint detects change; it does not guarantee reproducibility
 
@@ -173,7 +173,7 @@ Still open for the first slice: whether a secret created after the lock can be u
 
 Recorded after the first slice (the Postgres adapter, PR #46) and its independent review, so the ADR above is read as the target, not as a claim about the code:
 
-- The extension is loaded from the local install and `autoinstall`/`autoload` are off; the sha256 pin of section 4 is **not** implemented.
+- The `postgres_scanner` extension is loaded from the shipped copy through `bundledExtension` (pinned in `extensions.lock.json` for the eight platforms, checked just before `LOAD`); `autoinstall`/`autoload` are off. `mysql_scanner` is not shipped yet.
 - The role check does not refuse `TEMP` (PUBLIC has it by default and it only reaches session-local tables; the read-only transaction covers it). It does refuse write access to sequences and membership of a role with superuser, create-role, create-db or bypass-RLS rights.
 - The fingerprint samples the first and last 50 rows by primary key, not key-range boundaries, and uses only a primary key (no unique-index key, no update-time column). A change in the middle of a table that leaves the count, last key and columns unchanged is not noticed. Above 100,000 rows the count is `reltuples` (an estimate), and the mode is part of the hash.
 - Timeouts: connect 10 s, and `statement_timeout`/`lock_timeout` 60 s on the connection; a query blocked on the network is stopped by the server's timeout, not by the interrupt.
@@ -183,7 +183,7 @@ Recorded after the first slice (the Postgres adapter, PR #46) and its independen
 
 ## Open questions
 
-- How the extension is bundled and pinned per OS (shared with SQLite); until then the digest pin in section 4 is the guard.
+- Bundling `mysql_scanner` (Postgres is bundled and pinned the same way as SQLite).
 - Behaviour behind a proxy or tunnel with `allow_private`.
 - The sample sizes K and N, and whether they are profile-tunable.
 - MariaDB: supported or refused.

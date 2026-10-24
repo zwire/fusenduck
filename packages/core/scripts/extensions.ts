@@ -16,7 +16,7 @@ import { extensionDirectory, extensionFile, type ExtensionLock } from "../src/ex
 const lockFile = join(import.meta.dirname, "../extensions.lock.json");
 
 /** The extensions to ship, and the platforms DuckDB publishes them for that fusenduck supports (the VS Code targets, plus Windows on Arm). */
-const SHIPPED = ["sqlite_scanner"];
+const SHIPPED = ["sqlite_scanner", "postgres_scanner"];
 const PLATFORMS = ["linux_amd64", "linux_arm64", "linux_amd64_musl", "linux_arm64_musl", "osx_amd64", "osx_arm64", "windows_amd64", "windows_arm64"];
 
 const sha256 = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
