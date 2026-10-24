@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { ident, lit, type Engine } from "./engine.ts";
 import { createAdapter, isPattern, SOURCE_KINDS, type SourceOptions } from "./source.ts";
 import { FusenError } from "./errors.ts";
+import { guardServerQuery } from "./guard.ts";
 
 export interface Ref {
   /** Absolute path of the source file. */
@@ -138,7 +139,9 @@ export async function checkPredicate(
   predicate: string,
   query?: string,
 ): Promise<void> {
-  const sql = `SELECT * FROM (${base({ source, query, where: predicate })})${whereClause(predicate)}`;
+  // A server's table is read through the view `data`; the file kinds only need something to parse.
+  const kind = engine.adapter.server ? { src: engine.adapter.name, options: engine.adapter.options } : {};
+  const sql = `SELECT * FROM (${base({ source, query, where: predicate, ...kind })})${whereClause(predicate)}`;
   const rows = await engine.query(`SELECT json_serialize_sql(${lit(sql)}) AS j`);
   const parsed = JSON.parse(String(rows[0]?.j)) as {
     error?: boolean;
@@ -146,6 +149,7 @@ export async function checkPredicate(
     statements?: { node?: { type?: string; modifiers?: unknown[] } }[];
   };
   if (parsed.error) throw new FusenError(`predicate rejected: ${parsed.error_message ?? "not a single SELECT"}`);
+  if (engine.adapter.server) await guardServerQuery(sql, (text) => engine.query(text));
   const statements = parsed.statements ?? [];
   const node = statements[0]?.node;
   if (statements.length !== 1 || node?.type !== "SELECT_NODE" || node.modifiers?.length) {
@@ -172,6 +176,7 @@ export async function checkQuery(engine: Engine, query: string): Promise<void> {
   if (parsed.error || parsed.statements?.length !== 1 || node?.type !== "SELECT_NODE" || node.from_table?.type !== "SUBQUERY") {
     throw new FusenError(`query rejected: ${parsed.error_message ?? "it must be a single SELECT"}`);
   }
+  if (engine.adapter.server) await guardServerQuery(sql, (text) => engine.query(text));
 }
 
 export async function engineVersion(engine: Engine): Promise<string> {
