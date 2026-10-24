@@ -85,10 +85,10 @@ export function serverAdapter(options: SourceOptions, relation?: Relation): Sour
           ? `(SELECT md5(coalesce(string_agg(to_jsonb(x)::text, ';'), '')) FROM (SELECT * FROM ${stored} ORDER BY ${keys.map((k) => `${ident(k)} ${direction}`).join(", ")} LIMIT ${SAMPLE_ROWS}) x)`
           : "''";
       // Seeks on the first key column's index, not OFFSET or a table sample: the rows at a quarter, a half and three quarters
-      // of the key range, so a change in the middle of the table that keeps the count and the ends is seen.
+      // of the key range (the bound is a bigint, so the comparison can use the key's index), so a change in the middle of the table that keeps the count and the ends is seen.
       const first = keys[0] ? ident(keys[0]) : "";
       const boundary = (i: number) =>
-        `(SELECT md5(coalesce(string_agg(to_jsonb(x)::text, ';'), '')) FROM (SELECT * FROM ${stored} WHERE ${first} >= (SELECT min(${first})::numeric + (max(${first})::numeric - min(${first})::numeric) * ${i} / 4 FROM ${stored}) ORDER BY ${order} LIMIT ${BOUNDARY_ROWS}) x)`;
+        `(SELECT md5(coalesce(string_agg(to_jsonb(x)::text, ';'), '')) FROM (SELECT * FROM ${stored} WHERE ${first} >= (SELECT floor(min(${first})::numeric + (max(${first})::numeric - min(${first})::numeric) * ${i} / 4)::bigint FROM ${stored}) ORDER BY ${order} LIMIT ${BOUNDARY_ROWS}) x)`;
       const middle = relation?.integerKey ? [1, 2, 3].map(boundary) : [];
       const sql = `SELECT ${exact ? `(SELECT count(*) FROM ${stored})::text` : `(SELECT reltuples::bigint FROM pg_class WHERE oid = ${regclass}::regclass)::text`} AS n,
         ${keys.length ? `(SELECT row(${order})::text FROM ${stored} ORDER BY ${keys.map((k) => `${ident(k)} DESC`).join(", ")} LIMIT 1)` : "''"} AS maxkey,
