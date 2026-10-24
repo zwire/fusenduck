@@ -1,6 +1,6 @@
 # ADR 0005: Read Postgres and MySQL servers through named connections
 
-- Status: Proposed (2026-10-24; takumi chose the recommended option for each of the six points, and the record waits for takumi's approval in this PR's review)
+- Status: Accepted (2026-10-24, takumi approved the record and asked to merge)
 - Date: 2026-10-24
 - Verdict: go (design only; no code in this change)
 
