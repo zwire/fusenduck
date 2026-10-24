@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isPrivateAddress, loadProfile, readPassword, resolveHost } from "../../packages/core/src/connections.ts";
+import { isPrivateAddress, listConnections, loadProfile, readPassword, resolveHost } from "../../packages/core/src/connections.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "fusen-conn-"));
 const write = (name: string, text: string, mode = 0o600) => {
@@ -68,5 +68,17 @@ describe("connection profiles (docs/adr/0005 sections 1 and 2)", () => {
     await expect(resolveHost(loadProfile("warehouse", { path }))).rejects.toThrow(/allow_private = true/);
     const allowed = write("h2.toml", GOOD.replace("db.example.com", "127.0.0.1") + "allow_private = true\n");
     await expect(resolveHost(loadProfile("warehouse", { path: allowed }))).resolves.toBe("127.0.0.1");
+  });
+
+  it("lists connections by name and kind only, for a screen that offers them", () => {
+    const text = `${GOOD}\n[shop]\nkind = "mysql"\nhost = "10.0.0.5"\nport = 3306\ndbname = "shop"\nuser = "secret_user"\nsslmode = "required"\npassword_env = "FUSEN_SHOP_PASSWORD"\n\n[broken]\nkind = "mysql"\n`;
+    const found = listConnections({ path: write("list.toml", text) });
+    expect(found).toEqual([{ name: "shop", kind: "mysql" }, { name: "warehouse", kind: "postgres" }]);
+    expect(JSON.stringify(found)).not.toMatch(/10\.0\.0\.5|secret_user|analytics|PASSWORD/);
+  });
+
+  it("lists nothing for a missing file or one others can write", () => {
+    expect(listConnections({ path: join(dir, "absent.toml") })).toEqual([]);
+    if (process.platform !== "win32") expect(listConnections({ path: write("open.toml", GOOD, 0o666) })).toEqual([]);
   });
 });

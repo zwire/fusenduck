@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { View } from "../../apps/web/src/view.ts";
 import { buildCard, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 
 // Runs against a real MySQL, which only the CI job `mysql-probe` provides (docs/adr/0005). Elsewhere it is skipped.
@@ -135,6 +136,20 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
     expect(await resolveRef(ref, { roots: [process.cwd()] })).not.toMatch(/data changed/i);
     sql("alter table widekey add column zz_last int");
     expect(await resolveRef(ref, { roots: [process.cwd()] })).toMatch(/changed/i);
+  });
+
+  it("opens in the Web UI's view: a table, no row positions, and a filter that selects by key", async () => {
+    const view = await View.open("mysql://ro/items", [process.cwd()]);
+    try {
+      expect(view.opened).toMatchObject({ kind: "mysql", table: "items", selectable: false });
+      const page = await view.rows(view.opened.fingerprint, 0, 3, "id between 2 and 3");
+      expect(page.matched).toBe(2);
+      const ref = await view.ref(view.opened.fingerprint, [], "id between 2 and 3");
+      expect(ref).toContain("src=mysql");
+      expect(ref).not.toContain(RO);
+    } finally {
+      await view.close();
+    }
   });
 
   it("selects rows by key, and says so for a table with no key or a position", async () => {

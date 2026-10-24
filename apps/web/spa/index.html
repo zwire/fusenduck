@@ -11,7 +11,7 @@
     <header>
       <form id="open-form">
         <label for="path">File</label>
-        <input id="path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/file.parquet, .csv, .json, data/*.csv or .duckdb#table (or relative to the first root)" />
+        <input id="path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="/path/to/file.parquet, .csv, .json, data/*.csv, .duckdb#table, or mysql://connection/table (relative paths start at the first root)" />
         <button id="open" type="submit">Open</button>
       </form>
       <div id="ref-panel" hidden>

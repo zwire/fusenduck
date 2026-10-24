@@ -28,17 +28,9 @@ export function activate(context: vscode.ExtensionContext): void {
   let loadFailed = false;
   const loadHost = () => (hostModule ??= import("./host.ts"));
 
-  const provider: vscode.CustomReadonlyEditorProvider = {
-    openCustomDocument: (uri) => ({ uri, dispose: () => undefined }),
-    async resolveCustomEditor(document, panel) {
+  // Shows `path` in a panel: a file on disk, or a table of a database server (mysql://connection/table), which has no folder to read.
+  const attach = async (panel: { webview: vscode.Webview; onDidDispose: vscode.WebviewPanel["onDidDispose"] }, path: string, server: boolean): Promise<void> => {
       const { webview } = panel;
-      if (document.uri.scheme !== "file") {
-        webview.html = messagePage(
-          "fusenduck opens files on this computer's disk only.",
-          `This one is a ${document.uri.scheme}: resource. Open the file from the Explorer, or use Reopen Editor With… to view it another way.`,
-        );
-        return;
-      }
       let host: HostModule;
       try {
         host = await loadHost();
@@ -60,11 +52,10 @@ export function activate(context: vscode.ExtensionContext): void {
         }
         return;
       }
-      const path = document.uri.fsPath;
       // The engine may read the file's own folder only (docs/adr/0001: roots).
       const editor = new host.Host({
         path,
-        roots: [host.rootFor(path)],
+        roots: server ? [] : [host.rootFor(path)],
         copy: async (text) => {
           await vscode.env.clipboard.writeText(text);
         },
@@ -91,8 +82,57 @@ export function activate(context: vscode.ExtensionContext): void {
         listener.dispose();
         void editor.close();
       });
+  };
+
+  const provider: vscode.CustomReadonlyEditorProvider = {
+    openCustomDocument: (uri) => ({ uri, dispose: () => undefined }),
+    async resolveCustomEditor(document, panel) {
+      if (document.uri.scheme !== "file") {
+        panel.webview.html = messagePage(
+          "fusenduck opens files on this computer's disk only.",
+          `This one is a ${document.uri.scheme}: resource. Open the file from the Explorer, or use Reopen Editor With… to view it another way.`,
+        );
+        return;
+      }
+      await attach(panel, document.uri.fsPath, false);
     },
   };
+
+  // A table of a database server: the connection is one of connections.toml (a name only; the password stays in the environment).
+  context.subscriptions.push(
+    vscode.commands.registerCommand("fusenduck.openTable", async () => {
+      let connections: { name: string; kind: string }[];
+      try {
+        connections = (await loadHost()).connections();
+      } catch {
+        void vscode.window.showErrorMessage("fusenduck could not load its DuckDB engine.", "Show Log").then((choice) => {
+          if (choice) showLog();
+        });
+        return;
+      }
+      if (connections.length === 0) {
+        void vscode.window.showInformationMessage("fusenduck has no database connection to offer. Define one in connections.toml (see docs/guide.md, database servers).");
+        return;
+      }
+      const picked = await vscode.window.showQuickPick(
+        connections.map((c) => ({ label: c.name, description: c.kind, connKind: c.kind })),
+        { placeHolder: "Database connection" },
+      );
+      if (!picked) return;
+      const table = await vscode.window.showInputBox({
+        prompt: `Table of ${picked.label}`,
+        placeHolder: picked.connKind === "postgres" ? "schema.table, e.g. public.items" : "table",
+        validateInput: (text) => (/^[^\s/`"'\\]+$/.test(text) ? undefined : "A table name, without spaces, quotes or slashes"),
+      });
+      if (!table) return;
+      const panel = vscode.window.createWebviewPanel("fusenduck.table", `${table} (${picked.label})`, vscode.ViewColumn.Active, {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [dist],
+      });
+      await attach(panel, `${picked.connKind}://${picked.label}/${table}`, true);
+    }),
+  );
   // Parquet opens in it by default. The other kinds are an option of Open With…, so a CSV or JSON file keeps its text editor.
   for (const viewType of ["fusenduck.parquet", "fusenduck.data"]) {
     context.subscriptions.push(

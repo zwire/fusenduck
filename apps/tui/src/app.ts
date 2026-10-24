@@ -1,7 +1,7 @@
 import { createElement as h, useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Box, Text, useApp, useInput, useWindowSize } from "ink";
 import { describeError, FusenError, logLine, SourceChanged } from "@fusenduck/core";
-import { MAX_PAGE_ROWS, type Page, type View } from "@fusenduck/web/view";
+import { isDatabaseKind, MAX_PAGE_ROWS, type Page, type View } from "@fusenduck/web/view";
 import { Selection } from "./selection.ts";
 import { plain } from "./text.ts";
 
@@ -237,7 +237,7 @@ export function App({ view, copy, done, back }: AppProps): ReactElement {
       const pos = rows[cursor]?.pos;
       if (pos == null) {
         setMessage(
-          opened.kind === "duckdb" || opened.kind === "sqlite"
+          isDatabaseKind(opened.kind)
             ? "rows of a database table are picked by a column: filter with / (e.g. id = 5), then y"
             : "this file has its own column named file_row_number, so rows cannot be picked",
         );
