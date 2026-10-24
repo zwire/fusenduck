@@ -183,7 +183,7 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     // The name a query uses for the source. Created before the lock so the file is bound while it is allowed.
     const probe = async (sql: string): Promise<Row[]> => (await connection.runAndReadAll(sql)).getRowObjectsJson() as Row[];
     binding = (async () => {
-      adapter = await adapter.resolve(path, probe);
+      adapter = await adapter.resolve(path, probe, resolved.files);
       if (multi) {
         // Several files: every row has its filename, and a position within its file for selecting by position.
         await connection.run(`CREATE VIEW data_pos AS ${adapter.positionView(resolved.files)}`);

@@ -77,6 +77,22 @@ describe("the Web UI's view of sources other than one Parquet file", () => {
     await expect(View.open(join(own, "*.csv"), [own])).rejects.toThrow(/file_row_number/);
   });
 
+  it("notices a rewritten text file on the next page, without hashing it again for every page", async () => {
+    const path = join(dir, "moving.csv");
+    writeFileSync(path, "id,name\n0,aa\n1,bb\n");
+    const view = await View.open(path, [dir]);
+    try {
+      await view.rows(view.opened.fingerprint, 0, 100);
+      await view.rows(view.opened.fingerprint, 0, 100);
+      // Same size, other bytes, later time.
+      await new Promise((r) => setTimeout(r, 20));
+      writeFileSync(path, "id,name\n0,aa\n1,bc\n");
+      await expect(view.rows(view.opened.fingerprint, 0, 100)).rejects.toThrow(/changed/);
+    } finally {
+      await view.close();
+    }
+  });
+
   it("cuts a range where it crosses from one file into the next", () => {
     const layout = [
       { file: "/d/a.csv", rows: 3 },

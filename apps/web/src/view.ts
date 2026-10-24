@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   buildCard,
@@ -158,6 +159,8 @@ export class View {
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;
   #closing: Promise<void> | undefined;
+  /** What #touched said when the bytes were last found to match the fingerprint. */
+  #verified: string | undefined;
   /** The count of the last filter, so paging through its rows counts them once. */
   #counted: { where: string; n: number } | undefined;
 
@@ -247,7 +250,9 @@ export class View {
         files: engine.files.length,
         ...(table === undefined ? {} : { table }),
       };
-      return new View(engine, opened, columns, from, pos, layout);
+      const view = new View(engine, opened, columns, from, pos, layout);
+      view.#verified = view.#touched();
+      return view;
     } catch (error) {
       engine.close();
       throw error;
@@ -271,10 +276,29 @@ export class View {
     return run;
   }
 
-  async #check(expected: unknown): Promise<void> {
-    if (expected !== this.opened.fingerprint || (await fingerprint(this.#engine)) !== this.opened.fingerprint) {
-      throw new SourceChanged(CHANGED);
+  /**
+   * The size, modified time and identity of the files of a text source. Its fingerprint hashes every byte, which a
+   * page cannot afford each time, so a page asks the files whether they were touched at all; a Ref still
+   * checks the bytes when it is minted. Other kinds read a footer or metadata, which is cheap, and give undefined.
+   */
+  #touched(): string | undefined {
+    if (this.opened.kind === "parquet" || this.opened.kind === "duckdb") return undefined;
+    try {
+      return JSON.stringify(this.#engine.files.map((f) => {
+        const s = statSync(f);
+        return [s.size, s.mtimeMs, s.ino];
+      }));
+    } catch {
+      return undefined;
     }
+  }
+
+  async #check(expected: unknown): Promise<void> {
+    if (expected !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
+    const touched = this.#touched();
+    if (touched !== undefined && touched === this.#verified) return;
+    if ((await fingerprint(this.#engine)) !== this.opened.fingerprint) throw new SourceChanged(CHANGED);
+    this.#verified = touched;
   }
 
   /**

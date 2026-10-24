@@ -32,7 +32,7 @@ export interface SourceAdapter {
    * Fills in what a kind detects (CSV delimiter and types, JSON columns), once, while the source is opened.
    * Settings a Ref already carries are never detected again, so the same Ref reads the same on any machine.
    */
-  resolve(path: string, probe: Probe): Promise<SourceAdapter>;
+  resolve(path: string, probe: Probe, files?: string[]): Promise<SourceAdapter>;
   /**
    * Whether the file is the engine's own database, opened read-only, rather than something it reads from
    * memory. Then the engine cannot be made to write it or to attach it again read-write (docs/adr/0004).
@@ -135,6 +135,9 @@ async function hashFile(path: string): Promise<string> {
 
 type Pairs = [string, string][];
 
+/** Longest column name a text source may have: names travel in the Ref. */
+const MAX_COLUMN_NAME = 256;
+
 /** The columns of a text source, as `columns` carries them: a JSON list of [name, type]. */
 function parseColumns(text: string): Pairs {
   let parsed: unknown;
@@ -142,6 +145,9 @@ function parseColumns(text: string): Pairs {
     parsed = JSON.parse(text);
   } catch {
     throw new FusenError("opt.columns is not valid JSON");
+  }
+  if (Array.isArray(parsed) && parsed.some((p) => Array.isArray(p) && typeof p[0] === "string" && p[0].length > MAX_COLUMN_NAME)) {
+    throw new FusenError(`a column name may be at most ${MAX_COLUMN_NAME} characters`);
   }
   const ok =
     Array.isArray(parsed) &&
@@ -168,7 +174,8 @@ interface TextKind {
   validate(options: SourceOptions): SourceOptions;
   /** The table function call with every setting spelled out. */
   call(files: string[], options: SourceOptions, multi: boolean): string;
-  detect(path: string, probe: Probe): Promise<SourceOptions>;
+  /** `files` are all the files of a pattern (`path` is the first); the layout must hold for each. */
+  detect(path: string, probe: Probe, files: string[]): Promise<SourceOptions>;
 }
 
 const single = (name: string, value: string, max: number): string => {
@@ -209,11 +216,23 @@ const csvKind: TextKind = {
     `read_csv(${multi ? list(files) : lit(files[0]!)}, auto_detect=false, delim=${lit(o.delim!)}, quote=${lit(o.quote!)}, escape=${lit(o.escape!)}, header=${o.header}, ` +
     `nullstr='', allow_quoted_nulls=true${o.skip ? `, skip=${o.skip}` : ""}${o.dateformat ? `, dateformat=${lit(o.dateformat)}` : ""}` +
     `${o.timestampformat ? `, timestampformat=${lit(o.timestampformat)}` : ""}${multi ? ", filename=true" : ""}, columns=${columnMap(parseColumns(o.columns!))})`,
-  async detect(path, probe) {
-    const rows = await probe(`SELECT Delimiter, Quote, Escape, HasHeader, Columns, SkipRows, DateFormat, TimestampFormat FROM sniff_csv(${lit(path)}, sample_size=-1)`);
+  async detect(path, probe, files) {
+    const sniff = (file: string) =>
+      probe(`SELECT Delimiter, Quote, Escape, HasHeader, Columns, SkipRows, DateFormat, TimestampFormat FROM sniff_csv(${lit(file)}, sample_size=-1)`);
+    // An empty file has no layout to sniff; the layout comes from the first file that has content.
+    const filled = files.length > 1 ? files.filter((f) => statSync(f).size > 0) : files;
+    const lead = filled[0] ?? path;
+    const rows = await sniff(lead);
     const r = rows[0];
     if (!r) throw new FusenError(`cannot work out the layout of ${path}`);
     const columns = (r.Columns as { name: string; type: string }[]).map((c): [string, string] => [c.name, c.type]);
+    // The columns are fixed by position when read, so files that order or name them differently would be mixed up silently.
+    for (const other of filled.slice(1)) {
+      const names = ((await sniff(other))[0]?.Columns as { name: string }[] | undefined)?.map((c) => c.name);
+      if (names?.length !== columns.length || names.some((n, i) => n !== columns[i]![0])) {
+        throw new FusenError(`the files must have the same columns in the same order: ${showName(basename(other))} differs from ${showName(basename(lead))}`);
+      }
+    }
     const found: SourceOptions = {
       delim: String(r.Delimiter),
       quote: r.Quote === "(empty)" ? "" : String(r.Quote),
@@ -238,8 +257,9 @@ const jsonKind = (name: string, format: string): TextKind => ({
   },
   call: (files, o, multi) =>
     `read_json(${multi ? list(files) : lit(files[0]!)}, format=${lit(format)}${multi ? ", filename=true" : ""}, columns=${columnMap(parseColumns(o.columns!))})`,
-  async detect(path, probe) {
-    const rows = await probe(`DESCRIBE SELECT * FROM read_json(${lit(path)}, format=${lit(format)}, sample_size=-1)`);
+  async detect(path, probe, files) {
+    // Every file is looked at, so a column only a later file has is not dropped.
+    const rows = await probe(`DESCRIBE SELECT * FROM read_json(${files.length > 1 ? list(files) : lit(path)}, format=${lit(format)}, sample_size=-1)`);
     if (rows.length === 0) throw new FusenError(`cannot work out the columns of ${path}`);
     return { columns: JSON.stringify(rows.map((r): [string, string] => [String(r.column_name), String(r.column_type)])) };
   },
@@ -255,8 +275,8 @@ function textAdapter(kind: TextKind, options: SourceOptions, detected: boolean):
     name: kind.name,
     options,
     database: false,
-    async resolve(path, probe) {
-      return detected ? adapter : textAdapter(kind, kind.validate(await kind.detect(path, probe)), true);
+    async resolve(path, probe, files) {
+      return detected ? adapter : textAdapter(kind, kind.validate(await kind.detect(path, probe, files ?? [path])), true);
     },
     read: (files, multi = false) => kind.call(files, options, multi),
     allowedPaths: (files) => files,
@@ -319,16 +339,22 @@ const DUCKDB_BLOCK_BYTES = 262_144;
  * read from metadata like Parquet's footer; a rewrite that leaves every statistic equal is not detected.
  * Rows are selected by a key column, not by position (rowid is not stable under deletes).
  */
-function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapter {
+function databaseAdapter(options: SourceOptions, detected: boolean, catalog?: string): SourceAdapter {
   const table = options.table;
   // DuckDB's lookup of a table's storage by name does not take an escaped quote.
   if (table?.includes('"')) throw new FusenError("a table name with a double quote is not supported");
-  const from = () => `main.${ident(table ?? "")}`;
+  // The engine's view of the source is named data, which a table of that name would be shadowed by (the view
+  // would read itself). That table is reached by the database's own name, and a query names the view.
+  const clash = table?.toLowerCase() === "data";
+  if (clash && catalog?.includes('"')) throw new FusenError('a table named data in a database file whose name has a double quote is not supported');
+  const stored = clash && catalog ? `${ident(catalog)}.main.${ident(table!)}` : `main.${ident(table ?? "")}`;
+  const from = () => stored;
   const adapter: SourceAdapter = {
     name: "duckdb",
     options,
     database: true,
     async resolve(_path, probe) {
+      const d = String((await probe("SELECT current_database() AS d"))[0]?.d);
       if (detected) {
         // DuckDB compares table names without regard to case; the Ref keeps the name as the file spells it.
         const found = await probe(
@@ -336,7 +362,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
         );
         if (found.length === 0) throw new FusenError(`this database has no table named "${showName(table!)}" (in the main schema)`);
         const actual = String(found[0]!.table_name);
-        return actual === table ? adapter : databaseAdapter({ table: actual }, true);
+        return actual === table && catalog === d ? adapter : databaseAdapter({ table: actual }, true, d);
       }
       const rows = await probe(
         "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND NOT internal ORDER BY table_name",
@@ -350,7 +376,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
           names,
         );
       }
-      return databaseAdapter({ table: names[0]! }, true);
+      return databaseAdapter({ table: names[0]! }, true, d);
     },
     read: () => from(),
     allowedPaths: (files) => files,
@@ -362,7 +388,7 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
       // DuckDB's rowid moves when rows are deleted and the file is compacted, with the statistics unchanged,
       // so a position could not be guarded by the fingerprint. A table's rows are selected by a key column.
       if (withPosition) throw new FusenError("rows of a database table are selected by a column, such as where id = 5, not by position");
-      return `SELECT * FROM ${from()}`;
+      return clash ? "SELECT * FROM data" : `SELECT * FROM ${from()}`;
     },
     async fingerprint(engine) {
       const count = await engine.query(`SELECT count(*)::VARCHAR AS n FROM ${from()}`);
@@ -370,12 +396,12 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
         `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, column_id::VARCHAR, column_path, segment_id::VARCHAR, segment_type,
                                                   start::VARCHAR, count::VARCHAR, compression, stats, has_updates::VARCHAR))::VARCHAR,
                                ';' ORDER BY row_group_id, column_id, segment_id)) AS h
-         FROM pragma_storage_info(${lit(`main.${ident(table!)}`)})`,
+         FROM pragma_storage_info(${lit(clash && catalog ? `${catalog}.main.${ident(table!)}` : `main.${ident(table!)}`)})`,
       );
       return createHash("sha256").update(`duckdb:${table}:${String(count[0]?.n)}:${String(layout[0]?.h)}`).digest("hex").slice(0, 12);
     },
     async scanBytes(engine) {
-      const blocks = await engine.query(`SELECT count(DISTINCT block_id)::VARCHAR AS n FROM pragma_storage_info(${lit(`main.${ident(table!)}`)}) WHERE persistent`);
+      const blocks = await engine.query(`SELECT count(DISTINCT block_id)::VARCHAR AS n FROM pragma_storage_info(${lit(clash && catalog ? `${catalog}.main.${ident(table!)}` : `main.${ident(table!)}`)}) WHERE persistent`);
       return Number(blocks[0]?.n ?? 0) * DUCKDB_BLOCK_BYTES;
     },
   };
