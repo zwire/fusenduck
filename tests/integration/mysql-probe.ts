@@ -1,0 +1,155 @@
+// Probes what ADR 0005 assumes about DuckDB's mysql extension, against a real MySQL, and prints what it saw.
+// Like db-probe.ts it does not assert: every line is an observation that decides the design.
+// Needs FUSEN_MY_HOST/PORT/DB, the roles fusen_ro (SELECT only) and fusen_rw (can write), and the mysql client.
+import { DuckDBInstance } from "@duckdb/node-api";
+import { execFileSync } from "node:child_process";
+
+const env = (name: string): string => process.env[name] ?? "";
+const host = env("FUSEN_MY_HOST") || "127.0.0.1";
+const port = env("FUSEN_MY_PORT") || "3306";
+const db = env("FUSEN_MY_DB") || "probe";
+const roPassword = env("FUSEN_MY_RO_PASSWORD");
+const rwPassword = env("FUSEN_MY_RW_PASSWORD");
+const lit = (s: string) => `'${s.replaceAll("'", "''")}'`;
+
+const lines: string[] = [];
+const say = (name: string, result: string) => {
+  const text = result.replace(/\s+/g, " ").slice(0, 400);
+  lines.push(`| ${name} | ${text.replaceAll("|", "\\|")} |`);
+  console.log(`${name}: ${text}`);
+};
+async function observe(name: string, fn: () => Promise<unknown>) {
+  try {
+    const value = await fn();
+    say(name, `ok${value === undefined ? "" : ` ${typeof value === "string" ? value : JSON.stringify(value)}`}`);
+  } catch (error) {
+    say(name, `error: ${(error as Error).message}`);
+  }
+}
+const mysql = (user: string, password: string, sql: string): string =>
+  execFileSync("mysql", ["-h", host, "-P", port, "-u", user, `-p${password}`, "--ssl-mode=DISABLED", "-N", "-B", db, "-e", sql], { encoding: "utf8" }).trim();
+
+async function engine(user: string, password: string, secretExtra = "", attachExtra = "READ_ONLY") {
+  const instance = await DuckDBInstance.create(":memory:");
+  const c = await instance.connect();
+  const q = async (sql: string) => (await c.runAndReadAll(sql)).getRowObjectsJson();
+  await c.run("SET allowed_paths=[]");
+  await c.run("SET memory_limit='512MB'");
+  await c.run("SET threads=4");
+  await c.run("SET temp_directory=''");
+  await c.run("INSTALL mysql");
+  await c.run("LOAD mysql");
+  return {
+    instance,
+    c,
+    q,
+    attach: async () => {
+      await c.run(`CREATE SECRET mys (TYPE mysql, HOST ${lit(host)}, PORT ${port}, DATABASE ${lit(db)}, USER ${lit(user)}, PASSWORD ${lit(password)}${secretExtra})`);
+      await c.run(`ATTACH '' AS my (TYPE mysql, SECRET mys${attachExtra ? `, ${attachExtra}` : ""})`);
+    },
+  };
+}
+const lockdown = async (c: { run(sql: string): Promise<unknown> }) => {
+  await c.run("CREATE TEMP VIEW data AS SELECT * FROM my.items");
+  await c.run("SET enable_external_access=false");
+  await c.run("SET lock_configuration=true");
+};
+
+await observe("server version", async () => mysql("fusen_ro", roPassword, "select version()"));
+await observe("duckdb version", async () => (await (await DuckDBInstance.create(":memory:")).connect().then((c) => c.runAndReadAll("select version() v"))).getRowObjectsJson());
+
+// 1. Connect before the lock; default TLS behaviour; the ssl_mode values the secret accepts.
+{
+  const e = await engine("fusen_ro", roPassword);
+  await observe("1a connect with the secret, default ssl_mode (server has no TLS certificate we trust)", e.attach);
+}
+for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_identity"]) {
+  const e = await engine("fusen_ro", roPassword, `, SSL_MODE ${lit(mode)}`);
+  await observe(`1b ssl_mode=${mode}`, e.attach);
+}
+{
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'disabled'");
+  await observe("1c connect before the lock", e.attach);
+  await observe("1d lock after the connection", () => lockdown(e.c));
+  await observe("1e read the view after the lock", () => e.q("SELECT count(*) AS n, min(id) AS lo, max(id) AS hi FROM data"));
+  await observe("1f scan with threads=4: server connections held", async () => {
+    await e.q("SELECT count(*) AS n FROM data WHERE id % 7 = 0");
+    return mysql("fusen_ro", roPassword, "select count(*) from information_schema.processlist where user='fusen_ro'");
+  });
+  await observe("1g session is read only?", () => e.q("SELECT * FROM mysql_query('my', 'select @@session.transaction_read_only as ro, @@session.sql_mode as mode')"));
+}
+
+// 2. After the lock: more reach, other servers, writes.
+{
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'disabled'");
+  await e.attach();
+  await lockdown(e.c);
+  await observe("2a ATTACH again after the lock", () => e.c.run(`ATTACH ${lit(`host=${host} port=${port} user=fusen_ro password=${roPassword} database=${db} ssl_mode=disabled`)} AS my2 (TYPE mysql, READ_ONLY)`));
+  await observe("2b DETACH after the lock", () => e.c.run("DETACH my"));
+  await observe("2c mysql_query after the lock", () => e.q("SELECT * FROM mysql_query('my', 'select 1 as one')"));
+  await observe("2d mysql_execute after the lock (role is SELECT only)", () => e.q("CALL mysql_execute('my', 'create table probe_x(i int)')"));
+  await observe("2e INSERT through the attached catalog", () => e.c.run("INSERT INTO my.items VALUES (999999, 'x')"));
+  await observe("2f CREATE SECRET after the lock", () => e.c.run("CREATE SECRET evil (TYPE mysql, HOST '127.0.0.1', PORT 1)"));
+  await observe("2g mysql_scan with a connection string after the lock", () => e.q(`SELECT * FROM mysql_scan(${lit(`host=127.0.0.1 port=1 user=x database=${db}`)}, ${lit(db)}, 'items')`));
+  await observe("2h INSTALL after the lock", () => e.c.run("INSTALL postgres"));
+}
+
+// 3. A write-capable role: which layer stops a write.
+{
+  const e = await engine("fusen_rw", rwPassword, ", SSL_MODE 'disabled'");
+  await e.attach();
+  await observe("3a READ_ONLY attach, INSERT with a writable role", () => e.c.run("INSERT INTO my.items VALUES (888888, 'x')"));
+  await observe("3b READ_ONLY attach, mysql_execute with a writable role", () => e.q("CALL mysql_execute('my', 'create table probe_y(i int)')"));
+  await observe("3c server shows probe_y", async () => mysql("fusen_ro", roPassword, "select count(*) from information_schema.tables where table_schema='probe' and table_name='probe_y'"));
+  await observe("3d mysql_query can write with a writable role", () => e.q("SELECT * FROM mysql_query('my', 'delete from items where id = 888888')"));
+}
+
+// 4. The role check, through the engine's own connection.
+{
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'disabled'");
+  await e.attach();
+  await observe("4a SHOW GRANTS FOR CURRENT_USER() through mysql_query (ro)", () => e.q("SELECT * FROM mysql_query('my', 'SHOW GRANTS FOR CURRENT_USER()')"));
+  await observe("4b current_user / roles through mysql_query", () => e.q("SELECT * FROM mysql_query('my', 'select current_user() as u, current_role() as r, database() as d')"));
+  const w = await engine("fusen_rw", rwPassword, ", SSL_MODE 'disabled'");
+  await w.attach();
+  await observe("4c SHOW GRANTS FOR CURRENT_USER() (rw, should show more than SELECT)", () => w.q("SELECT * FROM mysql_query('my', 'SHOW GRANTS FOR CURRENT_USER()')"));
+}
+
+// 5. Where the password shows.
+const leaks = async (q: (sql: string) => Promise<Record<string, unknown>[]>, password: string) => {
+  const found: string[] = [];
+  for (const [name, sql] of [["duckdb_databases", "SELECT * FROM duckdb_databases()"], ["duckdb_secrets", "SELECT * FROM duckdb_secrets()"], ["duckdb_settings", "SELECT * FROM duckdb_settings()"], ["database_list", "PRAGMA database_list"], ["duckdb_extensions", "SELECT * FROM duckdb_extensions()"], ["duckdb_views", "SELECT * FROM duckdb_views()"]] as const) {
+    try {
+      for (const row of await q(sql)) for (const [column, value] of Object.entries(row)) if (JSON.stringify(value)?.includes(password)) found.push(`${name}.${column}`);
+    } catch (error) {
+      found.push(`${name}: error ${(error as Error).message.slice(0, 60)}`);
+    }
+  }
+  return found.length ? `LEAKS in ${found.join(", ")}` : "no password in any of them";
+};
+{
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'disabled'");
+  await e.attach();
+  await lockdown(e.c);
+  await observe("5a secret route: where the password shows", () => leaks(e.q, roPassword));
+}
+
+// 6. What a fingerprint and a key lookup need from the server.
+{
+  const e = await engine("fusen_ro", roPassword, ", SSL_MODE 'disabled'");
+  await e.attach();
+  await observe("6a count, max key, columns in one statement", () =>
+    e.q(`SELECT * FROM mysql_query('my', ${lit("select (select count(*) from items) as n, (select max(id) from items) as maxkey, (select group_concat(column_name, ':', column_type, ':', is_nullable order by ordinal_position) from information_schema.columns where table_schema = database() and table_name = 'items') as cols, database() as db, @@server_uuid as sys")})`));
+  await observe("6b estimate: table_rows", () => e.q(`SELECT * FROM mysql_query('my', ${lit("select table_rows as n, data_length + index_length as bytes, table_type as kind from information_schema.tables where table_schema = database() and table_name = 'items'")})`));
+  await observe("6c primary key columns", () =>
+    e.q(`SELECT * FROM mysql_query('my', ${lit("select group_concat(column_name order by seq_in_index) as keys from information_schema.statistics where table_schema = database() and table_name = 'items' and index_name = 'PRIMARY'")})`));
+  await observe("6d sample hash (md5 of group_concat of rows), 50 rows from each end", () =>
+    e.q(`SELECT * FROM mysql_query('my', ${lit("select md5(group_concat(json_object('id', id, 'name', name) order by id separator ';')) as head from (select * from items order by id asc limit 50) x")})`));
+  await observe("6e a view, is it in information_schema.tables", () => mysql("fusen_ro", roPassword, "select count(*) from information_schema.tables where table_schema = 'probe' and table_type = 'VIEW'"));
+}
+
+const summary = process.env.GITHUB_STEP_SUMMARY;
+if (summary) {
+  const { appendFileSync } = await import("node:fs");
+  appendFileSync(summary, `\n### mysql extension probe\n\n| observation | result |\n|---|---|\n${lines.join("\n")}\n`);
+}
