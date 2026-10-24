@@ -86,5 +86,49 @@
         "sha256": "979e856bb6fbca09f8dbe2264742e0103cf211d4c28b2e0cb55f344d9c9a7add"
       }
     }
+  },
+  "mysql_scanner": {
+    "v1.5.6": {
+      "linux_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64/mysql_scanner.duckdb_extension.gz",
+        "gz": "98a6520486c48986507892c8c61c336264299aa646bee1c81600eeabd0cf0f64",
+        "sha256": "22c1b1d403033ba3e1a7e55693f5be86e616815aa4d32457fa837b14483a9525"
+      },
+      "linux_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_arm64/mysql_scanner.duckdb_extension.gz",
+        "gz": "5deac9d93b6e4054ce7813991f79deb3f010ddc2577c719ec5a6ec104efadeba",
+        "sha256": "5151ae4bd7cc187728860e1f7d5c289866ed029de55f0fb357c423c8123bf04e"
+      },
+      "linux_amd64_musl": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64_musl/mysql_scanner.duckdb_extension.gz",
+        "gz": "6c4c2af98ce1595c554a63a20dfe8c837ebc6f50262a8fca925204dfb75317eb",
+        "sha256": "615589d9045aad2f0d12dcfc01837110e5ce71f328666213a2fc95b9b8853369"
+      },
+      "linux_arm64_musl": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_arm64_musl/mysql_scanner.duckdb_extension.gz",
+        "gz": "0bfb029c6f23424d5e55fd479daed296c162da97d83353fd85b6c4f5f13a2285",
+        "sha256": "8a0b9ee5dd8dae478b1c94ba0725c6bf7eedd724a47dc10c5f959f6bcafbc380"
+      },
+      "osx_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/osx_amd64/mysql_scanner.duckdb_extension.gz",
+        "gz": "313f7e76733e95b197a9f09a84d0eedec77da0874fa436f145267a4517696b9e",
+        "sha256": "b96c1c65a48934dbfa94e4a385c99a529ec6d1aafa85efca1be11e378f2d2f9e"
+      },
+      "osx_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/osx_arm64/mysql_scanner.duckdb_extension.gz",
+        "gz": "e5cd32f2990048fe1cb966f341d96bc2ffe64e7053bf222a6f91053dbf2e4da5",
+        "sha256": "da6c6d0b03837e539bf8571146ae9a83c5e744804c41cccddceeb8f4b19b98dd"
+      },
+      "windows_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/windows_amd64/mysql_scanner.duckdb_extension.gz",
+        "gz": "29f049b20f9f19c9475f1f978f871d4dff5fa209da7124d8447534a161d00437",
+        "sha256": "81efa774ebf42773eaac05b2919a4893bb6dd9ca98d5a2641eb90a8fae355625"
+      },
+      "windows_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/windows_arm64/mysql_scanner.duckdb_extension.gz",
+        "gz": "339e13740682b26c1258a9b52fecf82fcf73b98ff3682a078554cea0d632bc84",
+        "sha256": "b2cf0a743076375eae2bf9f8bcce4db2b73b4f296dc754debf661af4b74c0f9c"
+      }
+    }
   }
 }

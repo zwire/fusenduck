@@ -133,7 +133,8 @@ jobs:
         run: pnpm exec vitest run tests/integration/postgres.test.ts
 
   mysql-probe:
-    # Observes how DuckDB's mysql extension behaves under the engine's lock (docs/adr/0005). Reports only.
+    # Observes how DuckDB's mysql extension behaves under the engine's lock (docs/adr/0005 section 6).
+    # The probe reports; the MySQL source tests gate this job.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     services:
@@ -156,8 +157,6 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # TEMPORARY: writes the mysql_scanner pins (the lock cannot be made where extensions.duckdb.org is unreachable).
-      - run: pnpm extensions:lock && cat packages/core/extensions.lock.json
       - name: Create the roles and a table
         run: |
           mysql -h 127.0.0.1 -uroot -padmin --ssl-mode=DISABLED probe <<SQL
@@ -183,9 +182,6 @@ jobs:
           FUSEN_MY_ADMIN_PASSWORD: admin
           FUSEN_MY_CA: ${{ runner.temp }}/mysql-ca.pem
         run: pnpm exec vitest run tests/integration/mysql.test.ts
-      - name: The mysql_scanner pins, on one line
-        if: always()
-        run: node -e "console.log('PINS ' + JSON.stringify(require('./packages/core/extensions.lock.json').mysql_scanner))"
 
   repro:
     # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs
