@@ -42,20 +42,29 @@ interface Relation {
  * (probe, docs/adr/0005, "What the first slice does not do yet"), so the statement carries its own limit as an optimizer hint: the server stops it.
  */
 export const serverStatement = (sql: string, ms = STATEMENT_TIMEOUT_MS): string => {
-  if (!Number.isInteger(ms) || ms < 1) throw new FusenError("a statement time limit is a whole number of milliseconds");
+  if (!Number.isInteger(ms) || ms < 1 || ms > 4_294_967_295) throw new FusenError("a statement time limit is a whole number of milliseconds, at most 4294967295");
   const hinted = sql.replace(/^\s*select\s/i, `select /*+ MAX_EXECUTION_TIME(${ms}) */ `);
   // A statement that does not begin with select would run without the limit, silently.
   if (hinted === sql) throw new FusenError("a statement sent to the server must begin with select, so that it can carry its time limit");
   return hinted;
 };
 
-/** Runs a statement of ours on the server; one the server stopped at its limit is told as that, not as a driver error. */
+/**
+ * Runs a statement of ours on the server. The server's own words for a stopped statement are told as that; the
+ * extension's generic "Failed to fetch result row" is told so only when the statement ran as long as the limit, since
+ * a dropped connection reads the same.
+ */
 async function ran(engine: Engine, sql: string): Promise<Row[]> {
+  const started = Date.now();
   try {
     return await engine.query(ONE(sql));
   } catch (error) {
-    if (/Failed to fetch result row|maximum statement execution time|Query execution was interrupted/i.test(String(error))) {
-      throw new FusenError(`the server stopped the statement after ${STATEMENT_TIMEOUT_MS / 1000} s (a very large table, or a busy server); try again or ask the DBA`);
+    const text = String(error);
+    const stopped =
+      /maximum statement execution time|Query execution was interrupted/i.test(text) ||
+      (/Failed to fetch result row/i.test(text) && Date.now() - started >= STATEMENT_TIMEOUT_MS * 0.9);
+    if (stopped) {
+      throw new FusenError(`the server stopped the statement at its limit of ${STATEMENT_TIMEOUT_MS / 1000} s (a very large table, or a busy server); try again or ask the DBA`);
     }
     throw error;
   }
@@ -126,7 +135,18 @@ const ROLE_CHECK = `select
   (select count(*) from information_schema.schema_privileges where privilege_type <> 'SELECT' or is_grantable <> 'NO') as schema_privileges,
   (select count(*) from information_schema.table_privileges where privilege_type <> 'SELECT' or is_grantable <> 'NO') as table_privileges,
   (select count(*) from information_schema.column_privileges where privilege_type <> 'SELECT' or is_grantable <> 'NO') as column_privileges,
-  current_role() as active_role`;
+  current_role() as active_role,
+  version() as server_version`;
+
+/** The time limit is an optimizer hint, which MariaDB and MySQL before 5.7.8 ignore: without it a statement would have no limit. */
+export function versionProblem(version: unknown): string | undefined {
+  const text = String(version ?? "");
+  if (/mariadb/i.test(text)) return "MariaDB ignores the statement time limit fusenduck sends, so it is not supported";
+  const [major = 0, minor = 0, patch = 0] = (/^(\d+)\.(\d+)\.(\d+)/.exec(text) ?? []).slice(1).map(Number);
+  if (!major) return "the server did not say which version it is";
+  if (major < 5 || (major === 5 && (minor < 7 || (minor === 7 && patch < 8)))) return `MySQL ${text} is older than 5.7.8 and ignores the statement time limit fusenduck sends`;
+  return undefined;
+}
 
 export function roleProblems(row: Row): string[] {
   const found: string[] = [];
@@ -202,11 +222,15 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
     }
     if (opts.signal?.aborted) throw new FusenError("the request was cancelled");
     let problems: string[];
+    let version: string | undefined;
     try {
-      problems = roleProblems((await server(ROLE_CHECK))[0] ?? {});
+      const row = (await server(ROLE_CHECK))[0] ?? {};
+      problems = roleProblems(row);
+      version = versionProblem(row.server_version);
     } catch (error) {
       throw failed("could not check the role", error);
     }
+    if (version) throw new FusenError(`connection "${conn}": ${version}`);
     if (problems.length) {
       throw new FusenError(`connection "${conn}": the database role must only be able to read, but ${problems.join(" and ")}. Use a role with SELECT only.`);
     }
