@@ -122,7 +122,7 @@ jobs:
           revoke create on schema public from public;
           SQL
       - run: node tests/integration/db-probe.ts
-      # The shipped extension, fetched against the lock: fusenduck never downloads it while it runs.
+      # The shipped extension, fetched against the lock: fusenduck never downloads it while it runs (the probe above installs its own copy to observe DuckDB).
       - run: pnpm extensions:fetch
       - name: Postgres source tests
         env:
