@@ -200,6 +200,25 @@ for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_id
   }
 }
 
+// 10. Does the secret enforce verification? (verify_ca and verify_identity connected to a self-signed server above.)
+{
+  const ca = env("FUSEN_MY_CA");
+  const cases: [string, string][] = [
+    ["verify_ca, no ssl_ca (self-signed server)", ", SSL_MODE 'verify_ca'"],
+    ["verify_ca, ssl_ca = a file that is not the server's CA", ", SSL_MODE 'verify_ca', SSL_CA '/etc/hosts'"],
+    ["verify_ca, ssl_ca = the server's CA", `, SSL_MODE 'verify_ca', SSL_CA ${lit(ca)}`],
+    ["verify_identity, ssl_ca = the server's CA, host is an IP", `, SSL_MODE 'verify_identity', SSL_CA ${lit(ca)}`],
+    ["required, ssl_ca = a file that is not the server's CA", ", SSL_MODE 'required', SSL_CA '/etc/hosts'"],
+  ];
+  for (const [name, extra] of cases) {
+    const e = await engine("fusen_ro", roPassword, extra);
+    await observe(`10 ${name}: attach and the session cipher`, async () => {
+      await e.attach();
+      return e.q(`SELECT * FROM mysql_query('my', ${lit("select variable_value as cipher from performance_schema.session_status where variable_name = 'Ssl_cipher'")})`);
+    });
+  }
+}
+
 const summary = process.env.GITHUB_STEP_SUMMARY;
 if (summary) {
   const { appendFileSync } = await import("node:fs");

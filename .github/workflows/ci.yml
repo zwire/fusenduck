@@ -167,7 +167,11 @@ jobs:
           grant select on probe.* to 'fusen_ro'@'%';
           grant select, insert, update, delete, create, drop on probe.* to 'fusen_rw'@'%';
           SQL
+      - name: Copy the server's CA certificate
+        run: docker cp "$(docker ps -q --filter ancestor=mysql:8.4 | head -1)":/var/lib/mysql/ca.pem "$RUNNER_TEMP/mysql-ca.pem"
       - run: node tests/integration/mysql-probe.ts
+        env:
+          FUSEN_MY_CA: ${{ runner.temp }}/mysql-ca.pem
 
   repro:
     # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs
