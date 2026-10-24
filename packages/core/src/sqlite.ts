@@ -104,13 +104,17 @@ export const sqliteStats = { copies: 0 };
 export const LINGER_MS = 30_000;
 /** The most idle copies kept. */
 const MAX_IDLE = 4;
-/** A file changed within this long before it is copied might change again without its timestamps moving (coarse clocks). */
-const RACY_MS = 2_000;
+/** A file changed within this long before it is copied might change again without its timestamps moving (FAT keeps modification times to 2 s). */
+const RACY_MS = 3_000;
 
 interface Shared {
   key: string;
   copy: Promise<SqliteCopy>;
   refs: number;
+  /** Engines still waiting for, or using, the copy. */
+  live: number;
+  /** Aborts the copy; fired when `live` reaches 0 before it is made. */
+  controller: AbortController;
   /** The copy once it is made, so that it can be removed without waiting a turn. */
   made?: SqliteCopy;
   timer?: ReturnType<typeof setTimeout>;
@@ -125,7 +129,7 @@ const track = (dir: string): void => {
   live.add(dir);
   if (exitHook) return;
   exitHook = true;
-  process.once("exit", () => {
+  const sweep = () => {
     for (const d of live) {
       try {
         rmSync(d, { recursive: true, force: true });
@@ -133,7 +137,16 @@ const track = (dir: string): void => {
         // Nothing more to do while exiting.
       }
     }
-  });
+  };
+  process.once("exit", sweep);
+  // A signal without a handler ends the process without an 'exit' event. Ours is removed once it runs, so if nobody else
+  // listens the signal is sent again and ends the process as it would have; a host with its own handler shuts down its way.
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      sweep();
+      if (process.listenerCount(signal) === 0) process.kill(process.pid, signal);
+    });
+  }
 };
 
 /**
@@ -186,45 +199,64 @@ function drop(entry: Shared): void {
 /**
  * The copy of a table of a SQLite file for one engine. Engines of this process that open the same unchanged file and table
  * share one copy, kept for LINGER_MS after the last of them closes; each one's `remove` gives its share back.
+ * The copy runs under a signal of its own that fires only when every engine waiting for it has been cancelled, so one
+ * cancelled request cannot fail another, and each waiter stops waiting as soon as its own request is cancelled.
  */
 export async function copySqlite(path: string, wanted: string | undefined, signal?: AbortSignal): Promise<SqliteCopy> {
   const key = identity(path, wanted);
   if (key === undefined) return copyAlone(path, wanted, signal);
-  for (let attempt = 0; ; attempt++) {
-    let entry = shared.get(key);
-    if (!entry) {
-      entry = { key, copy: copyAlone(path, wanted, signal), refs: 0, idleSince: Date.now() };
-      shared.set(key, entry);
-      const mine = entry;
-      // A copy that failed is not kept for the next open.
-      entry.copy.then(
-        (c) => void (mine.made = c),
-        () => {
-          if (shared.get(key) === mine) shared.delete(key);
-        },
-      );
+  const cancelled = () => new FusenError("the request was cancelled");
+  if (signal?.aborted) throw cancelled();
+  let entry = shared.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const created: Shared = { key, copy: copyAlone(path, wanted, controller.signal), refs: 0, live: 0, controller, idleSince: Date.now() };
+    entry = created;
+    shared.set(key, created);
+    // A copy that failed is not kept for the next open.
+    created.copy.then(
+      (c) => void (created.made = c),
+      () => {
+        if (shared.get(key) === created) shared.delete(key);
+      },
+    );
+  }
+  const current = entry;
+  clearTimeout(current.timer);
+  current.refs++;
+  current.live++;
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(cancelled());
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const copy = await Promise.race([current.copy, aborted]);
+    let given = false;
+    return {
+      path: copy.path,
+      table: copy.table,
+      remove() {
+        if (given) return;
+        given = true;
+        release(current);
+      },
+    };
+  } catch (error) {
+    // Nobody is left waiting for a copy that is still being made: stop it, and do not offer it to the next open.
+    if (--current.live === 0 && !current.made) {
+      if (shared.get(key) === current) shared.delete(key);
+      current.controller.abort();
     }
-    clearTimeout(entry.timer);
-    entry.refs++;
-    const current = entry;
-    try {
-      const copy = await current.copy;
-      let given = false;
-      return {
-        path: copy.path,
-        table: copy.table,
-        remove() {
-          if (given) return;
-          given = true;
-          release(current);
-        },
-      };
-    } catch (error) {
-      current.refs--;
-      // The opener whose request was cancelled took the shared copy down with it; the others try again on their own.
-      if (attempt === 0 && !signal?.aborted && error instanceof FusenError && error.message === "the request was cancelled") continue;
-      throw error;
-    }
+    // The share is given back once the copy settles (if it finishes after all, it stays for the linger, unused).
+    current.copy.then(
+      () => release(current),
+      () => void current.refs--,
+    );
+    throw error;
+  } finally {
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+    aborted.catch(() => undefined);
   }
 }
 

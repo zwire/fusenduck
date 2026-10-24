@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, readdirSync, truncateSync, writeFileSync } fr
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ManyTables, openSource, parseRef, setExtensionDirectory } from "@fusenduck/core";
 import { dropIdleCopies, sqliteStats } from "../../packages/core/src/sqlite.ts";
 import { extensionDirectory } from "../../packages/core/src/extensions.ts";
@@ -264,10 +264,14 @@ describe("a SQLite file", () => {
 describe("a SQLite copy shared within one process", () => {
   const dir = tempDir();
   const file = join(dir, "shared.sqlite");
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 2_200));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 3_200));
+  const raced = join(dir, "raced.sqlite");
+
+  afterAll(() => dropIdleCopies());
 
   beforeAll(async () => {
     writeSqlite(file);
+    writeSqlite(raced);
     // A file touched a moment ago is not shared (its timestamps could still hide a write).
     await settle();
   });
@@ -316,4 +320,79 @@ describe("a SQLite copy shared within one process", () => {
     await expect(openSource(`${file}#nothere`)).rejects.toThrow(/no table named/);
     expect(sqliteStats.copies - before).toBe(2);
   });
+
+  it("one cancelled request does not fail the others that wait for the same copy", async () => {
+    dropIdleCopies();
+    const before = sqliteStats.copies;
+    const a = new AbortController();
+    const b = new AbortController();
+    const opens = [a, b, undefined].map((c) => openSource(`${raced}#people`, c ? { signal: c.signal } : {}));
+    const settled = Promise.allSettled(opens);
+    a.abort();
+    // The second owner is cancelled too; the third was never cancelled.
+    b.abort();
+    const results = await settled;
+    expect(results.map((r) => r.status)).toEqual(["rejected", "rejected", "fulfilled"]);
+    const kept = results[2] as PromiseFulfilledResult<Awaited<ReturnType<typeof openSource>>>;
+    expect((await kept.value.query("SELECT count(*) AS n FROM data"))[0]?.n).toBe("5");
+    kept.value.close();
+    expect(sqliteStats.copies - before).toBe(1);
+  });
+
+  it("a waiter stops waiting when its own request is cancelled, and the copy goes on for the others", async () => {
+    dropIdleCopies();
+    const owner = openSource(`${raced}#people`);
+    const waiter = new AbortController();
+    const waiting = openSource(`${raced}#people`, { signal: waiter.signal });
+    waiter.abort();
+    await expect(waiting).rejects.toThrow(/cancelled/);
+    const engine = await owner;
+    expect((await engine.query("SELECT count(*) AS n FROM data"))[0]?.n).toBe("5");
+    engine.close();
+  });
+
+  it("stops a copy that every waiter has given up, and keeps nothing of it", async () => {
+    dropIdleCopies();
+    const own = tempDir();
+    const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+    process.env.TMPDIR = process.env.TEMP = process.env.TMP = own;
+    try {
+      const gone = new AbortController();
+      const opening = openSource(`${raced}#people`, { signal: gone.signal });
+      gone.abort();
+      await expect(opening).rejects.toThrow(/cancelled/);
+      // Give the stopped copy time to unwind, then nothing is left in the folder.
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      dropIdleCopies();
+      expect(readdirSync(own)).toEqual([]);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("keeps at most four idle copies", async () => {
+    dropIdleCopies();
+    const own = tempDir();
+    const saved = { TMPDIR: process.env.TMPDIR, TEMP: process.env.TEMP, TMP: process.env.TMP };
+    process.env.TMPDIR = process.env.TEMP = process.env.TMP = own;
+    try {
+      for (const table of ["people", "other"]) (await openSource(`${raced}#${table}`)).close();
+      for (const name of ["a", "b", "c", "d"]) {
+        const f = join(dir, `idle-${name}.sqlite`);
+        writeSqlite(f);
+        await settle();
+        (await openSource(`${f}#people`)).close();
+      }
+      expect(readdirSync(own).filter((n) => n.startsWith("fusenduck-sqlite-")).length).toBeLessThanOrEqual(4);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      dropIdleCopies();
+    }
+  }, 30_000);
 });

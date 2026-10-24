@@ -82,7 +82,7 @@ const sqliteMs = await time(async () => {
 });
 
 // Engines of one process share the copy of an unchanged file (docs/adr/0004, 6a): the second open copies nothing.
-await new Promise((resolve) => setTimeout(resolve, 2_200));
+await new Promise((resolve) => setTimeout(resolve, 3_200));
 const firstEngine = await openSource(sqliteFile);
 const reopenMs = await time(async () => (await openSource(sqliteFile)).close());
 firstEngine.close();
