@@ -5,7 +5,9 @@ import {
   checkPredicate,
   DEFAULT_TIMEOUT_MS,
   fingerprint,
+  isConnectionSource,
   isServerSource,
+  listTables,
   FusenError,
   ManyTables,
   mintRefWith,
@@ -135,7 +137,7 @@ export function layoutPredicate(ranges: Range[], layout: Layout): string {
 }
 
 /** The most table names offered for one database file. */
-export const MAX_TABLES = 500;
+export const MAX_TABLES = 1000;
 
 /** Whether rows of this kind of source are tables, selected by a column and not by position. */
 export const isDatabaseKind = (kind: string): boolean => kind === "duckdb" || kind === "sqlite" || kind === "postgres" || kind === "mysql";
@@ -145,6 +147,8 @@ export const isDatabaseKind = (kind: string): boolean => kind === "duckdb" || ki
  * like any source; a file with one table opens as it is.
  */
 export async function tablesOf(path: string, roots: string[], signal?: AbortSignal): Promise<string[]> {
+  // A connection of connections.toml (kind://name/) lists its own tables.
+  if (typeof path === "string" && isConnectionSource(path)) return (await listTables(path, signal)).tables.slice(0, MAX_TABLES);
   if (typeof path !== "string" || !/\.(duckdb|ddb|sqlite|sqlite3|db3)$/i.test(path)) throw new FusenError("give the path of a DuckDB or SQLite file");
   try {
     const engine = await openSource(resolve(roots[0] ?? process.cwd(), path), { roots, ...(signal ? { signal } : {}) });

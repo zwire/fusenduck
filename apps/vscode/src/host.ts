@@ -7,6 +7,9 @@ export { setExtensionDirectory } from "@fusenduck/core";
 
 /** The database connections (names and kinds) of connections.toml, for the command that opens a table. */
 export const connections = (): { name: string; kind: string }[] => listConnections();
+
+/** The tables a connection offers (kind://name/), for the person to pick from. */
+export const connectionTables = (kind: string, name: string): Promise<string[]> => tablesOf(`${kind}://${name}/`, []);
 import { tablesOf, View } from "@fusenduck/web/view";
 
 // The extension host's side of one webview (docs/adr/0002, the VS Code webview). The webview sends

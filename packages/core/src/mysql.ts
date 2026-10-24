@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { DuckDBInstance } from "@duckdb/node-api";
+import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { loadProfile, readPassword, resolveHost, type Profile } from "./connections.ts";
 import type { Engine } from "./engine.ts";
 import { bundledExtension } from "./extensions.ts";
 import { FusenError } from "./errors.ts";
 import { createQuery, type Row } from "./run.ts";
-import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions, STATEMENT_TIMEOUT_MS } from "./server.ts";
+import { BOUNDARY_ROWS, CONNECTION, EXACT_COUNT_MAX, SAMPLE_ROWS, scrub, serverOptions, STATEMENT_TIMEOUT_MS, TABLE_LIST_MAX, carried } from "./server.ts";
 import { ident, lit } from "./sql.ts";
 import type { SourceAdapter, SourceOptions } from "./source.ts";
 
@@ -157,17 +157,18 @@ export function roleProblems(row: Row): string[] {
   return found;
 }
 
+interface Session {
+  connection: DuckDBConnection;
+  server(sql: string): Promise<Row[]>;
+  failed(what: string, error: unknown): FusenError;
+  release(): void;
+}
+
 /**
- * Opens a table of a MySQL server. The engine makes the only connection, as a read-only attach whose password is a
- * DuckDB secret, before external access is switched off and the configuration locked (a new ATTACH is refused after that).
+ * Connects to a MySQL server by name: a read-only attach whose password is a DuckDB secret, then the version and the
+ * role are checked. External access is still on and the configuration open; the caller closes or locks it.
  */
-export async function openMysqlEngine(source: string, opts: { signal?: AbortSignal; options?: SourceOptions } = {}): Promise<Engine> {
-  const options = opts.options ?? serverOptions(source);
-  if (/^mysql:\/\//.test(source)) {
-    const named = serverOptions(source);
-    if (named.conn !== options.conn || named.table !== options.table) throw new FusenError("the source and the settings of this Ref name different tables");
-  }
-  const { conn, table } = checkOptions(options);
+async function connectMysql(conn: string, signal?: AbortSignal): Promise<Session> {
   const profile: Profile = loadProfile(conn);
   if (profile.kind !== "mysql") throw new FusenError(`connection "${conn}" is not a MySQL connection`);
   const password = readPassword(profile);
@@ -220,7 +221,7 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
     } catch (error) {
       throw failed("could not connect", error);
     }
-    if (opts.signal?.aborted) throw new FusenError("the request was cancelled");
+    if (signal?.aborted) throw new FusenError("the request was cancelled");
     let problems: string[];
     let version: string | undefined;
     try {
@@ -234,6 +235,26 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
     if (problems.length) {
       throw new FusenError(`connection "${conn}": the database role must only be able to read, but ${problems.join(" and ")}. Use a role with SELECT only.`);
     }
+    return { connection, server, failed, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+/**
+ * Opens a table of a MySQL server. The engine makes the only connection (connectMysql), and external access is switched
+ * off and the configuration locked before the table is read (a new ATTACH is refused after that).
+ */
+export async function openMysqlEngine(source: string, opts: { signal?: AbortSignal; options?: SourceOptions } = {}): Promise<Engine> {
+  const options = opts.options ?? serverOptions(source);
+  if (/^mysql:\/\//.test(source)) {
+    const named = serverOptions(source);
+    if (named.conn !== options.conn || named.table !== options.table) throw new FusenError("the source and the settings of this Ref name different tables");
+  }
+  const { conn, table } = checkOptions(options);
+  const { connection, server, failed, release } = await connectMysql(conn, opts.signal);
+  try {
     let relation: Relation;
     try {
       const rows = await server(
@@ -269,5 +290,23 @@ export async function openMysqlEngine(source: string, opts: { signal?: AbortSign
   } catch (error) {
     release();
     throw error;
+  }
+}
+
+/** The tables the role can see in the connected database, by name; cut at TABLE_LIST_MAX. */
+export async function listMysqlTables(conn: string, signal?: AbortSignal): Promise<{ tables: string[]; truncated: boolean }> {
+  const { server, failed, release } = await connectMysql(conn, signal);
+  try {
+    let rows: Row[];
+    try {
+      rows = await server(`select table_name as name from information_schema.tables where table_schema = database() and table_type = 'BASE TABLE' order by table_name limit ${TABLE_LIST_MAX + 1}`);
+    } catch (error) {
+      throw failed("could not list the tables", error);
+    }
+    // A name the Ref could not carry would only fail when picked.
+    const names = rows.map((r) => String(r.name)).filter((table) => carried(() => checkOptions({ conn, table })));
+    return { tables: names.slice(0, TABLE_LIST_MAX), truncated: names.length > TABLE_LIST_MAX };
+  } finally {
+    release();
   }
 }
