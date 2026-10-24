@@ -20,14 +20,17 @@ export interface Profile {
   passwordEnv?: string;
   /** Refuse a host that resolves to a loopback, private or link-local address unless this is true. */
   allowPrivate: boolean;
-  /** libpq `sslmode`; `verify-full` unless the profile says otherwise. */
+  /** libpq `sslmode` (`verify-full` unless the profile says otherwise); for MySQL its `ssl_mode`, `verify_ca` by default. */
   sslmode: string;
+  /** MySQL: the file holding the certificate authority that signed the server's certificate. */
+  sslCa?: string;
 }
 
 const NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 const PASSWORD_ENV = /^FUSEN_[A-Z0-9_]{1,64}$/;
 const SSLMODES = new Set(["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]);
-const KEYS = new Set(["kind", "host", "port", "dbname", "user", "password_env", "allow_private", "sslmode"]);
+const MYSQL_SSLMODES = new Set(["disabled", "preferred", "required", "verify_ca", "verify_identity"]);
+const KEYS = new Set(["kind", "host", "port", "dbname", "user", "password_env", "allow_private", "sslmode", "ssl_ca"]);
 
 /** Where the profiles live: `FUSEN_CONNECTIONS`, else the user's config directory. */
 export function connectionsPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -88,9 +91,19 @@ function profileOf(name: string, table: Map<string, string | number | boolean>):
   }
   const allowPrivate = table.get("allow_private") ?? false;
   if (typeof allowPrivate !== "boolean") throw new FusenError(`connection "${name}": allow_private must be true or false`);
-  const sslmode = text("sslmode", false) ?? "verify-full";
-  if (!SSLMODES.has(sslmode)) throw new FusenError(`connection "${name}": sslmode "${sslmode}" is not one libpq knows`);
-  return { name, kind, host: text("host")!, port, dbname: text("dbname")!, user: text("user")!, passwordEnv, allowPrivate, sslmode };
+  const sslmode = text("sslmode", false) ?? (kind === "mysql" ? "verify_ca" : "verify-full");
+  const sslCa = text("ssl_ca", false);
+  if (kind === "mysql") {
+    if (!MYSQL_SSLMODES.has(sslmode)) throw new FusenError(`connection "${name}": sslmode "${sslmode}" is not one of ${[...MYSQL_SSLMODES].join(", ")}`);
+    // Measured on the real extension: without ssl_ca the client accepts any certificate under verify_ca and verify_identity.
+    if ((sslmode === "verify_ca" || sslmode === "verify_identity") && !sslCa) {
+      throw new FusenError(`connection "${name}": sslmode ${sslmode} needs ssl_ca (the file of the certificate authority); without it the MySQL client does not check the server. Set ssl_ca, or sslmode = "required" to encrypt without checking`);
+    }
+  } else {
+    if (!SSLMODES.has(sslmode)) throw new FusenError(`connection "${name}": sslmode "${sslmode}" is not one libpq knows`);
+    if (sslCa) throw new FusenError(`connection "${name}": ssl_ca is only for MySQL connections`);
+  }
+  return { name, kind, host: text("host")!, port, dbname: text("dbname")!, user: text("user")!, passwordEnv, allowPrivate, sslmode, ...(sslCa ? { sslCa } : {}) };
 }
 
 /** Reads and checks the profile `name`. The file is used only if it is the user's own and nobody else can write it. */
