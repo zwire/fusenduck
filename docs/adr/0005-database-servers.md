@@ -173,7 +173,7 @@ Still open for the first slice: whether a secret created after the lock can be u
 
 Recorded after the first slice (the Postgres adapter, PR #46) and its independent review, so the ADR above is read as the target, not as a claim about the code:
 
-- The extension is loaded from the local install and `autoinstall`/`autoload` are off; the sha256 pin of section 4 is **not** implemented.
+- The `postgres_scanner` extension is loaded from the shipped copy through `bundledExtension` (pinned in `extensions.lock.json` for the eight platforms, checked just before `LOAD`); `autoinstall`/`autoload` are off. `mysql_scanner` is not shipped yet.
 - The role check does not refuse `TEMP` (PUBLIC has it by default and it only reaches session-local tables; the read-only transaction covers it). It does refuse write access to sequences and membership of a role with superuser, create-role, create-db or bypass-RLS rights.
 - The fingerprint samples the first and last 50 rows by primary key, not key-range boundaries, and uses only a primary key (no unique-index key, no update-time column). A change in the middle of a table that leaves the count, last key and columns unchanged is not noticed. Above 100,000 rows the count is `reltuples` (an estimate), and the mode is part of the hash.
 - Timeouts: connect 10 s, and `statement_timeout`/`lock_timeout` 60 s on the connection; a query blocked on the network is stopped by the server's timeout, not by the interrupt.
@@ -183,7 +183,7 @@ Recorded after the first slice (the Postgres adapter, PR #46) and its independen
 
 ## Open questions
 
-- How the extension is bundled and pinned per OS (shared with SQLite); until then the digest pin in section 4 is the guard.
+- Bundling `mysql_scanner` (Postgres is bundled and pinned the same way as SQLite).
 - Behaviour behind a proxy or tunnel with `allow_private`.
 - The sample sizes K and N, and whether they are profile-tunable.
 - MariaDB: supported or refused.

@@ -107,8 +107,6 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # TEMPORARY: writes the postgres_scanner pins (the lock cannot be made where extensions.duckdb.org is unreachable).
-      - run: pnpm extensions:lock && cat packages/core/extensions.lock.json
       - name: Create the roles and a table
         env:
           PGPASSWORD: admin
