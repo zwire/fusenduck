@@ -63,6 +63,8 @@ export async function mintRefWith(engine: Engine, opts: MintOptions = {}): Promi
   if (opts.query) await checkQuery(engine, opts.query);
   if (opts.where) await checkPredicate(engine, engine.source, opts.where, opts.query);
   const ref: Ref = { source: engine.source, fingerprint: now };
+  if (engine.adapter.name !== "parquet") ref.src = engine.adapter.name;
+  if (Object.keys(engine.adapter.options).length) ref.options = engine.adapter.options;
   if (opts.query) ref.query = opts.query;
   if (opts.where) ref.where = opts.where;
   if (opts.columns?.length) ref.columns = opts.columns;
@@ -80,7 +82,7 @@ export async function resolveRef(
 ): Promise<string> {
   const ref = parseRef(text);
   // A Ref names its own file, so a pasted Ref must not be able to point anywhere on disk.
-  const engine = await openSource(ref.source, { roots: opts.roots, signal: opts.signal });
+  const engine = await openSource(ref.source, { roots: opts.roots, signal: opts.signal, kind: ref.src ?? "parquet", ...(ref.options ? { options: ref.options } : {}) });
   try {
     return await resolveWith(engine, ref, opts);
   } finally {

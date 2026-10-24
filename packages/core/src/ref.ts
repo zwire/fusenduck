@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ident, lit, type Engine } from "./engine.ts";
-import { adapterFor } from "./source.ts";
+import { createAdapter, SOURCE_KINDS, type SourceOptions } from "./source.ts";
 import { FusenError } from "./errors.ts";
 
 export interface Ref {
@@ -14,6 +14,10 @@ export interface Ref {
   /** SQL predicate over the columns of the query (or of the file). Untrusted: see checkPredicate. */
   where?: string;
   columns?: string[];
+  /** The kind of source. Absent means Parquet, which is what every Ref was before kinds existed (docs/adr/0004). */
+  src?: string;
+  /** The read settings of a text source, detected once when the Ref was minted. */
+  options?: SourceOptions;
   /** Data fingerprint at the time the Ref was minted. */
   fingerprint: string;
   /** Hash of the selection's parsed form, so a Ref edited by hand can be told from one that was minted. */
@@ -26,6 +30,8 @@ const PREFIX = "fusen://file/";
 
 export function formatRef(ref: Ref): string {
   const params = [`v=${ref.fingerprint}`];
+  if (ref.src && ref.src !== "parquet") params.push(`src=${encodeURIComponent(ref.src)}`);
+  for (const key of Object.keys(ref.options ?? {}).sort()) params.push(`opt.${encodeURIComponent(key)}=${encodeURIComponent(ref.options![key]!)}`);
   if (ref.engine) params.push(`e=${encodeURIComponent(ref.engine)}`);
   if (ref.id) params.push(`id=${ref.id}`);
   if (ref.query) params.push(`q=${encodeURIComponent(ref.query)}`);
@@ -73,6 +79,16 @@ function parseRefUnchecked(text: string): Ref {
   if (where) ref.where = decodeURIComponent(where);
   const q = params.get("q");
   if (q) ref.query = decodeURIComponent(q);
+  const src = params.get("src");
+  if (src) {
+    if (!SOURCE_KINDS.includes(src)) throw new FusenError(`unsupported source kind "${src}" (known: ${SOURCE_KINDS.join(", ")})`);
+    if (src !== "parquet") ref.src = src;
+  }
+  const options: SourceOptions = {};
+  for (const [key, value] of params) if (key.startsWith("opt.")) options[decodeURIComponent(key.slice(4))] = decodeURIComponent(value);
+  if (Object.keys(options).length) ref.options = options;
+  // Settings are checked now, so a Ref that carries bad ones is refused before anything is opened.
+  createAdapter(ref.src, ref.options);
   const id = params.get("id");
   if (id) ref.id = id;
   const engine = params.get("e");
@@ -81,8 +97,8 @@ function parseRefUnchecked(text: string): Ref {
 }
 
 // A query sits alone on its lines inside parentheses, like a predicate (see whereClause).
-const base = (ref: Pick<Ref, "source" | "query" | "where">): string =>
-  ref.query ? `\n${ref.query}\n` : baseQuery(ref.source, positional(ref));
+const base = (ref: Pick<Ref, "source" | "query" | "where" | "src" | "options">): string =>
+  ref.query ? `\n${ref.query}\n` : createAdapter(ref.src, ref.options).baseQuery(ref.source, positional(ref));
 
 /**
  * A predicate that names `file_row_number` selects rows by their position in the file, which lets
@@ -92,11 +108,6 @@ const base = (ref: Pick<Ref, "source" | "query" | "where">): string =>
  */
 export const positional = (ref: Pick<Ref, "query" | "where">): boolean =>
   !ref.query && /\bfile_row_number\b/i.test(ref.where ?? "");
-
-/** The base query of a source. */
-export function baseQuery(source: string, withPosition = false): string {
-  return adapterFor(source).baseQuery(source, withPosition);
-}
 
 // The predicate sits alone on its lines inside parentheses: a "--" comment cannot swallow what
 // follows it, and LIMIT, OFFSET, ORDER BY or a UNION written into it is a syntax error.

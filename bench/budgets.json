@@ -6,7 +6,8 @@
     "web_open_ms": 1000,
     "web_rows_page_ms": 200,
     "web_ref_ms": 100,
-    "web_spa_bytes": 51200
+    "web_spa_bytes": 51200,
+    "csv_open_card_mint_ms": 6000
   },
   "measured": {
     "measured_on": "1,000,000 rows x 5 columns (id, region, amount, status, note), Parquet",
@@ -16,6 +17,8 @@
     "web_open_ms": 123,
     "web_rows_page_ms": 9,
     "web_ref_ms": 10,
-    "web_spa_bytes": 12904
+    "web_spa_bytes": 12904,
+    "csv_open_card_mint_ms": 1980,
+    "csv_note": "open + card + mint on 1,000,000 rows as CSV (34 MB), which hashes every byte twice"
   }
 }

@@ -81,6 +81,8 @@ Databases are in scope when DuckDB can read them (DuckDB files, SQLite, and Post
 
 ## First slice
 
+Status: steps 1 and 2 are implemented (PR #38 for step 1; the CSV/NDJSON/JSON adapters, `src=` and `opt.*`, the text-source tests and the `csv_open_card_mint_ms` budget for step 2). JSON that is one array is read with `format=auto`; its row position and fingerprint behave like NDJSON.
+
 Steps 1 and 2. Acceptance tests (evidence is command output):
 
 1. After the refactor, all existing tests and the frozen Ref corpus pass unchanged.
