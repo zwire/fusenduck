@@ -17,7 +17,9 @@
     "lint": "eslint .",
     "contract:check": "vitest run tests/contract",
     "repro:check": "node tests/integration/repro-check.ts",
-    "docs:reference": "node packages/mcp/src/reference.ts --write"
+    "docs:reference": "node packages/mcp/src/reference.ts --write",
+    "extensions:fetch": "node packages/core/scripts/extensions.ts fetch",
+    "extensions:lock": "node packages/core/scripts/extensions.ts lock"
   },
   "devDependencies": {
     "@duckdb/node-api": "1.5.6-r.1",

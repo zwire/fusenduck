@@ -8,3 +8,4 @@ export { renderCard, renderRows, renderChanged, type Ambiguity } from "./render.
 export { mintRef, mintRefWith, resolveRef, SourceChanged, type MintOptions, peek, DEFAULT_PEEK_ROWS, MAX_PEEK_ROWS, CostExceeded, MAX_AMBIGUITY_ROWS, DEFAULT_LIMIT, DEFAULT_MAX_BYTES, DEFAULT_TIMEOUT_MS } from "./resolve.ts";
 export { FusenError, describeError, logLine } from "./errors.ts";
 export { type Masked } from "./pii.ts";
+export { setExtensionDirectory } from "./extensions.ts";

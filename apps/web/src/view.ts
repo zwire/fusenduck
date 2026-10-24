@@ -41,7 +41,7 @@ export interface Opened {
    * so it is selected by a column), or a file with its own column named file_row_number.
    */
   selectable: boolean;
-  /** The kind of source: parquet, csv, ndjson, json or duckdb. */
+  /** The kind of source: parquet, csv, ndjson, json, duckdb or sqlite. */
   kind: string;
   /** The files behind the source: more than one when it was opened as a pattern. */
   files: number;
@@ -137,11 +137,11 @@ export function layoutPredicate(ranges: Range[], layout: Layout): string {
 export const MAX_TABLES = 500;
 
 /**
- * The tables of a DuckDB file in the main schema, for the person to choose from. The file is opened read-only
+ * The tables of a DuckDB or SQLite file in the main schema, for the person to choose from. The file is opened read-only
  * like any source; a file with one table opens as it is.
  */
 export async function tablesOf(path: string, roots: string[], signal?: AbortSignal): Promise<string[]> {
-  if (typeof path !== "string" || !/\.(duckdb|ddb)$/i.test(path)) throw new FusenError("give the path of a DuckDB file");
+  if (typeof path !== "string" || !/\.(duckdb|ddb|sqlite|sqlite3|db3)$/i.test(path)) throw new FusenError("give the path of a DuckDB or SQLite file");
   try {
     const engine = await openSource(resolve(roots[0] ?? process.cwd(), path), { roots, ...(signal ? { signal } : {}) });
     try {
@@ -214,7 +214,7 @@ export class View {
 
   /**
    * Opens `path` (relative paths start at the first root) under `roots`: a Parquet, CSV, NDJSON or JSON file, a
-   * pattern with a wildcard in the file name, or a table of a DuckDB file (`file.duckdb#table`).
+   * pattern with a wildcard in the file name, or a table of a DuckDB or SQLite file (`file.duckdb#table`).
    */
   static async open(path: string, roots: string[]): Promise<View> {
     if (typeof path !== "string" || path.trim() === "") throw new FusenError("give the path of a file");
@@ -429,7 +429,7 @@ export class View {
       const picked = Array.isArray(ranges) && ranges.length > 0;
       if (picked && !this.opened.selectable) {
         throw new FusenError(
-          this.opened.kind === "duckdb"
+          this.opened.kind === "duckdb" || this.opened.kind === "sqlite"
             ? "rows of a database table are selected by a column, such as where id = 5, not by position"
             : "this file has its own column named file_row_number, so rows cannot be selected by position",
         );

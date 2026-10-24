@@ -128,7 +128,7 @@ describe("the Web UI's view of sources other than one Parquet file", () => {
     await writeDatabase(join(dir, "one2.duckdb"), { onlyPeople: true });
     expect((await tablesOf(join(dir, "many2.duckdb"), [dir])).sort()).toEqual(["other", "people"]);
     expect(await tablesOf(join(dir, "one2.duckdb"), [dir])).toEqual(["people"]);
-    await expect(tablesOf(join(dir, "a.csv"), [dir])).rejects.toThrow(/DuckDB file/);
+    await expect(tablesOf(join(dir, "a.csv"), [dir])).rejects.toThrow(/DuckDB or SQLite file/);
     await expect(tablesOf(join(tempDir(), "x.duckdb"), [dir])).rejects.toThrow(/outside the allowed roots/);
   });
 

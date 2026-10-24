@@ -17,3 +17,6 @@ dist/
 
 # DuckDB spill directory (the engine turns spilling off; tests create it to prove that)
 .tmp/
+
+# Shipped DuckDB extensions, fetched at build time against packages/core/extensions.lock.json
+packages/core/extensions/

@@ -11,6 +11,7 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:f
 import { createRequire } from "node:module";
 import Module from "node:module";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { TAR } from "./engine.ts";
@@ -89,7 +90,7 @@ function load(root: string): { open(path: string): Promise<Panel>; errors: strin
 }
 
 /** In a child process: loads the extension in `root` and opens `file`; `broken` expects the load to fail. */
-async function child(root: string, file: string, broken: boolean): Promise<void> {
+async function child(root: string, file: string, broken: boolean, sqlite?: string): Promise<void> {
   if (broken) {
     // The same package without its binding: the extension still activates, and the editor says why it
     // cannot open the file instead of failing.
@@ -101,7 +102,7 @@ async function child(root: string, file: string, broken: boolean): Promise<void>
   }
   const good = load(root);
   const panel = await good.open(file);
-  check(panel.html.includes('data-host="vscode"') && panel.html.includes("Content-Security-Policy"), "the editor shows the webview page with its CSP");
+  check(panel.html.includes('data-host="vscode"') && panel.html.includes("Content-Security-Policy"), `the editor shows the webview page with its CSP${good.errors.length ? ` (${good.errors.join("; ")})` : ""}`);
   await panel.send({ id: 1, method: "open", params: { path: file } });
   const opened = (panel.replies.at(-1) as { result: { source: string; fingerprint: string } }).result;
   check(opened?.fingerprint, "the packaged DuckDB binding loads and opens the file");
@@ -113,12 +114,20 @@ async function child(root: string, file: string, broken: boolean): Promise<void>
   await panel.send({ id: 4, method: "copy", params: { text: ref } });
   check(good.copied.at(-1) === ref && ref.startsWith("fusen://"), "a Ref for the selection reaches the clipboard");
   panel.dispose();
+  if (sqlite) {
+    // The SQLite extension travels in the package (dist/extensions) and is loaded from there, checked against its pin.
+    const table = await good.open(sqlite);
+    await table.send({ id: 1, method: "open", params: { path: sqlite } });
+    const reply = table.replies.at(-1) as { result?: { fingerprint?: string; card?: { rows?: number } }; error?: string };
+    check(reply.result?.fingerprint, `the packaged SQLite extension loads and the table opens${reply.error ? ` (${reply.error})` : ""}`);
+    table.dispose();
+  }
   check(good.errors.length === 0, "nothing was logged");
 }
 
 if (first === "--child") {
-  const [root = "", file = "", mode] = rest;
-  await child(root, file, mode === "broken");
+  const [root = "", file = "", mode, sqlite] = rest;
+  await child(root, file, mode === "broken", sqlite || undefined);
 } else {
   const vsix = resolve(first);
   const temp = mkdtempSync(join(tmpdir(), "fusenduck-smoke-"));
@@ -131,10 +140,15 @@ if (first === "--child") {
       await connection.run("COPY (SELECT i AS id, 'row ' || i AS label FROM range(0, 500) t(i)) TO " + process.argv[1] + " (FORMAT parquet)");`;
     run(["--input-type=module", "-e", write, `'${file.replaceAll("'", "''")}'`], { cwd: import.meta.dirname });
 
+    const sqlite = join(temp, "smoke.sqlite");
+    const db = new DatabaseSync(sqlite);
+    db.exec("CREATE TABLE t(id INTEGER, label TEXT); INSERT INTO t VALUES (1, 'a'), (2, 'b')");
+    db.close();
+
     const good = unpack(vsix, join(temp, "good"));
     const manifest = JSON.parse(readFileSync(join(good, "package.json"), "utf8")) as { main: string };
     check(manifest.main === "./dist/extension.cjs", "the package's main is the bundled extension");
-    run([script!, "--child", good, file]);
+    run([script!, "--child", good, file, "", sqlite]);
 
     const broken = unpack(vsix, join(temp, "broken"));
     renameSync(join(broken, "dist/native/duckdb.node"), join(broken, "dist/native/moved.node"));

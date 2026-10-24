@@ -1,6 +1,9 @@
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { describeError, FusenError, logLine, parseRef, SourceChanged } from "@fusenduck/core";
+
+// The extension host says where the package keeps the shipped DuckDB extensions (dist/extensions).
+export { setExtensionDirectory } from "@fusenduck/core";
 import { tablesOf, View } from "@fusenduck/web/view";
 
 // The extension host's side of one webview (docs/adr/0002, the VS Code webview). The webview sends

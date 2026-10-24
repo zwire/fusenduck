@@ -1,0 +1,46 @@
+{
+  "sqlite_scanner": {
+    "v1.5.6": {
+      "linux_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64/sqlite_scanner.duckdb_extension.gz",
+        "gz": "edc79e292b069187f9dc95bfa735fbe578718e0b1df71d4f9ce2ca671b6dd51b",
+        "sha256": "0b3c576e7a9b65846285e5e7f4980a700d79d9c14b10b2fb56d495f4d36b566a"
+      },
+      "linux_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_arm64/sqlite_scanner.duckdb_extension.gz",
+        "gz": "f6afdebec449521c68adc17019d55c93179fa0a4b7f0d655b53caa12366ef0fe",
+        "sha256": "473216143ca24e25f97af783644edf63ef2bcee63d8961ceb4127b929bd40a7d"
+      },
+      "linux_amd64_musl": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_amd64_musl/sqlite_scanner.duckdb_extension.gz",
+        "gz": "ad3402e875449ba165a007f23d83c14b7a5026f0d19554c0beecd4734d6acde9",
+        "sha256": "645fdb904b1917e09d8e33eecc07a7763208bf1bd25bf0deedb4957bdb9dd61f"
+      },
+      "linux_arm64_musl": {
+        "url": "https://extensions.duckdb.org/v1.5.6/linux_arm64_musl/sqlite_scanner.duckdb_extension.gz",
+        "gz": "f64d3746573a6528bed48270377a34e558276f1882e72cc8b0ca5d32b80ac2a3",
+        "sha256": "158be932a4c4721561d14cf42b5a32f59467362ec12348d268b20678380fc21f"
+      },
+      "osx_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/osx_amd64/sqlite_scanner.duckdb_extension.gz",
+        "gz": "38a9d9dc346ee947a41d42f50011a50cd52a74189ed57ec4de3512c0fa4fb9a2",
+        "sha256": "447ceac70f6ba75930e14c27f8740850b1be9e5a70286e746640b10dbf61ef32"
+      },
+      "osx_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/osx_arm64/sqlite_scanner.duckdb_extension.gz",
+        "gz": "a31273b2b143a8fc78cfe51aa72903eacac0900d76b2aa4b5029a98fbec73bec",
+        "sha256": "4396ff27307c113903a1b7fc9a3b927ab55d9870eae0423f47c43f3a5f566f21"
+      },
+      "windows_amd64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/windows_amd64/sqlite_scanner.duckdb_extension.gz",
+        "gz": "3d51afafdcdcfef9c945f975258552f48ca7774a67e65f149bc2f934d28fc710",
+        "sha256": "8ea084754e9ba052e072b351e64a52b8dfc9498d1e0a18ef421c2c793c5af2a1"
+      },
+      "windows_arm64": {
+        "url": "https://extensions.duckdb.org/v1.5.6/windows_arm64/sqlite_scanner.duckdb_extension.gz",
+        "gz": "a2f630832ef78a5d67ca6e2d3af5df643ba7e00149837f34e57b0b42cf4af19e",
+        "sha256": "b53a67840c1a29494b33c935ce67897b45e25e4846974fa4dafd2945063caa69"
+      }
+    }
+  }
+}

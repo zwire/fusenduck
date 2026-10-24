@@ -237,7 +237,7 @@ export function App({ view, copy, done, back }: AppProps): ReactElement {
       const pos = rows[cursor]?.pos;
       if (pos == null) {
         setMessage(
-          opened.kind === "duckdb"
+          opened.kind === "duckdb" || opened.kind === "sqlite"
             ? "rows of a database table are picked by a column: filter with / (e.g. id = 5), then y"
             : "this file has its own column named file_row_number, so rows cannot be picked",
         );

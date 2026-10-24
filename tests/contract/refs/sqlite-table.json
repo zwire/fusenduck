@@ -1,0 +1,12 @@
+{
+  "ref": "fusen://file/%2Fdata%2Fdb.sqlite?v=0123456789ab&src=sqlite&opt.table=people&where=id%20%3D%202",
+  "parsed": {
+    "source": "/data/db.sqlite",
+    "fingerprint": "0123456789ab",
+    "src": "sqlite",
+    "options": {
+      "table": "people"
+    },
+    "where": "id = 2"
+  }
+}
