@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { beforeAll, describe, expect, it } from "vitest";
+import { DuckDBInstance } from "@duckdb/node-api";
 import { openSource, setExtensionDirectory } from "@fusenduck/core";
 import { bundledExtension, extensionDirectory, lockedExtension } from "../../packages/core/src/extensions.ts";
 import { tempDir } from "../helpers/fixtures.ts";
@@ -21,8 +22,14 @@ describe("a SQLite file cannot be written, attached or used to reach another fil
   const other = join(dir, "other.sqlite");
   let before: string;
   let otherBefore: string;
+  let extension: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
+    // The real shipped file of this machine: loading it by path must be refused in the query engine too.
+    const instance = await DuckDBInstance.create(":memory:");
+    const row = (await (await instance.connect()).runAndReadAll("SELECT version() AS v, platform AS p FROM pragma_platform()")).getRowObjectsJson()[0]!;
+    instance.closeSync();
+    extension = bundledExtension("sqlite_scanner", String(row.v), String(row.p));
     writeSqlite(file);
     writeSqlite(other);
     before = digest(file);
@@ -50,8 +57,9 @@ describe("a SQLite file cannot be written, attached or used to reach another fil
     ["attaching a new SQLite file", `ATTACH '${join(dir, "new.sqlite")}' AS w (TYPE sqlite)`],
     ["loading the extension by name", "LOAD sqlite_scanner"],
     ["installing an extension", "INSTALL httpfs"],
-    ["loading a file as an extension", `LOAD '${bundledExtension("sqlite_scanner", "v1.5.6", "linux_amd64").replaceAll("'", "''")}'`],
-  ])("rejects %s", async (_what, sql) => {
+    ["loading a file as an extension", "LOAD EXTENSION_FILE"],
+  ])("rejects %s", async (_what, text) => {
+    const sql = text.replace("EXTENSION_FILE", `'${extension.replaceAll("'", "''")}'`);
     const engine = await openSource(`${file}#people`);
     try {
       await expect(engine.query(sql)).rejects.toThrow();
