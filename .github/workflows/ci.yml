@@ -79,6 +79,48 @@ jobs:
       - run: pnpm exec playwright-core install chromium
       - run: pnpm test:e2e
 
+  db-probe:
+    # Observes how DuckDB's postgres extension behaves under the engine's lock (docs/adr/0005 section 6).
+    # It reports; it does not gate. The answers decide whether the adapter is built as the ADR describes.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: admin
+          POSTGRES_DB: probe
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FUSEN_PG_RO_PASSWORD: ro-secret-canary-7f3a
+      FUSEN_PG_RW_PASSWORD: rw-secret-canary-91c2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create the roles and a table
+        env:
+          PGPASSWORD: admin
+        run: |
+          psql -h 127.0.0.1 -U postgres -d probe -v ON_ERROR_STOP=1 <<SQL
+          create table public.items as select g as id, 'item ' || g as name from generate_series(1, 100000) g;
+          alter table public.items add primary key (id);
+          create role fusen_ro login password '$FUSEN_PG_RO_PASSWORD';
+          create role fusen_rw login password '$FUSEN_PG_RW_PASSWORD';
+          grant select on public.items to fusen_ro;
+          grant select, insert, update, delete on public.items to fusen_rw;
+          grant create on schema public to fusen_rw;
+          revoke create on schema public from public;
+          SQL
+      - run: node tests/integration/db-probe.ts
+
   repro:
     # A clean clone of the commit installs from the lockfile, builds, and resolves the golden Refs
     # to the same text as this checkout (pnpm repro:check). The report goes to the job summary.
