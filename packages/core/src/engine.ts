@@ -1,4 +1,4 @@
-import { closeSync, constants, lstatSync, openSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, lstatSync, openSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { FusenError } from "./errors.ts";
 import { ident, lit } from "./sql.ts";
@@ -146,7 +146,8 @@ export async function watchOpen<T>(path: string, work: Promise<T>, timeoutMs = O
  */
 export async function openSource(source: string, opts: { roots?: string[]; signal?: AbortSignal; kind?: string; options?: SourceOptions } = {}): Promise<Engine> {
   // A database file is named with its table: file.duckdb#table.
-  const named = /^(.+\.(?:duckdb|ddb))#(.+)$/i.exec(source);
+  // A file that exists under the whole name is the file.
+  const named = existsSync(source) ? null : /^(.+?\.(?:duckdb|ddb))#(.+)$/i.exec(source);
   if (named && !opts.options?.table) {
     source = named[1]!;
     opts = { ...opts, kind: opts.kind ?? "duckdb", options: { ...opts.options, table: named[2]! } };

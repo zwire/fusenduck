@@ -308,10 +308,12 @@ const DUCKDB_BLOCK_BYTES = 262_144;
  * the engine enforces is the file: a query can read the other tables of the same file.
  * The fingerprint is the row count plus the table's storage layout (segment counts and min/max statistics),
  * read from metadata like Parquet's footer; a rewrite that leaves every statistic equal is not detected.
- * Rows are addressed by `rowid`, which the fingerprint guards.
+ * Rows are selected by a key column, not by position (rowid is not stable under deletes).
  */
 function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapter {
   const table = options.table;
+  // DuckDB's lookup of a table's storage by name does not take an escaped quote.
+  if (table?.includes('"')) throw new FusenError("a table name with a double quote is not supported");
   const from = () => `main.${ident(table ?? "")}`;
   const adapter: SourceAdapter = {
     name: "duckdb",
@@ -319,9 +321,13 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
     database: true,
     async resolve(_path, probe) {
       if (detected) {
-        const found = await probe(`SELECT 1 AS x FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND table_name = ${lit(table!)}`);
+        // DuckDB compares table names without regard to case; the Ref keeps the name as the file spells it.
+        const found = await probe(
+          `SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND lower(table_name) = lower(${lit(table!)})`,
+        );
         if (found.length === 0) throw new FusenError(`this database has no table named "${showName(table!)}" (in the main schema)`);
-        return adapter;
+        const actual = String(found[0]!.table_name);
+        return actual === table ? adapter : databaseAdapter({ table: actual }, true);
       }
       const rows = await probe(
         "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = 'main' AND NOT internal ORDER BY table_name",
@@ -341,7 +347,10 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
     },
     rowPosition: "file_row_number",
     baseQuery(_path, withPosition = false) {
-      return withPosition ? `SELECT *, rowid AS ${this.rowPosition} FROM ${from()}` : `SELECT * FROM ${from()}`;
+      // DuckDB's rowid moves when rows are deleted and the file is compacted, with the statistics unchanged,
+      // so a position could not be guarded by the fingerprint. A table's rows are selected by a key column.
+      if (withPosition) throw new FusenError("rows of a database table are selected by a column, such as where id = 5, not by position");
+      return `SELECT * FROM ${from()}`;
     },
     async fingerprint(engine) {
       const count = await engine.query(`SELECT count(*)::VARCHAR AS n FROM ${from()}`);
@@ -349,12 +358,12 @@ function databaseAdapter(options: SourceOptions, detected: boolean): SourceAdapt
         `SELECT md5(string_agg(to_json(list_value(row_group_id::VARCHAR, column_id::VARCHAR, column_path, segment_id::VARCHAR, segment_type,
                                                   start::VARCHAR, count::VARCHAR, compression, stats, has_updates::VARCHAR))::VARCHAR,
                                ';' ORDER BY row_group_id, column_id, segment_id)) AS h
-         FROM pragma_storage_info(${lit(table!)})`,
+         FROM pragma_storage_info(${lit(`main.${ident(table!)}`)})`,
       );
       return createHash("sha256").update(`duckdb:${table}:${String(count[0]?.n)}:${String(layout[0]?.h)}`).digest("hex").slice(0, 12);
     },
     async scanBytes(engine) {
-      const blocks = await engine.query(`SELECT count(DISTINCT block_id)::VARCHAR AS n FROM pragma_storage_info(${lit(table!)}) WHERE persistent`);
+      const blocks = await engine.query(`SELECT count(DISTINCT block_id)::VARCHAR AS n FROM pragma_storage_info(${lit(`main.${ident(table!)}`)}) WHERE persistent`);
       return Number(blocks[0]?.n ?? 0) * DUCKDB_BLOCK_BYTES;
     },
   };

@@ -36,8 +36,8 @@ describe("a DuckDB database file", () => {
     expect(out.stdout).toContain('"column":"name"');
   });
 
-  it("mints a Ref with the kind and the table, and resolves it, also by position", () => {
-    const ref = refOf(run("ref", `${many}#people`, "--where", "file_row_number = 2").stdout);
+  it("mints a Ref with the kind and the table, and resolves it by a column", () => {
+    const ref = refOf(run("ref", `${many}#people`, "--where", "id = 2").stdout);
     const parsed = parseRef(ref);
     expect(parsed.src).toBe("duckdb");
     expect(parsed.options).toEqual({ table: "people" });
@@ -62,6 +62,29 @@ describe("a DuckDB database file", () => {
     expect(run("resolve", ref, "--root", dir).stdout).not.toContain("DATA_CHANGED");
     await edit("INSERT INTO people VALUES (9, 'new')");
     expect(run("resolve", ref, "--root", dir).stdout).toContain("DATA_CHANGED");
+  });
+
+  it("does not select rows by position: rowid is not stable", () => {
+    const out = run("ref", `${many}#people`, "--where", "file_row_number = 2");
+    expect(out.status).not.toBe(0);
+    expect(out.stderr).toContain("selected by a column");
+  });
+
+  it("matches a table name without regard to case, and keeps the file's spelling", () => {
+    const parsed = parseRef(refOf(run("ref", `${many}#PEOPLE`, "--where", "id = 1").stdout));
+    expect(parsed.options).toEqual({ table: "people" });
+  });
+
+  it("opens a table whose name has a dot, and refuses one with a double quote", async () => {
+    const file = join(dir, "odd.duckdb");
+    await writeDatabase(file, { onlyPeople: true, extraTable: "x.y" });
+    expect(run("card", `${file}#x.y`).status).toBe(0);
+    expect(run("ref", `${file}#x.y`, "--where", "a = 1").status).toBe(0);
+    const quoted = join(dir, "quoted.duckdb");
+    await writeDatabase(quoted, { onlyPeople: true, extraTable: 'q"t' });
+    const out = run("card", `${quoted}#q"t`);
+    expect(out.status).not.toBe(0);
+    expect(out.stderr).toContain("double quote");
   });
 
   it("refuses a table that is not there, without echoing an odd name", () => {
