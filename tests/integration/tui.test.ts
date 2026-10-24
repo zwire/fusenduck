@@ -230,7 +230,7 @@ describe("TUI: pick a file from the roots", () => {
     const tui = driveTui(null, undefined, [dir]);
     stop = tui.stop;
     tracked = tui.tracked;
-    await tui.until((s) => s.includes("Parquet files"), "the list");
+    await tui.until((s) => s.includes(" files"), "the list");
     return tui;
   };
 

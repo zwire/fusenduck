@@ -3,7 +3,7 @@ import { Box, Text, useInput, useWindowSize } from "ink";
 import { listFiles, MAX_FILES, type Listed, type ListedFile } from "@fusenduck/web/files";
 import { plain } from "./text.ts";
 
-// The list of Parquet files under the roots, as the Web UI offers them (apps/web/src/files.ts): the
+// The list of data files under the roots, as the Web UI offers them (apps/web/src/files.ts): the
 // same walk, so no symlink is followed, hidden files are skipped and the list is cut at the same
 // limits. Names come from the disk, so they are made printable before they reach the terminal.
 
@@ -82,7 +82,7 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
   const status =
     listed === null
       ? "reading…"
-      : `${files.length} Parquet file${files.length === 1 ? "" : "s"}${listed.truncated ? ` (the list is cut at ${MAX_FILES} per root or a limit on folder entries; some files are not listed)` : ""}`;
+      : `${files.length} file${files.length === 1 ? "" : "s"}${listed.truncated ? ` (the list is cut at ${MAX_FILES} per root or a limit on folder entries; some files are not listed)` : ""}`;
   return h(
     Box,
     { flexDirection: "column" },
@@ -94,11 +94,11 @@ export function Picker({ roots, notice, opening, open, quit }: PickerProps): Rea
         : h(
             Text,
             { key: `f${start + i}`, inverse: line.file === files[at], wrap: "truncate-end" },
-            `  ${plain(line.file.name)}  ${size(line.file.size)}  ${new Date(line.file.modified).toISOString().slice(0, 16).replace("T", " ")}`,
+            `  ${plain(line.file.name)}  ${line.file.kind}  ${size(line.file.size)}  ${new Date(line.file.modified).toISOString().slice(0, 16).replace("T", " ")}`,
           ),
     ),
     listed !== null && files.length === 0
-      ? h(Text, { wrap: "truncate-end" }, "no Parquet files under the roots (hidden files and symlinks are skipped). Give a path, or start in another folder.")
+      ? h(Text, { wrap: "truncate-end" }, "no Parquet, CSV, JSON or DuckDB files under the roots (hidden files and symlinks are skipped). Give a path, or start in another folder.")
       : null,
     h(Text, { wrap: "truncate-end" }, opening ? "opening…" : plain(notice)),
     h(Text, { dimColor: true, wrap: "truncate-end" }, PICKER_KEYS),

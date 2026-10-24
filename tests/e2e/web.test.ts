@@ -3,7 +3,7 @@
 // the Ref, and check that resolving it returns exactly the rows that were selected.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { copyFileSync, mkdirSync, realpathSync } from "node:fs";
+import { copyFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -78,7 +78,7 @@ describe("Web UI in Chromium", () => {
     expect(await page.evaluate(() => document.activeElement?.id)).toBe("filter");
     // Open with nothing typed asks for a path instead of sending an empty one.
     await page.click("#open");
-    expect(await page.textContent("#status")).toBe("Type the path of a Parquet file, or pick one from the list.");
+    expect(await page.textContent("#status")).toBe("Type the path of a file, or pick one from the list.");
     // A path that is not there names the folder fusen-web may read.
     await page.fill("#path", "missing.parquet");
     await page.click("#open");
@@ -307,7 +307,7 @@ describe("Web UI in Chromium", () => {
 
   it("lists the Parquet files under the root; the filter, the arrow keys and Enter open one, and so does a click", async () => {
     // Listed when the page started, before the other tests wrote their files.
-    expect(await page.locator("#files li[data-index]").allTextContents()).toEqual([expect.stringMatching(/^customers\.parquet\d/)]);
+    expect(await page.locator("#files li[data-index]").allTextContents()).toEqual([expect.stringMatching(/^customers\.parquetparquet\d/)]);
 
     mkdirSync(join(dir, "sales/2026"), { recursive: true });
     await writeCustomers(join(dir, "sales/2026/q1.parquet"), 30);
@@ -434,6 +434,48 @@ describe("Web UI in Chromium", () => {
     await page.press("#where", "Enter");
     await page.waitForFunction(() => document.getElementById("where-error")?.textContent);
     expect(await page.textContent("#where-error")).toBe("Filter rejected: the condition is not finished, e.g. amount > 100");
+  });
+
+  it("opens a CSV file, a pattern and a table of a DuckDB file, and copies a Ref for each", async () => {
+    mkdirSync(join(dir, "parts"), { recursive: true });
+    writeFileSync(join(dir, "parts/a.csv"), "id,name\n0,a0\n1,a1\n2,a2\n");
+    writeFileSync(join(dir, "parts/b.csv"), "id,name\n3,b0\n4,b1\n");
+    await open(join(dir, "parts/a.csv"));
+    await row(1).click();
+    await row(2).click({ modifiers: ["Shift"] });
+    expect(await resolved(await copy())).toEqual([1, 2]);
+
+    // A pattern: positions run through the files, and the Ref names each file and the position within it.
+    await open(join(dir, "parts/*.csv"));
+    await row(2).click();
+    await row(3).click({ modifiers: ["Shift"] });
+    const ref = await copy();
+    expect(decodeURIComponent(ref)).toContain("filename =");
+    expect(await resolved(ref)).toEqual([2, 3]);
+
+    // A database with two tables: the list shows them, the filter picks the rows.
+    const db = join(dir, "shop.duckdb");
+    const instance = await DuckDBInstance.create(db);
+    const connection = await instance.connect();
+    await connection.run("CREATE TABLE people(id BIGINT, name VARCHAR); INSERT INTO people SELECT i, 'n' || i FROM range(5) t(i); CREATE TABLE other(x INT)");
+    await connection.run("CHECKPOINT");
+    connection.closeSync();
+    instance.closeSync();
+    await page.click("#reload");
+    await page.waitForFunction(() => /shop\.duckdb/.test(document.getElementById("files")?.textContent ?? ""));
+    await page.fill("#filter", "shop");
+    await page.press("#filter", "Enter");
+    await page.waitForSelector("#files li.table");
+    expect(await page.locator("#files li.table .name").allTextContents()).toEqual(["↳ other", "↳ people"]);
+    await page.locator("#files li.table").nth(1).click();
+    await page.waitForFunction(() => /shop/.test(document.getElementById("source")?.textContent ?? ""));
+    await page.waitForSelector("#rows tbody tr");
+    expect(await page.textContent("#source")).toBe("shop.duckdb #people — 5 rows");
+    expect(await page.locator("#rows.locked").count()).toBe(1);
+    await page.fill("#where", "id >= 3");
+    await page.press("#where", "Enter");
+    await page.waitForFunction(() => document.querySelectorAll("#rows tbody tr").length === 2);
+    expect(await resolved(await copy())).toEqual([3, 4]);
   });
 
   it("logged no CSP violation on its own page", () => {

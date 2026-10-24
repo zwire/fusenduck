@@ -1,14 +1,14 @@
 import { realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { describeError, FusenError, logLine, parseRef, SourceChanged } from "@fusenduck/core";
-import { View } from "@fusenduck/web/view";
+import { tablesOf, View } from "@fusenduck/web/view";
 
 // The extension host's side of one webview (docs/adr/0002, the VS Code webview). The webview sends
 // { id, method, params } and gets { id, result } or { id, error, changed } back. There is no port and
 // no token: only this extension's own webview can post to it. The panel is for one file, so open
 // accepts that file only, and the engine may read only its folder.
 
-export const METHODS = ["init", "open", "rows", "ref", "copy"] as const;
+export const METHODS = ["init", "tables", "open", "rows", "ref", "copy"] as const;
 export type Method = (typeof METHODS)[number];
 
 export interface Request {
@@ -96,9 +96,15 @@ export class Host {
     switch (method) {
       case "init":
         return { path: this.#options.path };
-      case "open": {
+      case "tables":
         if (params.path !== this.#options.path) throw new FusenError("this editor shows one file only; open others from the explorer");
-        const next = await View.open(this.#options.path, this.#options.roots);
+        return { tables: await tablesOf(this.#options.path, this.#options.roots, this.#leaving.signal) };
+      case "open": {
+        // A table of a database file is named file#table.
+        if (typeof params.path !== "string" || (params.path !== this.#options.path && !params.path.startsWith(`${this.#options.path}#`))) {
+          throw new FusenError("this editor shows one file only; open others from the explorer");
+        }
+        const next = await View.open(params.path, this.#options.roots);
         // The editor may have closed while the file was opening; its engine must not outlive it.
         if (this.#closed) {
           await next.close();

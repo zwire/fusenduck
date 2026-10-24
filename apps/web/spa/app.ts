@@ -1,4 +1,4 @@
-// The fusenduck Web UI: open a Parquet file, see its card and rows, pick columns, filter and select
+// The fusenduck Web UI: open a data file, see its card and rows, pick columns, filter and select
 // rows, copy the Ref.
 // Values from the file are untrusted: they reach the DOM through textContent only, never as markup
 // (the CSP also makes the browser refuse strings assigned to innerHTML). See docs/adr/0002.
@@ -114,7 +114,8 @@ function showCard(opened: Opened): void {
   const slash = Math.max(opened.source.lastIndexOf("/"), opened.source.lastIndexOf("\\"));
   const name = opened.source.slice(slash + 1);
   const source = $("source");
-  source.textContent = `${name} — ${plural(opened.card.rows, "row")}`;
+  const suffix = opened.table === undefined ? "" : ` #${opened.table}`;
+  source.textContent = `${name}${suffix} — ${plural(opened.card.rows, "row")}`;
   source.title = opened.source;
   $("source-dir").textContent = `in ${opened.source.slice(0, slash + 1)}`;
   document.title = `${name} — fusenduck`;
@@ -197,7 +198,7 @@ function showRows(): void {
   $<HTMLButtonElement>("next").disabled = page.next === null;
   const hiddenNote = hidden.size ? ` ${hidden.size} ${hidden.size === 1 ? "column is" : "columns are"} left out of the Ref and not shown.` : "";
   $("rows-note").textContent =
-    `# is the row's position in the file, from 0. Cells longer than ${MAX_CELL_CHARS} characters are cut (marked with …).` +
+    `# is the row's position in ${file.files > 1 ? "the files, taken in name order" : "the file"}, from 0. Cells longer than ${MAX_CELL_CHARS} characters are cut (marked with …).` +
     hiddenNote +
     (page.cut ? ` This page stopped at row ${n(last)} because its cells are large; Next goes on from there.` : "");
   $("rows-section").hidden = false;
@@ -211,7 +212,9 @@ function showSelection(): void {
     tr.setAttribute("aria-selected", String(on));
   }
   const how = !file.selectable
-    ? " This file has its own column named file_row_number, so rows cannot be selected by position; use the filter instead."
+    ? file.kind === "duckdb"
+      ? " This is a database table, so its rows are selected by a column, not by position: use the filter, e.g. id = 5."
+      : " This file has its own column named file_row_number, so rows cannot be selected by position; use the filter instead."
     : ranges.length
       ? ""
       : " Click a row to select it; Shift+click selects a range, Ctrl/⌘+click adds or removes a row. In the rows, ↑↓, Shift+↑↓ and Space do the same.";
@@ -381,6 +384,8 @@ async function applyFilter(text: string): Promise<void> {
 let listed: Listed | undefined;
 let shown: ListedFile[] = [];
 let active = 0;
+/** The tables of the DuckDB files that were opened up in the list, by file path. */
+const tablesOpen = new Map<string, string[]>();
 
 function size(bytes: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -405,8 +410,8 @@ function showFiles(): void {
   let matched = 0;
   shown = [];
   for (const { root, files } of listed.roots) {
-    // Every listed name ends in .parquet, so the extension would match a "q" or a "p" in every file.
-    const hits = files.filter((f) => words.every((w) => f.name.toLowerCase().replace(/\.parquet$/, "").includes(w)));
+    // Every listed name ends in an extension, so the extension would match a "q" or a "p" in every file.
+    const hits = files.filter((f) => words.every((w) => f.name.toLowerCase().replace(/\.\w+$/, "").includes(w)));
     matched += hits.length;
     const room = hits.slice(0, MAX_SHOWN - shown.length);
     // With several roots, each one's files come under its name.
@@ -417,15 +422,22 @@ function showFiles(): void {
       li.textContent = root;
       items.push(li);
     }
-    for (const f of room) {
+    const entries = room.flatMap((f) => [
+      f,
+      ...(tablesOpen.get(f.path) ?? []).map((t): ListedFile => ({ path: `${f.path}#${t}`, name: `${f.name}#${t}`, kind: "table", size: 0, modified: f.modified })),
+    ]);
+    for (const f of entries) {
       const li = document.createElement("li");
       li.id = `file-${shown.length}`;
       li.dataset.index = String(shown.length);
       li.setAttribute("role", "option");
       li.title = f.path;
       const slash = f.name.lastIndexOf("/");
-      li.append(span("name", f.name.slice(slash + 1)), span("dir", f.name.slice(0, slash + 1)), span("size", size(f.size)));
-      li.classList.toggle("current", f.path === file?.source);
+      if (f.kind === "table") {
+        li.classList.add("table");
+        li.append(span("name", `↳ ${f.name.slice(f.name.indexOf("#") + 1)}`), span("dir", ""), span("kind", "table"), span("size", ""));
+      } else li.append(span("name", f.name.slice(slash + 1)), span("dir", f.name.slice(0, slash + 1)), span("kind", f.kind), span("size", size(f.size)));
+      li.classList.toggle("current", f.kind === "table" ? file?.table !== undefined && f.path === `${file.source}#${file.table}` : f.path === file?.source);
       shown.push(f);
       items.push(li);
     }
@@ -436,7 +448,7 @@ function showFiles(): void {
   const roots = listed.roots.map((r) => r.root).join(", ");
   $("files-note").textContent =
     total === 0
-      ? `No Parquet files under ${roots}. Type a path above instead.`
+      ? `No Parquet, CSV, JSON or DuckDB files under ${roots}. Type a path above instead.`
       : matched === 0
         ? "No file matches the filter."
         : (matched === total ? `${total} ${total === 1 ? "file" : "files"}` : `${matched} of ${total} files`) +
@@ -478,6 +490,33 @@ async function loadFiles(): Promise<void> {
   }
 }
 
+/**
+ * Opens a listed entry. A DuckDB file shows its tables first when it has several (a table of its own is
+ * opened as file#table); one with a single table opens directly.
+ */
+async function openListed(f: ListedFile): Promise<void> {
+  if (f.kind !== "duckdb" || !api) return open(f.path);
+  if (tablesOpen.has(f.path)) {
+    tablesOpen.delete(f.path);
+    showFiles();
+    return;
+  }
+  say("Reading the tables…");
+  let tables: string[];
+  try {
+    tables = await api.tables(f.path);
+  } catch (error) {
+    say(openFailed(f.path, error), true);
+    return;
+  }
+  if (tables.length === 1) return open(f.path);
+  tablesOpen.set(f.path, tables);
+  showFiles();
+  active = Math.min(shown.indexOf(f) + 1, shown.length - 1);
+  highlight(true);
+  say(`${f.name} has ${tables.length} tables: pick one.`);
+}
+
 /** Why a path did not open, with the folders it may be under when the list knows them. */
 function openFailed(path: string, error: unknown): string {
   if (!(error instanceof ApiError) || !/^the source is not readable or is outside the allowed roots/.test(error.message)) return describe(error);
@@ -489,7 +528,7 @@ function openFailed(path: string, error: unknown): string {
 async function open(path: string): Promise<void> {
   if (!api) return;
   if (path === "") {
-    say("Type the path of a Parquet file, or pick one from the list.", true);
+    say("Type the path of a file, or pick one from the list.", true);
     pathInput.focus();
     return;
   }
@@ -515,7 +554,7 @@ async function open(path: string): Promise<void> {
   seq += 1;
   refInput.value = file.ref;
   latest = Promise.resolve(file.ref);
-  pathInput.value = file.source;
+  pathInput.value = file.table === undefined ? file.source : `${file.source}#${file.table}`;
   $("hint").hidden = true;
   $("ref-panel").hidden = false;
   showCard(file);
@@ -547,7 +586,7 @@ filterInput.addEventListener("keydown", (event) => {
   } else if (event.key === "Enter") {
     event.preventDefault();
     const f = shown[active];
-    if (f) void open(f.path);
+    if (f) void openListed(f);
   } else if (event.key === "Escape" && filterInput.value) {
     event.preventDefault();
     filterInput.value = "";
@@ -562,7 +601,7 @@ filesList.addEventListener("click", (event) => {
   active = Number(li.dataset.index);
   highlight();
   const f = shown[active];
-  if (f) void open(f.path);
+  if (f) void openListed(f);
 });
 
 $("reload").addEventListener("click", () => void loadFiles());
@@ -720,7 +759,7 @@ async function start(): Promise<void> {
   await loadFiles();
   $("hint").textContent = shown.length
     ? "Pick a file on the left: type to narrow the list, ↑↓ and Enter to open, / to come back to the filter. Or type a path above."
-    : "Type the path of a Parquet file above and press Enter.";
+    : "Type the path of a file above and press Enter.";
   (shown.length ? filterInput : pathInput).focus();
 }
 
@@ -733,7 +772,31 @@ export function mount(host: Api, path: string): void {
   pathInput.value = path;
   pathInput.readOnly = true;
   $<HTMLButtonElement>("open").textContent = "Reload";
-  void open(path);
+  void openOrChoose(path);
+}
+
+/** A DuckDB file with several tables lists them to choose from; anything else opens. */
+async function openOrChoose(path: string): Promise<void> {
+  if (/\.(duckdb|ddb)$/i.test(path) && api) {
+    try {
+      const tables = await api.tables(path);
+      if (tables.length > 1) {
+        listed = {
+          roots: [{ root: path, files: tables.map((t) => ({ path: `${path}#${t}`, name: `${path}#${t}`, kind: "table", size: 0, modified: 0 })), truncated: false }],
+          truncated: false,
+        };
+        $("files-panel").hidden = false;
+        showFiles();
+        $("hint").textContent = `This database has ${tables.length} tables: pick one on the left.`;
+        filterInput.focus();
+        return;
+      }
+    } catch (error) {
+      say(describe(error), true);
+      return;
+    }
+  }
+  await open(path);
 }
 
 // A host that supplies its own Api marks the page (<html data-host>) and calls mount itself.

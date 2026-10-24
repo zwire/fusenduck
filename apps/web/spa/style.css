@@ -228,6 +228,14 @@ body:has(#files-panel[hidden]) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+#files li.table {
+  padding-left: 24px;
+}
+#files li .kind {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
 #files li .size {
   color: var(--muted-foreground);
   white-space: nowrap;

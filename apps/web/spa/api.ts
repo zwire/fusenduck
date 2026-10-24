@@ -18,6 +18,9 @@ export interface Opened {
   card: { rows: number; columns: CardColumn[]; approximate: string[] };
   ref: string;
   selectable: boolean;
+  kind: string;
+  files: number;
+  table?: string;
 }
 
 export interface Page {
@@ -41,6 +44,7 @@ export interface Selection {
 export interface ListedFile {
   path: string;
   name: string;
+  kind: string;
   size: number;
   modified: number;
 }
@@ -52,6 +56,8 @@ export interface Listed {
 
 export interface Api {
   files(): Promise<Listed>;
+  /** The tables of a DuckDB file. */
+  tables(path: string): Promise<string[]>;
   open(path: string): Promise<Opened>;
   rows(file: Opened, offset: number, limit: number, where?: string): Promise<Page>;
   ref(file: Opened, selection: Selection): Promise<string>;
@@ -87,6 +93,7 @@ export async function exchange(code: string): Promise<string> {
 export function httpApi(token: string): Api {
   return {
     files: () => post<Listed>("/api/files", {}, token),
+    tables: async (path) => (await post<{ tables: string[] }>("/api/tables", { path }, token)).tables,
     open: (path) => post<Opened>("/api/open", { path }, token),
     rows: (file, offset, limit, where) =>
       post<Page>("/api/rows", { source: file.source, fingerprint: file.fingerprint, offset, limit, where }, token),

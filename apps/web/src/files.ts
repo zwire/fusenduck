@@ -2,8 +2,9 @@ import { realpath as realpathCallback } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 import { join, relative, sep } from "node:path";
+import { kindOf } from "@fusenduck/core";
 
-// The files the UI offers to open: the Parquet files under each root, found by walking the root's
+// The files the UI offers to open: the Parquet, CSV, JSON and DuckDB files under each root, found by walking the root's
 // folders. Only names and stat are read, never contents. No symlink is followed (a link could lead
 // out of the root, or round in a loop), and hidden files and folders are skipped. Opening still goes
 // through core's own check of the roots, so this list only saves typing a path.
@@ -13,7 +14,8 @@ export const MAX_FILES = 5000;
 /** Folder entries read under one root, so a huge tree cannot keep the server busy. */
 export const MAX_ENTRIES = 100_000;
 
-const PARQUET = /\.parquet$/i;
+// The names a kind is recognised by (kindOf in core); anything else is not listed.
+const OPENABLE = /\.(parquet|csv|tsv|ndjson|jsonl|json|duckdb|ddb)$/i;
 
 // The JavaScript realpath, as core uses (realpathSync) to check the roots. The native one can give
 // another spelling of the same folder (its case on disk on macOS, a subst drive's target on Windows),
@@ -25,6 +27,8 @@ export interface ListedFile {
   path: string;
   /** The path from the root, with / between folders. */
   name: string;
+  /** The kind of source its name says: parquet, csv, ndjson, json or duckdb. */
+  kind: string;
   size: number;
   /** Last modified, in milliseconds since the epoch. */
   modified: number;
@@ -73,9 +77,9 @@ export async function listFiles(roots: string[]): Promise<Listed> {
           if (d.name.startsWith(".")) continue;
           const path = join(folder, d.name);
           if (d.isDirectory()) folders.push(path);
-          else if (d.isFile() && PARQUET.test(d.name) && !seen.has(path)) {
+          else if (d.isFile() && OPENABLE.test(d.name) && !seen.has(path)) {
             const s = await lstat(path).catch(() => undefined);
-            if (s?.isFile()) found.push({ path, name: relative(root, path).split(sep).join("/"), size: s.size, modified: s.mtimeMs });
+            if (s?.isFile()) found.push({ path, name: relative(root, path).split(sep).join("/"), kind: kindOf(path), size: s.size, modified: s.mtimeMs });
           }
         }
         if ((await realpath(folder)) !== folder) continue;

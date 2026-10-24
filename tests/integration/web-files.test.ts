@@ -18,7 +18,7 @@ describe("Web UI: the list of files under the roots (docs/adr/0002)", () => {
     mkdirSync(join(dir, "sales/2026"), { recursive: true });
     await writeCustomers(join(dir, "sales/2026/q1.PARQUET"), 10);
     await writeCustomers(join(dir, "sales/a.parquet"), 10);
-    writeFileSync(join(dir, "notes.csv"), "a,b\n");
+    writeFileSync(join(dir, "notes.txt"), "a,b\n");
     mkdirSync(join(dir, ".cache"));
     writeFileSync(join(dir, ".cache/hidden.parquet"), "x");
     writeFileSync(join(dir, ".dot.parquet"), "x");

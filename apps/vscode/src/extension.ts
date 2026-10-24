@@ -1,4 +1,5 @@
-// The fusenduck extension: Parquet files open in a read-only editor that shows the Web UI (docs/adr/0002)
+// The fusenduck extension: Parquet files open by default (CSV, JSON and DuckDB files through Open With…)
+// in a read-only editor that shows the Web UI (docs/adr/0002)
 // in a webview. The webview talks to this extension host by messages (src/host.ts); nothing listens
 // on a port.
 import { randomBytes } from "node:crypto";
@@ -91,12 +92,15 @@ export function activate(context: vscode.ExtensionContext): void {
       });
     },
   };
-  context.subscriptions.push(
-    vscode.window.registerCustomEditorProvider("fusenduck.parquet", provider, {
-      webviewOptions: { retainContextWhenHidden: true },
-      supportsMultipleEditorsPerDocument: true,
-    }),
-  );
+  // Parquet opens in it by default. The other kinds are an option of Open With…, so a CSV or JSON file keeps its text editor.
+  for (const viewType of ["fusenduck.parquet", "fusenduck.data"]) {
+    context.subscriptions.push(
+      vscode.window.registerCustomEditorProvider(viewType, provider, {
+        webviewOptions: { retainContextWhenHidden: true },
+        supportsMultipleEditorsPerDocument: true,
+      }),
+    );
+  }
 }
 
 export function deactivate(): void {}
