@@ -262,6 +262,46 @@ for (const mode of ["disabled", "preferred", "required", "verify_ca", "verify_id
   });
 }
 
+// 12. Hints, the extension's settings, and a kill from another connection.
+{
+  const through = (alias: string, sql: string) => `SELECT * FROM mysql_query('${alias}', ${lit(sql)})`;
+  const timed = async (fn: () => Promise<unknown>) => {
+    const start = Date.now();
+    try {
+      const value = await fn();
+      return `finished in ${Date.now() - start} ms ${JSON.stringify(value).slice(0, 120)}`;
+    } catch (error) {
+      return `error after ${Date.now() - start} ms: ${(error as Error).message}`;
+    }
+  };
+  const e = await engine("fusen_ro", roPassword);
+  await e.attach();
+  const names = (await e.q("select name from duckdb_settings() where name like 'mysql%' order by name")).map((r) => String((r as { name: string }).name));
+  for (let i = 0; i < names.length; i += 8) say(`12a mysql settings ${i / 8 + 1}`, names.slice(i, i + 8).join(" "));
+  await observe("12b hint MAX_EXECUTION_TIME(1000) on select sleep(5)", async () => timed(() => e.q(through("my", "select /*+ MAX_EXECUTION_TIME(1000) */ sleep(5) as s"))));
+  const heavy = "select sum(a.id * b.id) as s from items a join items b on a.id % 1000 = b.id % 1000";
+  await observe("12c the heavy join without a hint", async () => timed(() => e.q(through("my", heavy))));
+  await observe("12d the heavy join with MAX_EXECUTION_TIME(300)", async () => timed(() => e.q(through("my", heavy.replace("select", "select /*+ MAX_EXECUTION_TIME(300) */")))));
+  await observe("12e hint on a scan-shaped statement through the view's own scan (no hint possible): count over my.items", async () => timed(() => e.q("select count(*) as n from my.items")));
+
+  // A second, separate attach used only to kill the first one's statement.
+  const k = await engine("fusen_ro", roPassword);
+  await k.attach();
+  const killer = await DuckDBInstance.create(":memory:");
+  const kc = await killer.connect();
+  await kc.run("INSTALL mysql");
+  await kc.run("LOAD mysql");
+  await kc.run(`CREATE SECRET mys (TYPE mysql, HOST ${lit(host)}, PORT ${port}, DATABASE ${lit(db)}, USER 'fusen_ro', PASSWORD ${lit(roPassword)})`);
+  await kc.run("ATTACH '' AS my2 (TYPE mysql, SECRET mys)");
+  await observe("12f KILL QUERY through mysql_execute on a writable attach, as the SELECT-only role", async () => {
+    const running = timed(() => k.q(through("my", "select sleep(8) as s")));
+    await new Promise((r) => setTimeout(r, 1000));
+    const ids = (await (await kc.runAndReadAll(through("my2", "select id from information_schema.processlist where info like '%sleep(8)%' and info not like '%processlist%'"))).getRowObjectsJson()) as { id: string }[];
+    const killed = await kc.run(`CALL mysql_execute('my2', ${lit(`KILL QUERY ${Number(ids[0]?.id)}`)})`).then(() => "kill sent", (error) => `kill failed: ${(error as Error).message}`);
+    return `${killed}; ids ${JSON.stringify(ids)}; the statement: ${await running}`;
+  });
+}
+
 const summary = process.env.GITHUB_STEP_SUMMARY;
 if (summary) {
   const { appendFileSync } = await import("node:fs");
