@@ -68,7 +68,7 @@ export const MAX_FILES = 256;
 /**
  * The files a pattern names, in name order. A wildcard (`*` for any run, `?` for one character) is allowed in the
  * file name only: the directory is literal, and nothing below it is searched. Each match is checked like a single
- * file (real path, regular file, inside the roots); a match that is not, such as a link out of the roots, is
+ * file (real path, regular file, inside the directory and the roots); a match that is not, such as a link out, is
  * left out, so the pattern cannot be used to reach it. Files starting with a dot match only a pattern that does.
  */
 function resolvePattern(source: string, roots: string[] | undefined): { source: string; files: string[] } {
@@ -86,11 +86,15 @@ function resolvePattern(source: string, roots: string[] | undefined): { source: 
   const escaped = [...name].map((c) => (c === "*" ? "[^/\\\\]*" : c === "?" ? "[^/\\\\]" : c.replace(/[.+^${}()|[\]\\]/g, "\\$&"))).join("");
   const matches = new RegExp(`^${escaped}$`);
   const allowed = roots ? realRoots(roots) : undefined;
+  if (allowed && !allowed.some((root) => root === directory || inside(root, directory))) throw denied;
   const files: string[] = [];
   for (const entry of names.filter((n) => matches.test(n) && (name.startsWith(".") || !n.startsWith("."))).sort()) {
     try {
       const real = realpathSync(join(directory, entry));
       if (!statSync(real).isFile()) continue;
+      // A match stays in the pattern's own directory, so a link out of it is left out whatever the roots are,
+      // and the same pattern names the same files over the CLI and over MCP.
+      if (!inside(directory, real)) continue;
       if (allowed && !allowed.some((root) => inside(root, real))) continue;
       files.push(real);
     } catch {
@@ -180,6 +184,9 @@ export async function openSource(source: string, opts: { roots?: string[]; signa
     await connection.run("SET lock_configuration=true");
   } catch (error) {
     void Promise.resolve(binding).then(release, release);
+    if (multi && /adds column "filename"/.test(String(error))) {
+      throw new FusenError('a file has a column named "filename", which the files\' own filename column would clash with: rename it, or open the files one at a time');
+    }
     throw error;
   }
   if (signal?.aborted) {

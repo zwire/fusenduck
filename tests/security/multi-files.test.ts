@@ -41,6 +41,13 @@ describe("the engine over a pattern", () => {
     );
   });
 
+  it("answers a directory outside the roots as it answers a missing one", async () => {
+    const outside = tempDir();
+    const asked = async (d: string) =>
+      resolveRef(`fusen://file/${encodeURIComponent(join(d, "*.csv"))}?v=000000000000&src=csv`, { roots: [dir] }).catch((e: Error) => e.message.replace(d, ""));
+    expect(await asked(outside)).toBe(await asked(join(outside, "missing")).then((m) => m.replace("/missing", "")));
+  });
+
   it("refuses a pattern that names too many files", async () => {
     const many = tempDir();
     for (let i = 0; i < 257; i++) writeFileSync(join(many, `f${i}.csv`), "id\n1\n");

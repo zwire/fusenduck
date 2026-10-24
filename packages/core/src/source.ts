@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants, statSync } from "node:fs";
 import { open } from "node:fs/promises";
+import { basename } from "node:path";
 import type { Engine, Row } from "./engine.ts";
 import { FusenError } from "./errors.ts";
 import { lit } from "./sql.ts";
@@ -55,7 +56,8 @@ export interface SourceAdapter {
 async function perFile(engine: Engine, one: (path: string) => Promise<string>): Promise<string> {
   if (!engine.multi) return one(engine.files[0]!);
   const parts: [string, string][] = [];
-  for (const path of engine.files) parts.push([path, await one(path)]);
+  // By file name: the files share one directory, and the same files elsewhere keep the same fingerprint.
+  for (const path of engine.files) parts.push([basename(path), await one(path)]);
   return createHash("sha256").update(`files:${JSON.stringify(parts)}`).digest("hex").slice(0, 12);
 }
 

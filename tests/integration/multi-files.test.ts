@@ -67,7 +67,7 @@ describe("a pattern that names several files", () => {
   });
 
   // Creating a symbolic link needs a privilege on Windows.
-  it.skipIf(process.platform === "win32")("leaves out a link that points outside the roots, and does not read dot files", async () => {
+  it.skipIf(process.platform === "win32")("leaves out a link that points out of the directory, and does not read dot files", async () => {
     const outside = tempDir();
     writeFileSync(join(outside, "secret.csv"), "id,v\n1,SECRET\n");
     const inner = tempDir();
@@ -79,7 +79,28 @@ describe("a pattern that names several files", () => {
     expect(out).toContain("fine");
     expect(out).not.toContain("HIDDEN");
     expect(out).not.toContain("SECRET");
-    // With no roots the link is followed, which is another list of files and so another fingerprint.
-    expect(await mintRef(join(inner, "*.csv"))).not.toBe(ref);
+    // With no roots the link is left out as well, so the same pattern names the same files everywhere.
+    expect(await mintRef(join(inner, "*.csv"))).toBe(ref);
+  });
+});
+
+describe("a pattern is the same wherever the files are", () => {
+  it("gives the same fingerprint for the same files in another directory", async () => {
+    const [a, b] = [tempDir(), tempDir()];
+    for (const d of [a, b]) {
+      writeFileSync(join(d, "x1.csv"), "id\n1\n");
+      writeFileSync(join(d, "x2.csv"), "id\n2\n");
+    }
+    const fp = async (d: string) => parseRef(await mintRef(join(d, "x*.csv"))).fingerprint;
+    expect(await fp(a)).toBe(await fp(b));
+  });
+
+  it("explains a column called filename", () => {
+    const d = tempDir();
+    writeFileSync(join(d, "x1.csv"), "filename,id\nf,1\n");
+    writeFileSync(join(d, "x2.csv"), "filename,id\ng,2\n");
+    const out = run("card", join(d, "x*.csv"));
+    expect(out.status).not.toBe(0);
+    expect(out.stderr).toContain('"filename"');
   });
 });
