@@ -189,7 +189,7 @@ export function isPrivateAddress(address: string): boolean {
 export async function resolveHost(profile: Profile): Promise<string> {
   const address = isIP(profile.host) ? profile.host : (await lookup(profile.host)).address;
   if (!profile.allowPrivate && isPrivateAddress(address)) {
-    throw new FusenError(`connection "${profile.name}": ${profile.host} is a loopback, private or link-local address; set allow_private = true in the profile to use it`);
+    throw new FusenError(`connection "${profile.name}": the host resolves to a loopback, private or link-local address; set allow_private = true in the profile to use it`);
   }
   return address;
 }

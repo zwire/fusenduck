@@ -118,7 +118,7 @@ function showCard(opened: Opened): void {
   const suffix = opened.table === undefined || server ? "" : ` #${opened.table}`;
   source.textContent = `${name}${suffix} — ${plural(opened.card.rows, "row")}`;
   source.title = opened.source;
-  $("source-dir").textContent = server ? `in the ${opened.kind} connection ${opened.source.split("/")[2] ?? ""}` : `in ${opened.source.slice(0, slash + 1)}`;
+  $("source-dir").textContent = server ? `in ${opened.kind} connection ${opened.source.split("/")[2]}` : `in ${opened.source.slice(0, slash + 1)}`;
   document.title = `${name} — fusenduck`;
   $<HTMLDetailsElement>("card-details").open = opened.card.columns.length <= CARD_OPEN_COLUMNS;
   const table = $<HTMLTableElement>("card");
@@ -418,7 +418,6 @@ function showFiles(): void {
     li.id = `file-${shown.length}`;
     li.dataset.index = String(shown.length);
     li.setAttribute("role", "option");
-    li.title = `A ${c.kind} connection from connections.toml`;
     li.append(span("name", c.name), span("dir", ""), span("kind", `${c.kind} connection`), span("size", ""));
     shown.push(entry);
     items.push(li);
@@ -461,9 +460,9 @@ function showFiles(): void {
   highlight();
   const roots = listed.roots.map((r) => r.root).join(", ");
   $("files-note").textContent =
-    total === 0
+    total === 0 && !shown.length
       ? `No Parquet, CSV, JSON, DuckDB or SQLite files under ${roots}. Type a path above instead.`
-      : matched === 0
+      : matched === 0 && !shown.length
         ? "No file matches the filter."
         : (matched === total ? `${total} ${total === 1 ? "file" : "files"}` : `${matched} of ${total} files`) +
           (matched > shown.length ? `; the first ${shown.length} are shown, type to narrow.` : ".") +
@@ -514,7 +513,7 @@ async function openListed(f: ListedFile): Promise<void> {
     pathInput.value = f.path;
     pathInput.focus();
     pathInput.setSelectionRange(f.path.length, f.path.length);
-    $("hint").textContent = `Type the table after ${f.path} (for Postgres schema.table, e.g. public.items), then Open.`;
+    $("hint").textContent = `Type the table after ${f.path}, then Open.`;
     return;
   }
   if ((f.kind !== "duckdb" && f.kind !== "sqlite") || !api) return open(f.path);
@@ -576,7 +575,7 @@ async function open(path: string): Promise<void> {
   seq += 1;
   refInput.value = file.ref;
   latest = Promise.resolve(file.ref);
-  pathInput.value = file.table === undefined ? file.source : `${file.source}#${file.table}`;
+  pathInput.value = file.table === undefined || file.source.includes("://") ? file.source : `${file.source}#${file.table}`;
   $("hint").hidden = true;
   $("ref-panel").hidden = false;
   showCard(file);
