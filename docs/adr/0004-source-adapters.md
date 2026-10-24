@@ -68,7 +68,7 @@ Databases are in scope when DuckDB can read them (DuckDB files, SQLite, and Post
 - **Fingerprint**: no footer exists, so it is built from the row count, the maximum of a key or update-time column when one exists, and a bounded sample hash. The Ref states that the fingerprint detects change but does not guarantee reproducibility.
 - **Ref**: carries a connection profile name, not a host, user or password. The profile is resolved from the user's own environment (environment variables or standard client files). Credentials are never stored, printed or put in a Ref; a canary test must show they appear in no Ref, log line or output.
 - **Allow**: a host allow list fixed at open time, and a read-only role on the database side, proven by a refused write at rung 3 of the add-source ladder (a database container in CI), not only by our own guard.
-- **Order inside this step**: SQLite and DuckDB files first (a single local file, safe to test); Postgres and MySQL only after their own ADR on profiles, credentials and the role.
+- **Order inside this step**: SQLite and DuckDB files first (a single local file, safe to test); Postgres and MySQL only after their own ADR on profiles, credentials and the role (decided in [ADR 0005](0005-database-servers.md)).
 
 ### 7. Order
 
