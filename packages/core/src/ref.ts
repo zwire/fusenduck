@@ -139,7 +139,9 @@ export async function checkPredicate(
   predicate: string,
   query?: string,
 ): Promise<void> {
-  const sql = `SELECT * FROM (${base({ source, query, where: predicate })})${whereClause(predicate)}`;
+  // A server's table is read through the view `data`; the file kinds only need something to parse.
+  const kind = engine.adapter.server ? { src: engine.adapter.name, options: engine.adapter.options } : {};
+  const sql = `SELECT * FROM (${base({ source, query, where: predicate, ...kind })})${whereClause(predicate)}`;
   const rows = await engine.query(`SELECT json_serialize_sql(${lit(sql)}) AS j`);
   const parsed = JSON.parse(String(rows[0]?.j)) as {
     error?: boolean;
