@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { serverStatement } from "../../packages/core/src/mysql.ts";
+import { KEY, driveTui } from "../helpers/tui.ts";
 import { tablesOf, View } from "../../apps/web/src/view.ts";
 import { buildCard, listTables, mintRef, openSource, peek, renderCard, resolveRef } from "../../packages/core/src/index.ts";
 
@@ -185,6 +186,21 @@ describe.skipIf(!enabled)("a MySQL table as a source (docs/adr/0005)", () => {
     expect(await tablesOf("mysql://ro/", [])).toEqual(tables);
     await expect(listTables("mysql://rw/")).rejects.toThrow(/must only be able to read/);
     await expect(listTables("mysql://nobody/")).rejects.toThrow(/nobody/);
+  });
+
+  it("the TUI lists the connections, then the connection's tables, and opens the one picked", async () => {
+    const tui = driveTui(null, undefined, [process.cwd()]);
+    try {
+      await tui.until((s) => s.includes("mysql connection"), "the connections");
+      // Sorted: bad, pinned, ro, rw, unverified, wrongca.
+      await tui.press(KEY.down, KEY.down, KEY.enter);
+      await tui.until((s) => s.includes("pick a table") && s.includes("items") && s.includes("nokey"), "the tables");
+      await tui.press(KEY.enter);
+      await tui.until((s) => s.includes("100000 rows") || s.includes("100,000 rows"), "the table");
+    } finally {
+      tui.stop();
+      await Promise.all(tui.tracked.map((v) => v.close()));
+    }
   });
 
   it("selects rows by key, and says so for a table with no key or a position", async () => {
