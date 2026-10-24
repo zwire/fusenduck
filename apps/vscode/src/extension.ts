@@ -115,13 +115,13 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
       const picked = await vscode.window.showQuickPick(
-        connections.map((c) => ({ label: c.name, description: c.kind, kind: c.kind })),
+        connections.map((c) => ({ label: c.name, description: c.kind, connKind: c.kind })),
         { placeHolder: "Database connection" },
       );
       if (!picked) return;
       const table = await vscode.window.showInputBox({
         prompt: `Table of ${picked.label}`,
-        placeHolder: picked.kind === "postgres" ? "schema.table, e.g. public.items" : "table",
+        placeHolder: picked.connKind === "postgres" ? "schema.table, e.g. public.items" : "table",
         validateInput: (text) => (/^[^\s/`"'\\]+$/.test(text) ? undefined : "A table name, without spaces, quotes or slashes"),
       });
       if (!table) return;
@@ -130,7 +130,7 @@ export function activate(context: vscode.ExtensionContext): void {
         retainContextWhenHidden: true,
         localResourceRoots: [dist],
       });
-      await attach(panel, `${picked.kind}://${picked.label}/${table}`, true);
+      await attach(panel, `${picked.connKind}://${picked.label}/${table}`, true);
     }),
   );
   // Parquet opens in it by default. The other kinds are an option of Open With…, so a CSV or JSON file keeps its text editor.
